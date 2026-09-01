@@ -30,6 +30,12 @@ if [ ! -f /var/lib/postgresql/data/PG_VERSION ]; then
   initdb -D /var/lib/postgresql/data -U "${POSTGRES_USER:-simmetricchat}" --auth-host=md5 --auth-local=trust
   echo "host all all 127.0.0.1/32 md5" >> /var/lib/postgresql/data/pg_hba.conf
   echo "host all all ::1/128 md5" >> /var/lib/postgresql/data/pg_hba.conf
+  # The superuser created by initdb has no password; TCP (md5) connections
+  # — i.e. Prisma via DATABASE_URL — would fail with P1000. Set it upfront
+  # (postgres --single consumes the SQL statement on stdin; template1 is the
+  # bootstrap database — the default $USER db does not exist yet).
+  echo "ALTER USER \"${POSTGRES_USER:-simmetricchat}\" WITH PASSWORD '${POSTGRES_PASSWORD:-simmetricchat}';" \
+    | postgres --single -D /var/lib/postgresql/data template1 >/dev/null 2>&1
 fi
 
 # Start PostgreSQL in background (it will be managed by supervisord later,

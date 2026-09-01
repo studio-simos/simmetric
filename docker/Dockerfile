@@ -51,18 +51,22 @@ RUN corepack enable
 
 WORKDIR /app
 
-# Install PostgreSQL, supervisord, git, poppler-utils (PDF rendering), and
+# Install PostgreSQL 16, supervisord, git, poppler-utils (PDF rendering), and
 # the pgvector extension (D-08 Phase 91-01: air-gap bundle — the extension .so
-# + .control + .sql are installed offline via apk; no internet at boot).
-# node:24-alpine is based on Alpine 3.20; postgresql16-pgvector is published
-# in the community repo. If the package is unavailable on a future Alpine
-# bump, fall back to: --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community
-# (unpinned base deps — project policy: rely on Alpine point-release rebuilds)
+# + .control + .sql are installed offline; no internet at boot).
+# node:24-alpine is Alpine 3.24: the apk postgresql-pgvector package is built
+# against postgresql18 (the distro default) — it would force a PG16→PG18
+# upgrade and break existing all-in-one data volumes. We therefore keep PG16
+# and build pgvector 0.8.1 from source against postgresql16-dev (Phase 181).
 # hadolint ignore=DL3018
 RUN apk add --no-cache \
   postgresql16 \
-  postgresql16-pgvector \
   postgresql16-client \
+  postgresql16-contrib \
+  postgresql16-dev \
+  build-base \
+  clang16-dev \
+  llvm16-dev \
   supervisor \
   git \
   poppler-utils \
@@ -75,9 +79,22 @@ RUN apk add --no-cache \
   curl \
   wget
 
+# Build pgvector 0.8.1 from source against PostgreSQL 16 (see comment above).
+# Compiled once at image build; installed into /usr/lib/postgresql16/ so the
+# air-gap bundle ships the extension without any network access at boot.
+RUN git clone --depth 1 --branch v0.8.1 https://github.com/pgvector/pgvector.git /tmp/pgvector \
+  && make -C /tmp/pgvector -j"$(nproc)" PG_CONFIG=/usr/libexec/postgresql16/pg_config \
+  && make -C /tmp/pgvector install PG_CONFIG=/usr/libexec/postgresql16/pg_config \
+  && apk del --no-cache postgresql16-dev build-base clang16-dev llvm16-dev git \
+  && rm -rf /tmp/pgvector /var/cache/apk/*
+
 # Initialize PostgreSQL directories
 RUN mkdir -p /run/postgresql && chown node:node /run/postgresql
-RUN mkdir -p /var/lib/postgresql/data && chown node:node /var/lib/postgresql/data
+# apk's postgresql16 creates /var/lib/postgresql as postgres:postgres 0750 —
+# the node runtime user could not traverse it ("Permission denied" on initdb).
+RUN mkdir -p /var/lib/postgresql/data \
+  && chown -R node:node /var/lib/postgresql \
+  && chmod 755 /var/lib/postgresql
 
 # Copy workspace config
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
@@ -103,6 +120,10 @@ COPY --from=builder /app/packages/widget/dist-widget/ packages/widget/dist-widge
 # Copy Prisma schema and config from builder
 COPY --from=builder /app/packages/server/prisma/ packages/server/prisma/
 COPY --from=builder /app/packages/server/prisma.config.ts packages/server/prisma.config.ts
+# pnpm+prisma client resolution fix — invoked by the entrypoint right after
+# `prisma generate` (Phase 181: missing in the standalone image → the server
+# crashed with MODULE_NOT_FOUND on .prisma/client).
+COPY --from=builder /app/packages/server/scripts/fix-prisma-pnpm.cjs packages/server/scripts/fix-prisma-pnpm.cjs
 
 # Copy entrypoint + shared production-secret provisioning helper (parity
 # with the split image: entrypoint-server.sh sources the same helper).
@@ -110,8 +131,13 @@ COPY docker/entrypoint.sh /app/entrypoint.sh
 COPY docker/provision-encryption-key.sh /app/provision-encryption-key.sh
 RUN chmod +x /app/entrypoint.sh /app/provision-encryption-key.sh
 
+# The container runs as user node; prisma generate (entrypoint) writes
+# .prisma into node_modules → the whole app tree must be node-owned.
+RUN chown -R node:node /app
+
 # Create storage directories
-RUN mkdir -p /app/storage/data /app/storage/backups /app/storage/documents /app/storage/vectors /app/storage/uploads
+RUN mkdir -p /app/storage/data /app/storage/backups /app/storage/documents /app/storage/vectors /app/storage/uploads \
+  && chown -R node:node /app/storage
 
 # Environment defaults
 ENV NODE_ENV=production
