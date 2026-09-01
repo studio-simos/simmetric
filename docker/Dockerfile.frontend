@@ -37,6 +37,7 @@ RUN rm /etc/nginx/conf.d/default.conf
 # a private key must never ship in the repo; Phase 181 publication hardening).
 # Dev/local only: production fronts this with a real reverse proxy + real cert.
 RUN apk add --no-cache openssl && \
+    mkdir -p /etc/nginx/certs && \
     openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
       -keyout /etc/nginx/certs/selfsigned.key \
       -out /etc/nginx/certs/selfsigned.crt \

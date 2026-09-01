@@ -103,6 +103,10 @@ jobs:
     needs: github-release
     strategy:
       fail-fast: false
+      # max-parallel 1 (Phase 181): 5 concurrent multi-arch buildx runs
+      # exhausted the runner disk (QEMU arm64 layer cache + pnpm store →
+      # "database or disk is full" / "No space left on device").
+      max-parallel: 1
       matrix:
         include:
           - image: simmetric-chat-server
