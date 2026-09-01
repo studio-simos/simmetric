@@ -1,0 +1,15 @@
+{
+  "id": "es-01-add-preference",
+  "locale": "es",
+  "category": "add_preference",
+  "transcript": [
+    { "role": "user", "content": "Prefiero el modo oscuro para todo." },
+    { "role": "assistant", "content": "Entendido, usaré el modo oscuro para tus respuestas." }
+  ],
+  "existingMemories": [],
+  "expectedOps": [
+    { "op": "add", "type": "user", "path": "preferences.theme", "content": "prefiere el modo oscuro", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "Basic preference extraction — Spanish baseline"
+}

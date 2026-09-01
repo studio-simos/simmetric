@@ -1,0 +1,13 @@
+{
+  "id": "ru-03-one-off-activity",
+  "locale": "ru",
+  "category": "one_off_activity",
+  "transcript": [
+    { "role": "user", "content": "Сегодня на обеде я ел пасту." },
+    { "role": "assistant", "content": "Звучит вкусно! Как было?" }
+  ],
+  "existingMemories": [],
+  "expectedOps": [],
+  "expectedDenyList": false,
+  "notes": "Negative case — one-off activity (Russian)"
+}

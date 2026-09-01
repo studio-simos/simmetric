@@ -1,0 +1,190 @@
+// =============================================================================
+// Enterprise SSO Prisma schema fragment
+// Phase 143 (EPA-03 — D-04) + Phase 141 verdict (a)
+// =============================================================================
+//
+// This file holds the three SSO models (SsoConfig, IdentityProvider, ScimGroup)
+// moved out of `schema.prisma`. It lives in the COMMUNITY `prisma/` directory
+// (NOT the enterprise package) on purpose: Phase 141's spike empirically
+// verified that Prisma 7.9.1's `prismaSchemaFolder` feature (GA — no
+// preview-feature flag required) merges every `.prisma` file in this directory
+// at `prisma generate` time. The community `prisma.config.ts` is already on
+// directory mode (`schema: "prisma"` — Phase 142 D-08), so `pnpm db:generate`
+// reads schema.prisma + this fragment together and produces ONE merged client.
+//
+// Consequences:
+//   - The generated client ALWAYS has the `prisma.ssoConfig`,
+//     `prisma.identityProvider`, and `prisma.scimGroup` delegates — even in a
+//     pure community build with no enterprise plugin loaded. This makes the
+//     D-07 guard on `/api/auth/sso/status` a NO-OP (the delegate always
+//     exists); the empty-table path (`prisma.ssoConfig.findFirst()` → null)
+//     is the actual community code path (Phase 143 RESEARCH Finding 3).
+//   - The `IdentityProvider.user` relation crosses the fragment boundary
+//     (it references `User` in `schema.prisma`). Prisma's prismaSchemaFolder
+//     merge resolves cross-file relations at generate time — Phase 141's
+//     spike verified this with a `SpikeEnterprise.coreId` → `SpikeCore.id`
+//     relation. The back-relation `User.identityProviders IdentityProvider[]`
+//     stays in `schema.prisma` and also resolves across the fragment.
+//   - The `@@map("sso_configs")` / `@@map("identity_providers")` /
+//     `@@map("scim_groups")` table names are UNCHANGED — the generated client
+//     reads the same physical tables. No data migration; the enterprise
+//     migration `20260816000001_enterprise_add_sso_models` is purely
+//     idempotent documentation (`CREATE TABLE IF NOT EXISTS`).
+//
+// Do NOT add `previewFeatures = ["prismaSchemaFolder"]` to the generator
+// block in `schema.prisma` — the flag is deprecated in 7.9.1 and emits a
+// warning. The merge works with no flag.
+// =============================================================================
+
+// Phase 113 (SSO — AUTH-01): singleton SSO configuration row.
+// Only one row expected (created via GET /config upsert on first access).
+// The SAML/OIDC client secret is encrypted at rest (AES-256-GCM via
+// encryptionService) — never stored in plaintext (T-113-01-01).
+model SsoConfig {
+  id                    String   @id @default(uuid())
+  provider              String // "saml" | "oidc"
+  enabled               Boolean  @default(false)
+  clientId              String?
+  clientSecretEncrypted String? // AES-256-GCM ciphertext "iv:authTag:ciphertext"
+  discoveryUrl          String? // OIDC discovery endpoint
+  entryPoint            String? // SAML IdP entry point
+  cert                  String? // SAML IdP signing certificate
+  entityId              String? // SAML SP entity ID (default "simmetric-chat")
+  redirectUri           String? // SAML assertion consumer service URL
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("sso_configs")
+}
+
+// Phase 113 (SSO — AUTH-02): external identity provider link per user.
+// A user may have multiple IdP identities (different providers), but only
+// one per (provider, providerUserId) pair. Soft-deleted users are re-activated
+// on login via an existing link; user deletion cascades their IdP links (D-03).
+model IdentityProvider {
+  id             String   @id @default(uuid())
+  provider       String // "saml" | "oidc"
+  providerUserId String // stable external subject identifier from the IdP
+  userId         String
+  createdAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@map("identity_providers")
+}
+
+// Phase 113 (SCIM 2.0 — AUTH-03): groups provisioned by external IdP via
+// SCIM push-based provisioning. Hard-deleted by design (SCIM Groups are
+// IdP-managed; the platform does not own their lifecycle).
+model ScimGroup {
+  id          String   @id @default(uuid())
+  externalId  String   @unique
+  displayName String
+  members     String?  @db.Text  // JSON array of { value, display }
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("scim_groups")
+}
+
+// Phase 144 (EPA-04 — D-03): Audit event log (append-only, INSERT-only grant in Plan 02)
+model EventLog {
+  id         String  @id @default(uuid())
+  entityType String  // "chat" | "project" | "workspace" | "document" | "user"
+  entityId   String
+  action     String
+  userId     String?
+    metadata   String? @db.Text // JSON
+
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@map("event_logs")
+}
+
+// ============================================================
+// Phase 146 (EPA-06 — D-11): Backup System models
+// Moved from schema.prisma (lines 995-1064) to this enterprise
+// fragment. @@map table names unchanged → the generated client reads
+// the same physical tables; no data migration. Cross-fragment
+// relations (BackupDestination.creator User, BackupJob.destination
+// BackupDestination, BackupLog.job BackupJob, BackupLog.restoredByUser
+// User?) resolve at generate time per the Phase 141 verdict (same as
+// IdentityProvider.user in Phase 143). The User.backupDestinations +
+// User.restoredBackups back-relations STAY in schema.prisma.
+// ============================================================
+
+model BackupDestination {
+  id            String    @id @default(uuid())
+  name          String
+  type          String    // "local" | "s3" | "s3_compatible" | "google_drive" | "dropbox" | "sftp" | "ftp" | "email"
+  config        String    @db.Text  // JSON cifrato (AES-256-GCM)
+  status        String    @default("unknown")  // "online" | "offline" | "error" | "unknown"
+  lastTestedAt  DateTime?
+  lastTestError String?   @db.Text
+  isEnabled     Boolean   @default(true)
+  createdBy     String
+  deletedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  creator User           @relation(fields: [createdBy], references: [id])
+  jobs    BackupJob[]
+  logs    BackupLog[]
+
+  @@map("backup_destinations")
+}
+
+model BackupJob {
+  id             String    @id @default(uuid())
+  destinationId  String
+  name           String
+  frequency      String    // "daily" | "weekly" | "monthly" | "manual"
+  cronExpression String?
+  time           String?
+  retentionDays  Int       @default(30)
+  isEnabled      Boolean   @default(true)
+  lastRunAt      DateTime?
+  lastRunStatus  String?
+  nextRunAt      DateTime?
+  createdBy      String
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Relations
+  destination BackupDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  logs        BackupLog[]
+
+  @@map("backup_jobs")
+}
+
+model BackupLog {
+  id             String    @id @default(uuid())
+  destinationId  String
+  jobId          String?
+  fileName       String?
+  fileSize       Int?
+  checksum       String?
+  status         String    // "running" | "success" | "failed" | "restored"
+  errorMessage   String?   @db.Text
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  restoredAt     DateTime?
+  restoredBy     String?
+
+  // Relations
+  destination    BackupDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  job            BackupJob?        @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  restoredByUser User?             @relation("restoredByUserRelation", fields: [restoredBy], references: [id], onDelete: SetNull)
+
+  @@index([destinationId, createdAt])
+  @@map("backup_logs")
+}

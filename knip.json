@@ -1,0 +1,122 @@
+{
+  // knip — dead-code gate for the Simmetric Chat monorepo (Phase 180, PUB-01).
+  // Run locally: `pnpm knip`. CI: lint-and-typecheck job (fails on findings).
+  // See docs/DEVELOPMENT.md "Dead-code gate (knip)" for the full policy.
+  //
+  // Config decisions (research-verified, knip 6.33.0):
+  //  - includeEntryExports: true — MANDATORY. `packages/shared/src/index.ts`
+  //    re-exports everything via `export *` barrels; without this flag knip
+  //    hides ALL shared exports behind the barrel and the package becomes
+  //    un-analyzable (543 findings observed when off).
+  //  - Widget has TWO entry points: `src/index.ts` (Express widget service)
+  //    and `src/widget/index.tsx` (the preact bundle). The latter is only
+  //    referenced as a string in `vite.widget.config.mts`
+  //    (`path.resolve(...)`), which knip's vite plugin does NOT auto-detect —
+  //    without the manual entry all 15 `src/widget/**` files false-flag as
+  //    unused (observed in the config-less run).
+  //  - `src/App.tsx` is a manual frontend entry (auto-detection only covers
+  //    main.tsx via index.html).
+  //  - Root `scripts/*` + `turbo.json` are root workspace entries or the
+  //    utility scripts flag as unused files.
+  //  - `src-tauri/` has no package.json (only tauri.conf.json) — there is
+  //    no workspace surface for knip to analyze there (documented per
+  //    PUB-01's "5 packages + src-tauri" wording).
+  //  - jest configs / package.json main fields are auto-detected by knip's
+  //    built-in plugins — deliberately NOT repeated here (config hints
+  //    flagged the redundant entries).
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "includeEntryExports": true,
+  // duplicateExports: the codebase intentionally dual-exports
+  // component/filter symbols (named for tests, default for pages) — e.g.
+  // SettingsPage imports DlpAuditPanel default while its test imports the
+  // named binding. A style choice, not dead code — excluded via CLI
+  // --exclude duplicateExports in the package.json knip script.
+  // pdftoppm: system binary (Poppler) installed in Docker images
+  // (apk poppler-utils — Dockerfile.server/collector); not an npm dep.
+  "ignoreBinaries": ["pdftoppm", "jest"],
+  // Exports tagged `/** @enterpriseConsumed */` are excluded from the report.
+  // The tag marks the 12-name import surface consumed by the PRIVATE
+  // enterprise sibling repo (root `link:` dep — knip cannot see it, and it
+  // is absent on CI). The tagged names are LIVE: e.g. `saveSsoConfigSchema`
+  // (runtime import, enterprise routes/sso.ts) and `EnterprisePlugin` (type
+  // import, enterprise index.ts) are flagged dead by knip without this.
+  // When the enterprise package grows its shared-API surface, tag the new
+  // exports by hand (CI cannot grep the private repo). Full list + policy:
+  // docs/DEVELOPMENT.md "Dead-code gate (knip)".
+  "tags": ["-enterpriseConsumed"],
+  "ignore": [
+    // Test trees are not production surface.
+    "**/__tests__/**"
+  ],
+  "ignoreDependencies": [
+    // ts-jest ×5 — the DOCUMENTED rollback transformer (Phase 89 DEP-01/D-03):
+    // every jest.config.* carries `// ts-jest is the rollback transformer —
+    // 'git revert <DEP-01 commit>' restores it`. Kept intentionally unused at
+    // runtime (all configs use @swc/jest).
+    "ts-jest"
+  ],
+  "workspaces": {
+    ".": {
+      // quick-task-triage-check.cjs exports are consumed by its own .test.cjs (root
+    // trees are knip-entry-untraceable via relative require); both scripts are
+    // manual/CI utility entry points — ignore file-level.
+    "ignore": ["scripts/prepare-public-release.cjs", "scripts/quick-task-triage-check.cjs"],
+    "entry": ["turbo.json", "scripts/*"],
+      // Root production deps:
+      //  - @simmetric-chat/enterprise: the loader require.resolve()s this
+      //    STRING at runtime (packages/server/src/services/enterpriseLoader.ts)
+      //    — no static import exists, so knip flags it. The link: dep is the
+      //    air-gap install seam (see AGENTS.md "Enterprise plugin"); its
+      //    public-repo handling is deliberately deferred to Phase 181.
+      //  - license-checker-rseidelsohn: spawned as a CLI BINARY by
+      //    scripts/license-policy-check.cjs + license-check-self.cjs — never
+      //    imported, so knip cannot see the usage.
+      //  - dotenv: NOT ignored on purpose — the collector+widget copies are
+      //    genuinely unused (Phase 177 root-env loader) and get REMOVED by
+      //    the Task-4 sweep. The root copy is USED (dynamic import in
+      //    e2e/synthesis-run.spec.ts). knip merges workspace
+      //    ignoreDependencies DOWN into all workspaces, so ignoring dotenv
+      //    here would hide the real findings.
+      "ignoreDependencies": [
+        "@simmetric-chat/enterprise",
+        "license-checker-rseidelsohn",
+        // e2e/lib/prisma.ts imports these directly (root e2e workspace);
+        // resolved via the server package's deps through pnpm node_modules.
+        "@prisma/adapter-pg",
+        "pg",
+        "jest"
+      ]
+    },
+    "packages/shared": {},
+    "packages/server": {
+      "entry": ["scripts/*"],
+      // jest.config.integration-nodb.js: consumed via `npx jest --config
+      // jest.config.integration-nodb.js` (a CLI flag knip cannot see) —
+      // file-level ignore covers its module.exports (knip false-flags the
+      // default export of entry config files it cannot trace).
+      "ignore": ["prisma/prisma.config.ts", "jest.config.integration-nodb.js"]
+    },
+    "packages/collector": {
+      "entry": []
+    },
+    "packages/frontend": {
+      "entry": ["src/App.tsx"],
+      "ignore": [
+        // Runtime-registered by URL string (main.tsx serviceWorker.register).
+        "public/sw.js",
+        // shadcn/ui primitive library surface (21 files): the CLI generates
+        // the FULL Radix sub-component export set on every `shadcn add` —
+        // pruning unused sub-exports fights the generator and regenerates
+        // on the next add. The 3 genuinely-dead ui FILES
+        // (navigation-menu/resizable/sidebar) were found + removed in the
+        // Phase 180 sweep BEFORE this ignore went in. Documented trade-off:
+        // future dead FILES under ui/ are not knip-detected (cheap to
+        // re-audit by hand — the directory is small and generated).
+        "src/components/ui/**"
+      ]
+    },
+    "packages/widget": {
+      "entry": ["src/widget/index.tsx"]
+    }
+  }
+}

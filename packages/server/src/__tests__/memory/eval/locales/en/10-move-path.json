@@ -1,0 +1,17 @@
+{
+  "id": "en-10-move-path",
+  "locale": "en",
+  "category": "move_path",
+  "transcript": [
+    { "role": "user", "content": "Move my theme preference to appearance settings." },
+    { "role": "assistant", "content": "Reorganized — theme is now under appearance." }
+  ],
+  "existingMemories": [
+    { "id": "00000000-0000-4000-8000-000000000020", "type": "user", "path": "preferences.theme", "content": "prefers dark mode" }
+  ],
+  "expectedOps": [
+    { "op": "move", "id": "00000000-0000-4000-8000-000000000020", "path": "appearance.theme" }
+  ],
+  "expectedDenyList": false,
+  "notes": "User reorganizes — move op relocates an existing memory to a new path"
+}

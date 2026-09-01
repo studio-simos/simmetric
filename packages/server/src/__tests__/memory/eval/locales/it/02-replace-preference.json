@@ -1,0 +1,17 @@
+{
+  "id": "it-02-replace-preference",
+  "locale": "it",
+  "category": "replace_preference",
+  "transcript": [
+    { "role": "user", "content": "In realtà, passiamo alla modalità chiara. Ho cambiato idea." },
+    { "role": "assistant", "content": "Aggiornato — userò la modalità chiara ora." }
+  ],
+  "existingMemories": [
+    { "id": "00000000-0000-4000-8000-000000000040", "type": "user", "path": "preferences.theme", "content": "preferisce la modalità scura" }
+  ],
+  "expectedOps": [
+    { "op": "replace", "id": "00000000-0000-4000-8000-000000000040", "type": "user", "path": "preferences.theme", "content": "preferisce la modalità chiara", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "User corrects a preference — Italian"
+}

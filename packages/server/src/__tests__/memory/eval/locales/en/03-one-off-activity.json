@@ -1,0 +1,13 @@
+{
+  "id": "en-03-one-off-activity",
+  "locale": "en",
+  "category": "one_off_activity",
+  "transcript": [
+    { "role": "user", "content": "I had pasta for lunch today." },
+    { "role": "assistant", "content": "Sounds good! How was it?" }
+  ],
+  "existingMemories": [],
+  "expectedOps": [],
+  "expectedDenyList": false,
+  "notes": "Negative case — one-off activity should NOT be extracted"
+}

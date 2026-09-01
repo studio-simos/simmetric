@@ -1,0 +1,13 @@
+{
+  "id": "en-08-no-memory-signal",
+  "locale": "en",
+  "category": "no_memory_signal",
+  "transcript": [
+    { "role": "user", "content": "What's the capital of France?" },
+    { "role": "assistant", "content": "The capital of France is Paris." }
+  ],
+  "existingMemories": [],
+  "expectedOps": [],
+  "expectedDenyList": false,
+  "notes": "Generic Q&A with no user facts — expect empty ops"
+}

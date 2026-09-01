@@ -1,0 +1,16 @@
+{
+  "id": "en-11-non-latin-script",
+  "locale": "en",
+  "category": "non_latin_script",
+  "transcript": [
+    { "role": "user", "content": "I'm learning Russian. Меня зовут Иван." },
+    { "role": "assistant", "content": "That's a great start with Russian!" }
+  ],
+  "existingMemories": [],
+  "expectedOps": [
+    { "op": "add", "type": "user", "path": "facts.language", "content": "learning Russian", "sensitivity": "low" },
+    { "op": "add", "type": "user", "path": "facts.name", "content": "Меня зовут Иван", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "EN transcript with Cyrillic content — extraction must preserve the Cyrillic script"
+}

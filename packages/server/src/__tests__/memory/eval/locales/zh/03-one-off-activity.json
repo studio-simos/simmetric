@@ -1,0 +1,13 @@
+{
+  "id": "zh-03-one-off-activity",
+  "locale": "zh",
+  "category": "one_off_activity",
+  "transcript": [
+    { "role": "user", "content": "我今天午餐吃了意大利面。" },
+    { "role": "assistant", "content": "听起来不错！怎么样？" }
+  ],
+  "existingMemories": [],
+  "expectedOps": [],
+  "expectedDenyList": false,
+  "notes": "Negative case — one-off activity (Chinese)"
+}

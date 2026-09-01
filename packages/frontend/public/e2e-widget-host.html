@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>E2E Widget Host</title>
+</head>
+<body>
+  <!--
+    E2E host page for the widget-embed suite (TST-01, D-06).
+
+    Served by the real Vite preview server on :5173 (packages/frontend/public/
+    is copied verbatim into dist/ at build time). The widgetPage fixture
+    navigates here with ?widgetId=<id>; this inline script builds the
+    #simmetric-widget container and injects the real loader script from the widget
+    service :3211 — the probe-M pattern (122-RESEARCH.md KF-3).
+
+    NEVER serve this page via page.route fulfillment or page.setContent:
+    Chromium Private Network Access blocks the localhost:3211 subresource from
+    a route-synthesized (public-address-space) document, and about:blank's
+    opaque origin throws SecurityError on sessionStorage (103-02/103-04 history).
+  -->
+  <script>
+    (function () {
+      var widgetId = new URLSearchParams(location.search).get("widgetId");
+      if (!widgetId) return; // no loader injection without a widget id
+
+      var container = document.createElement("div");
+      container.id = "simmetric-widget";
+      container.setAttribute("data-widget-id", widgetId);
+      container.setAttribute("data-primary-color", "#4c6ef5");
+      container.setAttribute("data-position", "bottom-right");
+      container.setAttribute("data-locale", "en");
+      document.body.appendChild(container);
+
+      var loader = document.createElement("script");
+      loader.src = "http://localhost:3211/widget/" + encodeURIComponent(widgetId) + ".js";
+      loader.setAttribute("data-target", "simmetric-widget");
+      document.body.appendChild(loader);
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "id": "zh-11-non-latin-script",
+  "locale": "zh",
+  "category": "non_latin_script",
+  "transcript": [
+    { "role": "user", "content": "我叫小明。我是软件工程师。" },
+    { "role": "assistant", "content": "很高兴认识你，小明！" }
+  ],
+  "existingMemories": [],
+  "expectedOps": [
+    { "op": "add", "type": "user", "path": "facts.name", "content": "叫小明", "sensitivity": "low" },
+    { "op": "add", "type": "user", "path": "facts.role", "content": "是软件工程师", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "ZH Hanzi transcript — extraction must preserve the Hanzi script"
+}

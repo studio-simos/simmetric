@@ -1,0 +1,15 @@
+{
+  "id": "it-01-add-preference",
+  "locale": "it",
+  "category": "add_preference",
+  "transcript": [
+    { "role": "user", "content": "Preferisco la modalità scura per tutto." },
+    { "role": "assistant", "content": "Capito, userò la modalità scura per le tue risposte." }
+  ],
+  "existingMemories": [],
+  "expectedOps": [
+    { "op": "add", "type": "user", "path": "preferences.theme", "content": "preferisce la modalità scura", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "Basic preference extraction — Italian baseline"
+}

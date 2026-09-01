@@ -1,0 +1,16 @@
+{
+  "id": "ru-11-non-latin-script",
+  "locale": "ru",
+  "category": "non_latin_script",
+  "transcript": [
+    { "role": "user", "content": "Меня зовут Иван. Я инженер-программист." },
+    { "role": "assistant", "content": "Приятно познакомиться, Иван!" }
+  ],
+  "existingMemories": [],
+  "expectedOps": [
+    { "op": "add", "type": "user", "path": "facts.name", "content": "Меня зовут Иван", "sensitivity": "low" },
+    { "op": "add", "type": "user", "path": "facts.role", "content": "инженер-программист", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "RU Cyrillic transcript — extraction must preserve Cyrillic"
+}

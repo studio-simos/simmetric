@@ -1,0 +1,52 @@
+NOTICE — Simmetric Chat Dual-License Model
+===========================================
+
+Simmetric Chat is distributed under a dual-license model:
+
+1. **Community build** — the public monorepo (this repository) is licensed
+   under the GNU Affero General Public License v3.0 (AGPL-3.0). See the
+   `LICENSE` file at the repository root.
+
+2. **Enterprise plugin** — the `@simmetric-chat/enterprise` package (a
+   separate private repository, delivered as a tarball) is licensed under
+   a proprietary commercial license. See `LICENSE_EE.md` in the enterprise
+   repository, or `docs/ENTERPRISE_LICENSE_TERMS.md` in this repository for
+   the operator-facing summary.
+
+## What this means for you
+
+- **If you use the community build (AGPL-3.0):** you may use, modify, and
+  distribute the software freely, including in a commercial setting, as
+  long as you comply with AGPL-3.0. If you offer the software as a service
+  over a network (SaaS), you must publish your modifications and the
+  corresponding source code under AGPL-3.0. See
+  https://www.gnu.org/licenses/agpl-3.0.html for the full terms.
+
+- **If you want to use Simmetric Chat without AGPL-3.0 obligations** (for
+  example, to embed it in a proprietary product, offer it as a hosted
+  service without open-sourcing your modifications, or use the enterprise
+  features — SSO, audit log, white-label, backup): contact the Licensor to
+  purchase an Enterprise License. See `docs/ENTERPRISE_LICENSE_TERMS.md`
+  for the entitlements and `docs/ENTERPRISE_PLUGIN.md` for the delivery
+  model.
+
+## Package boundaries
+
+| Package | License | Location |
+|---------|---------|----------|
+| `packages/shared` | AGPL-3.0 (this repo) / commercial (enterprise plugin) | Dual-licensed — the enterprise plugin imports it under the commercial alternative |
+| `packages/server` | AGPL-3.0 | This repo |
+| `packages/collector` | AGPL-3.0 | This repo |
+| `packages/frontend` | AGPL-3.0 | This repo |
+| `packages/widget` | AGPL-3.0 | This repo |
+| `@simmetric-chat/enterprise` | Proprietary commercial | Separate private repo (`simmetric-enterprise/`) |
+
+## Copyright
+
+Copyright (c) 2026 Simmetric Chat. All rights reserved.
+
+## Contact
+
+For licensing inquiries, enterprise license purchase, or questions about
+this dual-license model, see `docs/ENTERPRISE_LICENSE_TERMS.md` or contact
+the maintainer.

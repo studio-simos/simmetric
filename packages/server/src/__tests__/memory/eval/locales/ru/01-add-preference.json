@@ -1,0 +1,15 @@
+{
+  "id": "ru-01-add-preference",
+  "locale": "ru",
+  "category": "add_preference",
+  "transcript": [
+    { "role": "user", "content": "Я предпочитаю тёмную тему для всего." },
+    { "role": "assistant", "content": "Понял, буду использовать тёмную тему для ваших ответов." }
+  ],
+  "existingMemories": [],
+  "expectedOps": [
+    { "op": "add", "type": "user", "path": "preferences.theme", "content": "предпочитает тёмную тему", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "Basic preference extraction — Russian baseline (Cyrillic)"
+}

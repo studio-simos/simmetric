@@ -1,0 +1,15 @@
+{
+  "id": "de-01-add-preference",
+  "locale": "de",
+  "category": "add_preference",
+  "transcript": [
+    { "role": "user", "content": "Ich bevorzuge den Dark Mode für alles." },
+    { "role": "assistant", "content": "Verstanden, ich verwende den Dark Mode für Ihre Antworten." }
+  ],
+  "existingMemories": [],
+  "expectedOps": [
+    { "op": "add", "type": "user", "path": "preferences.theme", "content": "bevorzugt den Dark Mode", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "Basic preference extraction — German baseline"
+}

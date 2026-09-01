@@ -1,0 +1,17 @@
+{
+  "id": "es-02-replace-preference",
+  "locale": "es",
+  "category": "replace_preference",
+  "transcript": [
+    { "role": "user", "content": "En realidad, cámbiame al modo claro. Cambié de opinión." },
+    { "role": "assistant", "content": "Actualizado — usaré el modo claro ahora." }
+  ],
+  "existingMemories": [
+    { "id": "00000000-0000-4000-8000-000000000090", "type": "user", "path": "preferences.theme", "content": "prefiere el modo oscuro" }
+  ],
+  "expectedOps": [
+    { "op": "replace", "id": "00000000-0000-4000-8000-000000000090", "type": "user", "path": "preferences.theme", "content": "prefiere el modo claro", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "User corrects a preference — Spanish"
+}

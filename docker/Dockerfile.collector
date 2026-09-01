@@ -1,0 +1,104 @@
+# ============================================================
+# Collector — Multi-stage Dockerfile
+# ============================================================
+
+# Stage 1: Build shared + collector
+FROM node:24-slim AS builder
+
+RUN corepack enable
+
+WORKDIR /app
+
+# Copy workspace config
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json turbo.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/server/package.json packages/server/
+COPY packages/frontend/package.json packages/frontend/
+COPY packages/collector/package.json packages/collector/
+COPY packages/widget/package.json packages/widget/
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
+COPY packages/shared/ packages/shared/
+COPY packages/collector/ packages/collector/
+
+# Build shared first, then collector
+RUN pnpm --filter shared build && pnpm --filter collector build
+
+# Phase 93 / DEP-06: ensure the reranker cache dir exists in the builder stage
+# so the runtime COPY below always succeeds (empty if unseeded → air-gap runtime
+# throws fail-loud, which is the correct operator-forgets-to-seed behavior;
+# populated if the operator ran `pnpm seed:reranker` before `docker build`).
+# `.cache/` is in .gitignore so this never leaks into the repo, only the image.
+RUN mkdir -p packages/collector/.cache/huggingface
+
+# Stage 2: Runtime
+FROM node:24-slim AS runtime
+
+RUN corepack enable
+
+# wget is required by the docker-compose healthcheck (wget --spider /api/health);
+# node:24-slim (Debian) ships without it. Keep the slim base — native deps
+# (@lancedb/lancedb, @xenova/transformers, tesseract.js, canvas) rely on glibc.
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends wget && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy workspace config for pnpm
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/server/package.json packages/server/
+COPY packages/frontend/package.json packages/frontend/
+COPY packages/collector/package.json packages/collector/
+COPY packages/widget/package.json packages/widget/
+
+# Install production dependencies only
+RUN pnpm install --frozen-lockfile --prod
+
+# Copy built artifacts
+COPY --from=builder /app/packages/shared/dist/ packages/shared/dist/
+COPY --from=builder /app/packages/collector/dist/ packages/collector/dist/
+
+# Create storage directories
+RUN mkdir -p /app/storage/uploads /app/storage/documents /app/storage/vectors
+
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 93 / DEP-06 — Air-gap reranker cache bundle (Option A, D-06)
+#
+# The collector runtime loads `onnx-community/bge-reranker-v2-m3-ONNX`
+# (~544MB int8 ONNX; A2 size correction — bge-reranker-v2-m3 is XLM-RoBERTa-large
+# 568M params → int8 ≈ 544MB; NOT the original ~220MB estimate) with
+# `env.allowRemoteModels=false` (T-93-01 mitigate), so a cache miss throws
+# fail-loud at pipeline() load time. Bake the seeded cache into the image so
+# air-gap deployments load offline.
+#
+# Operator pre-step (run on a networked host BEFORE building this image):
+#   pnpm --filter collector seed:reranker --cache-dir ./packages/collector/.cache/huggingface
+# This populates the 4 required files under
+#   packages/collector/.cache/huggingface/onnx-community/bge-reranker-v2-m3-ONNX/
+#   (config.json + tokenizer_config.json + tokenizer.json + onnx/model_quantized.onnx)
+#
+# Option B (host volume mount, alternative — see docker/docker-compose.yml):
+#   Mount a host cache dir to /app/.cache/huggingface and skip this COPY step.
+# ────────────────────────────────────────────────────────────────────────────
+COPY --from=builder /app/packages/collector/.cache/huggingface/ /app/.cache/huggingface/
+
+# Environment defaults
+ENV NODE_ENV=production
+ENV COLLECTOR_PORT=3210
+ENV STORAGE_PATH=/app/storage
+# Phase 93 / DEP-06 — reranker cache location + air-gap runtime stance.
+# RERANKER_CACHE_DIR wins over HF_CACHE_DIR in reranker.ts:114-115.
+ENV RERANKER_CACHE_DIR=/app/.cache/huggingface
+# T-93-01 mitigate: no HF hub downloads at runtime. The seeded cache is the only
+# load path; a cache miss throws fail-loud (reranker.ts:110).
+ENV HF_ALLOW_REMOTE_MODELS=false
+
+EXPOSE 3210
+
+VOLUME ["/app/storage"]
+
+CMD ["node", "packages/collector/dist/index.js"]

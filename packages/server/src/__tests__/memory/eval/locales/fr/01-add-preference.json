@@ -1,0 +1,15 @@
+{
+  "id": "fr-01-add-preference",
+  "locale": "fr",
+  "category": "add_preference",
+  "transcript": [
+    { "role": "user", "content": "Je préfère le mode sombre pour tout." },
+    { "role": "assistant", "content": "Compris, j'utiliserai le mode sombre pour vos réponses." }
+  ],
+  "existingMemories": [],
+  "expectedOps": [
+    { "op": "add", "type": "user", "path": "preferences.theme", "content": "préfère le mode sombre", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "Basic preference extraction — French baseline"
+}

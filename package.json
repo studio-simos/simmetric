@@ -1,0 +1,59 @@
+{
+  "name": "simmetric-chat",
+  "version": "0.22.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "test:all": "jest --config jest.config.cjs",
+    "test:e2e": "playwright test",
+    "db:generate": "turbo db:generate",
+    "db:migrate": "pnpm --filter server db:migrate",
+    "db:seed": "pnpm --filter server db:seed",
+    "audit:migrations": "pnpm --filter server audit:migrations",
+    "db:migrate:guard": "pnpm --filter server db:migrate:guard",
+    "db:migrate:reset:guard": "pnpm --filter server db:migrate:reset:guard",
+    "smoke:ollama": "pnpm --filter server smoke:ollama && pnpm --filter collector smoke:ollama",
+    "seed:reranker": "pnpm --filter collector seed:reranker",
+    "i18n:check": "pnpm --filter frontend i18n:check && pnpm --filter widget i18n:check",
+    "license:check": "pnpm --filter server license:check",
+    "license:check-self": "node scripts/license-check-self.cjs",
+    "version:check": "node scripts/version-check.cjs",
+    "version:bump": "node scripts/version-bump.cjs",
+    "changelog:check": "node scripts/changelog-check.cjs",
+    "smoke:license-e2e": "pnpm --filter server smoke:license-e2e",
+    "smoke:multi-instance": "pnpm --filter server smoke:multi-instance",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "knip": "knip --exclude duplicates",
+    "audit:secrets": "node scripts/audit-publication-secrets.cjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
+    "@tauri-apps/cli": "^2.11.4",
+    "eslint": "^10.9.1",
+    "eslint-plugin-react-compiler": "19.1.0-rc.2",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "knip": "^6.33.0",
+    "license-checker-rseidelsohn": "5.0.1",
+    "turbo": "^2.10.12",
+    "typescript-eslint": "^8.68.0"
+  },
+  "packageManager": "pnpm@11.24.0+sha512.bd27e345e976dcb0be0b7a1228217b049a817e21b1f355c90dbe7dc46671895a8bc1e6d06c24554505ea93ea0b45f489a27ec1bfbc8de6a9659fca0f16fa0000",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.10.0",
+    "@simmetric-chat/enterprise": "link:../simmetric-enterprise",
+    "dotenv": "^17.4.2",
+    "typescript": "^6.0.3"
+  }
+}

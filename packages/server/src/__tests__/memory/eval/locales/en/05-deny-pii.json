@@ -1,0 +1,13 @@
+{
+  "id": "en-05-deny-pii",
+  "locale": "en",
+  "category": "deny_pii",
+  "transcript": [
+    { "role": "user", "content": "My SSN is 123-45-6789 for the form." },
+    { "role": "assistant", "content": "I can't store SSNs. Please don't share PII." }
+  ],
+  "existingMemories": [],
+  "expectedOps": [],
+  "expectedDenyList": true,
+  "notes": "Deny-list: SSN — dlpFilter.scanContent catches it (Pitfall 3)"
+}

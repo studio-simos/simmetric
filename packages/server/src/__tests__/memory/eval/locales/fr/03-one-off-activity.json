@@ -1,0 +1,13 @@
+{
+  "id": "fr-03-one-off-activity",
+  "locale": "fr",
+  "category": "one_off_activity",
+  "transcript": [
+    { "role": "user", "content": "J'ai eu des pâtes pour le déjeuner aujourd'hui." },
+    { "role": "assistant", "content": "Ça a l'air bon ! C'était comment ?" }
+  ],
+  "existingMemories": [],
+  "expectedOps": [],
+  "expectedDenyList": false,
+  "notes": "Negative case — one-off activity (French)"
+}

@@ -1,0 +1,494 @@
+/* ─── Chat Interface Redesign — "Simmetric Native" (Feature 4.6.1) ───
+   Layer of chat-specific CSS custom properties + component classes.
+   Theme-aware across :root (light), .dark, .theme-hacker — mirroring the
+   shadcn token pattern in index.css (class-based, NOT data-theme).
+
+   These --chat-* vars are NEW: they do not collide with the existing
+   --background/--card/--primary tokens. The @theme inline mappings in
+   index.css expose them as Tailwind utilities (bg-chat-user, text-chat-accent…).
+   Imported from index.css right after the tailwind/base imports. */
+
+/* ─── Light (defaults for :root) — Pearl aesthetic ─── */
+:root {
+  --chat-user-bg: #EDE6DB;
+  --chat-user-fg: #2D2520;
+  --chat-ai-bg: #FDFAF4;
+  --chat-input-bg: #FDFAF4;
+  --chat-border: #D9CFC1;
+  --chat-accent: #C2673A;
+  --chat-code-bg: #F2EBE0;
+  --chat-code-header-bg: #EDE6DB;
+  --chat-cursor-color: #C2673A;
+  --chat-cursor-glow: none;
+  --chat-citation-glow: #C2673A;
+  --chat-status-banner-bg: #E8D9C5;
+}
+
+/* ─── Dark ─── */
+.dark {
+  --chat-user-bg: rgba(255, 255, 255, 0.04);   /* 4.2.1 dark */
+  --chat-user-fg: var(--foreground);
+  --chat-ai-bg: var(--card);
+  --chat-input-bg: var(--card);
+  --chat-border: var(--border);
+  --chat-accent: var(--primary);
+  --chat-code-bg: oklch(0.18 0.004 49.25);
+  --chat-code-header-bg: oklch(0.22 0.004 49.25);
+  /* Brightened from var(--primary) (oklch 0.473 → 2.45:1, below WCAG 1.4.11)
+     to a lighter amber that keeps the accent identity at ≥3:1 on --card. */
+  --chat-cursor-color: oklch(0.72 0.15 50);
+  --chat-cursor-glow: none;
+  --chat-citation-glow: var(--primary);
+  --chat-status-banner-bg: var(--accent);
+}
+
+/* ─── Hacker Evoluto ─── */
+.theme-hacker {
+  --chat-user-bg: rgba(0, 212, 255, 0.06);     /* cyan-tinted (4.2.1 hacker) */
+  --chat-user-fg: #e6edf3;
+  --chat-ai-bg: #0f1419;                        /* hacker-surface */
+  --chat-input-bg: #0a0e14;                     /* hacker-bg */
+  --chat-border: rgba(255, 255, 255, 0.1);
+  --chat-accent: #00ff9c;                        /* neon green */
+  --chat-code-bg: #0a0e14;
+  --chat-code-header-bg: #151b23;
+  --chat-cursor-color: #00ff9c;                  /* neon-green cursor (4.2.3) */
+  --chat-cursor-glow: 0 0 8px rgba(0, 255, 156, 0.6);
+  --chat-citation-glow: #ffaa00;                 /* neon-amber (4.2.4) */
+  --chat-status-banner-bg: rgba(0, 255, 156, 0.06);
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   Streaming cursor (4.2.3) — 1px wide × 16px tall, blinks at end of text.
+   Hacker theme widens to 2px and adds the neon glow. ──────────────────── */
+.chat-cursor {
+  display: inline-block;
+  width: 1px;
+  height: 16px;
+  background: var(--chat-cursor-color);
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  animation: chat-cursor-blink 1s steps(2, end) infinite;
+}
+.theme-hacker .chat-cursor {
+  width: 2px;
+  box-shadow: var(--chat-cursor-glow);
+}
+@keyframes chat-cursor-blink {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   Status banner (4.2.3) — mono text above the input, fades between SSE
+   status states. ──────────────────────────────────────────────────────── */
+.chat-status-banner {
+  animation: chat-status-fade 300ms ease-out both;
+}
+@keyframes chat-status-fade {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   Keyboard shortcut hint (4.3.4) — visible under the input, fades out
+   ~3s after the user starts typing. ───────────────────────────────────── */
+.chat-kbd-hint {
+  transition: opacity 400ms ease-out;
+}
+.chat-kbd-hint.is-hidden {
+  opacity: 0;
+}
+.chat-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  padding: 0 0.25rem;
+  border: 1px solid var(--chat-border);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--muted-foreground);
+}
+.theme-hacker .chat-kbd {
+  border-color: rgba(0, 255, 156, 0.35);
+  box-shadow: 0 0 4px rgba(0, 255, 156, 0.15);
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   Message timestamp (4.2.1) — mono 11px, revealed on row hover. ───────── */
+.chat-msg-timestamp {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.group:hover .chat-msg-timestamp,
+:focus-within .chat-msg-timestamp {
+  opacity: 1;
+}
+.theme-hacker .chat-msg-timestamp {
+  color: #00ff9c;
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   AI message body — code blocks (4.2.2). renderMarkdown already injects a
+   copy button + language label; this styles them per theme. ───────────── */
+.chat-ai-body {
+  font-size: 15px;
+  line-height: 1.7;
+  --tw-prose-body: var(--chat-user-fg);
+  --tw-prose-headings: var(--chat-user-fg);
+  --tw-prose-bold: var(--chat-user-fg);
+  --tw-prose-lead: var(--chat-user-fg);
+  --tw-prose-counters: var(--chat-user-fg);
+  --tw-prose-bullets: var(--chat-user-fg);
+  --tw-prose-quotes: var(--chat-user-fg);
+  --tw-prose-th: var(--chat-user-fg);
+  --tw-prose-td: var(--chat-user-fg);
+  --tw-prose-links: var(--chat-accent);
+  --tw-prose-captions: var(--muted-foreground);
+  --tw-prose-hr: var(--chat-border);
+  --tw-prose-quote-borders: var(--chat-accent);
+  --tw-prose-code: var(--chat-user-fg);
+  --tw-prose-pre-code: var(--chat-user-fg);
+  --tw-prose-pre-bg: var(--chat-code-bg);
+  --tw-prose-kbd: var(--chat-user-fg);
+  --tw-prose-kbd-shadows: rgba(0, 0, 0, 0.1);
+  --tw-prose-th-borders: var(--chat-border);
+  --tw-prose-td-borders: var(--chat-border);
+}
+
+.dark .chat-ai-body,
+.theme-hacker .chat-ai-body {
+  --tw-prose-body: var(--chat-user-fg);
+  --tw-prose-headings: var(--chat-user-fg);
+  --tw-prose-bold: var(--chat-user-fg);
+  --tw-prose-lead: var(--chat-user-fg);
+  --tw-prose-counters: var(--muted-foreground);
+  --tw-prose-bullets: var(--muted-foreground);
+  --tw-prose-quotes: var(--chat-user-fg);
+  --tw-prose-th: var(--chat-user-fg);
+  --tw-prose-td: var(--chat-user-fg);
+  --tw-prose-links: var(--chat-accent);
+  --tw-prose-captions: var(--muted-foreground);
+  --tw-prose-hr: var(--chat-border);
+  --tw-prose-quote-borders: var(--chat-accent);
+  --tw-prose-code: var(--chat-accent);
+  --tw-prose-pre-code: var(--chat-user-fg);
+  --tw-prose-pre-bg: var(--chat-code-bg);
+  --tw-prose-kbd: var(--chat-user-fg);
+  --tw-prose-kbd-shadows: rgba(255, 255, 255, 0.1);
+  --tw-prose-th-borders: var(--chat-border);
+  --tw-prose-td-borders: var(--chat-border);
+}
+.chat-ai-body pre {
+  background: var(--chat-code-bg);
+  border: 1px solid var(--chat-border);
+  border-radius: 4px;
+  padding: 0.75rem;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+  position: relative;
+}
+.chat-ai-body pre code {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  background: transparent;
+  padding: 0;
+}
+.chat-ai-body :not(pre) > code {
+  background: var(--chat-code-bg);
+  border: 1px solid var(--chat-border);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+/* Subtle scanline overlay on the AI body — hacker only (4.2.2). */
+.theme-hacker .chat-ai-body {
+  position: relative;
+}
+.theme-hacker .chat-ai-body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0,
+    transparent 3px,
+    rgba(0, 255, 156, 0.02) 3px,
+    rgba(0, 255, 156, 0.02) 4px
+  );
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   Empty-state quick-action cards (4.4) — hover neon-glow under hacker. ── */
+.chat-quick-card {
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+.chat-quick-card:hover {
+  border-color: var(--chat-accent);
+}
+.theme-hacker .chat-quick-card:hover {
+  box-shadow: 0 0 12px rgba(0, 255, 156, 0.25);
+  border-color: #00ff9c;
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   Citations expand/collapse (4.7.2) — both directions. The list stays
+   mounted; the .is-open class toggles max-height + opacity. Replaces the
+   older one-shot animation that only handled expand. ──────────────────── */
+.chat-citation-list {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 200ms ease-out, opacity 200ms ease-out;
+}
+.chat-citation-list.is-open {
+  max-height: 800px;
+  opacity: 1;
+}
+/* Citation count — neon-amber mono under hacker (4.2.4). */
+.theme-hacker .chat-citation-count {
+  color: #ffaa00;
+  font-family: var(--font-mono);
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   Input composer glass-panel (4.3.1). Focus-within accent glow; under
+   hacker a faint grid background + neon border glow on focus. ─────────── */
+.chat-input-panel {
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.chat-input-panel:focus-within {
+  border-color: var(--chat-accent);
+}
+.theme-hacker .chat-input-panel {
+  background-image:
+    linear-gradient(rgba(0, 255, 156, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 156, 0.04) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+.theme-hacker .chat-input-panel:focus-within {
+  box-shadow: 0 -6px 18px -8px rgba(0, 255, 156, 0.35);
+  border-color: #00ff9c;
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   highlight.js dark token overrides — github-dark palette adapted to our
+   --chat-code-bg. The base highlight.js/styles/github.css (line 2 of
+   index.css) is a light theme. Its token colors (e.g. comments #6a737d,
+   strings #032f62, base text #24292e) are illegible on dark/hacker code
+   backgrounds. These overrides swap them for the github-dark equivalents. */
+.dark .chat-ai-body .hljs,
+.theme-hacker .chat-ai-body .hljs {
+  color: #c9d1d9;
+  background: transparent;
+}
+.dark .chat-ai-body .hljs-comment,
+.dark .chat-ai-body .hljs-code,
+.dark .chat-ai-body .hljs-formula,
+.theme-hacker .chat-ai-body .hljs-comment,
+.theme-hacker .chat-ai-body .hljs-code,
+.theme-hacker .chat-ai-body .hljs-formula {
+  color: #8b949e;
+}
+.dark .chat-ai-body .hljs-keyword,
+.dark .chat-ai-body .hljs-doctag,
+.dark .chat-ai-body .hljs-template-tag,
+.dark .chat-ai-body .hljs-template-variable,
+.dark .chat-ai-body .hljs-type,
+.dark .chat-ai-body .hljs-variable.language_,
+.theme-hacker .chat-ai-body .hljs-keyword,
+.theme-hacker .chat-ai-body .hljs-doctag,
+.theme-hacker .chat-ai-body .hljs-template-tag,
+.theme-hacker .chat-ai-body .hljs-template-variable,
+.theme-hacker .chat-ai-body .hljs-type,
+.theme-hacker .chat-ai-body .hljs-variable.language_ {
+  color: #ff7b72;
+}
+.dark .chat-ai-body .hljs-title,
+.dark .chat-ai-body .hljs-title.class_,
+.dark .chat-ai-body .hljs-title.class_.inherited__,
+.dark .chat-ai-body .hljs-title.function_,
+.theme-hacker .chat-ai-body .hljs-title,
+.theme-hacker .chat-ai-body .hljs-title.class_,
+.theme-hacker .chat-ai-body .hljs-title.class_.inherited__,
+.theme-hacker .chat-ai-body .hljs-title.function_ {
+  color: #d2a8ff;
+}
+.dark .chat-ai-body .hljs-attr,
+.dark .chat-ai-body .hljs-attribute,
+.dark .chat-ai-body .hljs-literal,
+.dark .chat-ai-body .hljs-meta,
+.dark .chat-ai-body .hljs-number,
+.dark .chat-ai-body .hljs-operator,
+.dark .chat-ai-body .hljs-variable,
+.dark .chat-ai-body .hljs-selector-attr,
+.dark .chat-ai-body .hljs-selector-class,
+.dark .chat-ai-body .hljs-selector-id,
+.theme-hacker .chat-ai-body .hljs-attr,
+.theme-hacker .chat-ai-body .hljs-attribute,
+.theme-hacker .chat-ai-body .hljs-literal,
+.theme-hacker .chat-ai-body .hljs-meta,
+.theme-hacker .chat-ai-body .hljs-number,
+.theme-hacker .chat-ai-body .hljs-operator,
+.theme-hacker .chat-ai-body .hljs-variable,
+.theme-hacker .chat-ai-body .hljs-selector-attr,
+.theme-hacker .chat-ai-body .hljs-selector-class,
+.theme-hacker .chat-ai-body .hljs-selector-id {
+  color: #79c0ff;
+}
+.dark .chat-ai-body .hljs-regexp,
+.dark .chat-ai-body .hljs-string,
+.dark .chat-ai-body .hljs-meta .hljs-string,
+.theme-hacker .chat-ai-body .hljs-regexp,
+.theme-hacker .chat-ai-body .hljs-string,
+.theme-hacker .chat-ai-body .hljs-meta .hljs-string {
+  color: #a5d6ff;
+}
+.dark .chat-ai-body .hljs-built_in,
+.dark .chat-ai-body .hljs-symbol,
+.theme-hacker .chat-ai-body .hljs-built_in,
+.theme-hacker .chat-ai-body .hljs-symbol {
+  color: #ffa657;
+}
+.dark .chat-ai-body .hljs-name,
+.dark .chat-ai-body .hljs-quote,
+.dark .chat-ai-body .hljs-selector-tag,
+.dark .chat-ai-body .hljs-selector-pseudo,
+.theme-hacker .chat-ai-body .hljs-name,
+.theme-hacker .chat-ai-body .hljs-quote,
+.theme-hacker .chat-ai-body .hljs-selector-tag,
+.theme-hacker .chat-ai-body .hljs-selector-pseudo {
+  color: #7ee787;
+}
+.dark .chat-ai-body .hljs-subst,
+.theme-hacker .chat-ai-body .hljs-subst {
+  color: #c9d1d9;
+}
+.dark .chat-ai-body .hljs-section,
+.theme-hacker .chat-ai-body .hljs-section {
+  color: #1f6feb;
+  font-weight: bold;
+}
+.dark .chat-ai-body .hljs-bullet,
+.theme-hacker .chat-ai-body .hljs-bullet {
+  color: #f2cc60;
+}
+.dark .chat-ai-body .hljs-emphasis,
+.theme-hacker .chat-ai-body .hljs-emphasis {
+  color: #c9d1d9;
+  font-style: italic;
+}
+.dark .chat-ai-body .hljs-strong,
+.theme-hacker .chat-ai-body .hljs-strong {
+  color: #c9d1d9;
+  font-weight: bold;
+}
+.dark .chat-ai-body .hljs-addition,
+.theme-hacker .chat-ai-body .hljs-addition {
+  color: #aff5b4;
+  background-color: #033a16;
+}
+.dark .chat-ai-body .hljs-deletion,
+.theme-hacker .chat-ai-body .hljs-deletion {
+  color: #ffdcd7;
+  background-color: #67060c;
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   Hacker theme — neon-tinted accent colors for code tokens, replacing the
+   muted github-dark grays with brighter neon hues that match the hacker
+   aesthetic (neon green #00ff9c, neon cyan #00d4ff, neon amber #ffaa00,
+   neon magenta #ff00aa). The base text stays #c9d1d9 for readability. */
+.theme-hacker .chat-ai-body .hljs {
+  color: #e6edf3;
+}
+.theme-hacker .chat-ai-body .hljs-comment,
+.theme-hacker .chat-ai-body .hljs-code,
+.theme-hacker .chat-ai-body .hljs-formula {
+  color: rgba(0, 255, 156, 0.55);
+}
+.theme-hacker .chat-ai-body .hljs-keyword,
+.theme-hacker .chat-ai-body .hljs-doctag,
+.theme-hacker .chat-ai-body .hljs-template-tag,
+.theme-hacker .chat-ai-body .hljs-type,
+.theme-hacker .chat-ai-body .hljs-variable.language_ {
+  color: #ff7b72;
+}
+.theme-hacker .chat-ai-body .hljs-title,
+.theme-hacker .chat-ai-body .hljs-title.class_,
+.theme-hacker .chat-ai-body .hljs-title.class_.inherited__,
+.theme-hacker .chat-ai-body .hljs-title.function_ {
+  color: #00d4ff;
+}
+.theme-hacker .chat-ai-body .hljs-attr,
+.theme-hacker .chat-ai-body .hljs-attribute,
+.theme-hacker .chat-ai-body .hljs-literal,
+.theme-hacker .chat-ai-body .hljs-meta,
+.theme-hacker .chat-ai-body .hljs-number,
+.theme-hacker .chat-ai-body .hljs-operator,
+.theme-hacker .chat-ai-body .hljs-variable,
+.theme-hacker .chat-ai-body .hljs-selector-attr,
+.theme-hacker .chat-ai-body .hljs-selector-class,
+.theme-hacker .chat-ai-body .hljs-selector-id {
+  color: #00d4ff;
+}
+.theme-hacker .chat-ai-body .hljs-regexp,
+.theme-hacker .chat-ai-body .hljs-string,
+.theme-hacker .chat-ai-body .hljs-meta .hljs-string {
+  color: #00ff9c;
+}
+.theme-hacker .chat-ai-body .hljs-built_in,
+.theme-hacker .chat-ai-body .hljs-symbol {
+  color: #ffaa00;
+}
+.theme-hacker .chat-ai-body .hljs-name,
+.theme-hacker .chat-ai-body .hljs-quote,
+.theme-hacker .chat-ai-body .hljs-selector-tag,
+.theme-hacker .chat-ai-body .hljs-selector-pseudo {
+  color: #ff00aa;
+}
+.theme-hacker .chat-ai-body .hljs-subst {
+  color: #e6edf3;
+}
+.theme-hacker .chat-ai-body .hljs-section {
+  color: #00d4ff;
+  font-weight: bold;
+}
+.theme-hacker .chat-ai-body .hljs-bullet {
+  color: #ffaa00;
+}
+.theme-hacker .chat-ai-body .hljs-emphasis {
+  color: #e6edf3;
+  font-style: italic;
+}
+.theme-hacker .chat-ai-body .hljs-strong {
+  color: #e6edf3;
+  font-weight: bold;
+}
+.theme-hacker .chat-ai-body .hljs-addition {
+  color: #00ff9c;
+  background-color: rgba(0, 255, 156, 0.1);
+}
+.theme-hacker .chat-ai-body .hljs-deletion {
+  color: #ff00aa;
+  background-color: rgba(255, 0, 170, 0.1);
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   Reduced motion (WCAG 2.3.3) — disable cursor blink, banner slide,
+   citation height transition, hint fade. Keep content visible. ────────── */
+@media (prefers-reduced-motion: reduce) {
+  .chat-cursor { animation: none; opacity: 1; }
+  .chat-status-banner { animation: none; }
+  .chat-citation-list { transition: none; }
+  .chat-kbd-hint { transition: none; }
+  .chat-msg-timestamp { transition: none; }
+}

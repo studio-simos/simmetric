@@ -1,0 +1,48 @@
+packages:
+  - "packages/*"
+# Phase 142 D-04: @simmetric-chat/enterprise is an optional peer dep of the
+# server package that lives in a SEPARATE private repo (D-01) and is NOT on
+# the public npm registry. pnpm's default `autoInstallPeers: true` tries to
+# fetch optional peers from the registry and hard-fails with
+# ERR_PNPM_FETCH_404 when the package is absent. Disabling autoInstallPeers
+# makes pnpm skip the optional peer dep when it cannot resolve it — exactly
+# D-04's intent: "pnpm install in the public repo does NOT fail when the
+# enterprise package is absent (community no-op path)". When the enterprise
+# package IS installed (customer tarball / file: path), pnpm resolves the
+# peer dep from the local source. No other workspace package declares
+# peerDependencies, so this setting has no impact on existing behavior.
+autoInstallPeers: false
+minimumReleaseAge: 0
+overrides:
+  xlsx@https://cdn.sheetjs.com/xlsx-0.20.2/xlsx-0.20.2.tgz: npm:xlsx@0.18.5
+  sharp@0.32.6: 0.34.5
+  '@simmetric-chat/enterprise': link:../simmetric-enterprise
+  # quick 260831-sqr (CI fix): nwsapi 2.2.27 (pulled by jsdom 26.1.0 via
+  # jest-environment-jsdom@30.5.0, lockfile bump f46604ec) blocks the jsdom
+  # event loop ~14-17s SYNCHRONOUSLY in the Radix popover-open selector path
+  # — every DOM-mutation wait after a popover open stalls (McpPinnerPopover
+  # 3 timeouts, CPU profile: 100% nwsapi has/matchesNative/match_assert).
+  # 2.2.24 is the last known-good selector engine; remove this override once
+  # nwsapi fixes the regression upstream (see .planning/WINDOWS.md #2).
+  nwsapi: 2.2.24
+allowBuilds:
+  '@parcel/watcher': true
+  '@prisma/client': true
+  '@prisma/engines': true
+  '@scarf/scarf': true
+  '@swc/core': true
+  cpu-features: true
+  esbuild: true
+  msw: true
+  onnxruntime-node: false
+  prisma: true
+  protobufjs: true
+  puppeteer: false
+  sharp: true
+  ssh2: true
+  tesseract.js: true
+  unrs-resolver: true
+
+# Phase 146 (EPA-06): the @mintplex-labs/bree patch moved to the enterprise
+# package (the dep moved with the backup scheduler — D-15). The community
+# repo no longer patches @mintplex-labs/bree.

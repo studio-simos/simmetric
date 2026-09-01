@@ -1,0 +1,67 @@
+# gitleaks config — Simmetric Chat publication secret sweep (Phase 181)
+#
+# Invocation: `gitleaks dir .` (working tree — the public repo is a fresh
+# orphan commit with no history to scan).
+#
+# v8.24 syntax note: [allowlist] is a single MAP on this version (v8.25+
+# switches to the [[allowlists]] array form). All previous allowlist blocks
+# are merged into the one map below.
+#
+# What is allowlisted and why:
+# - CANARY-* / ci-test-* / sk-proj-abcdef* — intentional test fixtures
+# - sk-c6a7b6662ab64f4c9582bf83e147675b — CI test API key (e2e/globalSetup.ts)
+# - AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= — throwaway HMAC (32 zero bytes)
+# - AKIAABCDEFGHIJKLMNOP — fake AWS key fixture (denyList.test.ts)
+# - sk-abcdefghi / sk-1111 / sk-aaaaaaaaa / sk-xxxxxxxxx / AKIAIOSFODNN —
+#   synthetic unit-test keys (denyList/audit fixtures)
+# - DropboxProvider — class name, not a token
+# - eyJhbGciOiJIUzI1NiIs... — truncated JWT doc example (docs/API.md)
+
+title = "Simmetric Chat gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Simmetric Chat — intentional fixtures, test trees, audit tooling"
+regexTarget = "line"
+regexes = [
+  "CANARY-[A-Za-z0-9_-]+",
+  "ci-test-[A-Za-z0-9_-]+",
+  "sk-proj-abcdef[0-9]+",
+  "sk-c6a7b6662ab64f4c9582bf83e147675b",
+  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  "canary-signing-secret-0xCAFEBABE",
+  "AKIAABCDEFGHIJKLMNOP",
+  "DropboxProvider",
+  "eyJhbGciOiJIUzI1NiIs\\.\\.\\.",
+  "sk-abcdefghi",
+  "sk-1111",
+  "sk-aaaaaaaaa",
+  "sk-xxxxxxxxx",
+  "AKIAIOSFODNN",
+]
+paths = [
+  "packages/server/\\.env\\.test",
+  "packages/server/\\.env$",
+  "packages/widget/\\.env",
+  "\\.planning/",
+  "docker/certs/",
+  "packages/server/src/__tests__/",
+  "packages/shared/src/__tests__/",
+  "packages/frontend/src/__tests__/",
+  "scripts/audit-publication-secrets\\.cjs",
+  "e2e/globalSetup\\.ts",
+  "scripts/smoke-multi-instance\\.ts",
+  "\\.github/workflows/ci\\.yml",
+  "docs/ENTERPRISE_PLUGIN\\.md",
+  "docs/TESTING\\.md",
+  "\\.gitleaks\\.toml",
+  "docs/API\\.md",
+  "packages/server/dist/",
+  "\\.jest-cache/",
+  "graphify-out/",
+  "\\.public-release/",
+  "docs/API_KEY_MIGRATION\\.md",
+  "docs/ENCRYPTION_KEY_ROTATION\\.md",
+]

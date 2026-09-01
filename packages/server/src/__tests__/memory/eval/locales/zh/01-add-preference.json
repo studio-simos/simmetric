@@ -1,0 +1,15 @@
+{
+  "id": "zh-01-add-preference",
+  "locale": "zh",
+  "category": "add_preference",
+  "transcript": [
+    { "role": "user", "content": "我所有东西都喜欢用深色模式。" },
+    { "role": "assistant", "content": "明白了，我会为你的回复使用深色模式。" }
+  ],
+  "existingMemories": [],
+  "expectedOps": [
+    { "op": "add", "type": "user", "path": "preferences.theme", "content": "喜欢用深色模式", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "Basic preference extraction — Chinese baseline (Hanzi)"
+}

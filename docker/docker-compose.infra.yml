@@ -1,0 +1,118 @@
+# Infrastructure services for dev container workflow
+#
+# This file is for LOCAL DEVELOPMENT ONLY with the Dev Container workflow
+# (see .devcontainer/README.md). It runs ONLY the infrastructure services
+# (postgres, qdrant). The application code (server, frontend, collector,
+# widget) runs INSIDE the dev container via `pnpm dev`.
+#
+# NOTE: Ollama is INTENTIONALLY NOT included here. This project's dev setup
+# uses a host-native Ollama install (systemd service on 127.0.0.1:11434) so
+# models stay persistent across container rebuilds and you don't pay the
+# cost of re-pulling. If you prefer containerized Ollama, comment in the
+# `ollama:` block below and update OLLAMA_BASE_URL in your .env to match.
+#
+# Why split: the dev container handles "where your tools live" (Node, pnpm,
+# VSCode server), while this compose handles "where your services live".
+# This gives you fast HMR on the application code without rebuilding images.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.infra.yml up -d
+#   docker compose -f docker/docker-compose.infra.yml down
+#   docker compose -f docker/docker-compose.infra.yml logs -f postgres
+#   docker compose -f docker/docker-compose.infra.yml ps
+#
+# Qdrant (opt-in, only if VECTOR_DB_PROVIDER=qdrant):
+#   docker compose --profile qdrant -f docker/docker-compose.infra.yml up -d
+#
+# NOTE: This file is distinct from docker-compose.dev.yml, which is a
+# "service override" meant to extend the production docker-compose.yml for
+# pure-docker dev (no dev container). Pick ONE workflow:
+#   1. Dev container + this file (recommended, fast HMR)
+#   2. Pure docker (docker-compose.yml + docker-compose.dev.yml)
+
+services:
+  # ─── PostgreSQL (Dev Database) ─────────────────────
+  postgres:
+    # D-08 (Phase 91-01): pgvector extension bundled offline (air-gap).
+    image: pgvector/pgvector:pg16
+    container_name: simmetric-chat-dev-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-simmetricchat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-simmetricchat}
+      POSTGRES_DB: ${POSTGRES_DB:-simmetricchat}
+    ports:
+      # Exposed on all interfaces so dev containers (bridge mode) can reach it
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d ${POSTGRES_DB:-simmetricchat} -U ${POSTGRES_USER:-simmetricchat}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  # ─── Qdrant (Vector DB) ─────────────────────────────
+  # Optional: only needed if VECTOR_DB_PROVIDER=qdrant in .env
+  # Default in this project is lancedb (file-based), so qdrant is opt-in.
+  # Start on demand: `docker compose --profile qdrant -f docker/docker-compose.infra.yml up -d`
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: simmetric-chat-dev-qdrant
+    profiles: ["qdrant"]
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    volumes:
+      - qdrant-data-dev:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__HTTP_PORT=6333
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6333/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # ─── Ollama (Local LLM) ─────────────────────────────
+  # DEACTIVATED BY DEFAULT: this project uses host-native Ollama
+  # (systemd service on 127.0.0.1:11434) so models stay persistent.
+  # Uncomment the block below ONLY if you want Ollama in a container.
+  # Remember to also update OLLAMA_BASE_URL in your .env to
+  # `http://ollama:11434` (it already is by default) and stop the
+  # host Ollama first: `sudo systemctl stop ollama`.
+  #
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: simmetric-chat-dev-ollama
+  #   environment:
+  #     - OLLAMA_KEEP_ALIVE=4h
+  #     - OLLAMA_HOST=0.0.0.0:11434
+  #   ports:
+  #     - "127.0.0.1:11434:11434"
+  #   volumes:
+  #     - ollama-data-dev:/root/.ollama
+  #   # Optional GPU passthrough — uncomment on hosts with NVIDIA drivers
+  #   # deploy:
+  #   #   resources:
+  #   #     reservations:
+  #   #       devices:
+  #   #         - driver: nvidia
+  #   #           count: all
+  #   #           capabilities: [gpu]
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://ollama:11434/api/tags"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 30s
+  #   restart: unless-stopped
+
+volumes:
+  pgdata-dev:
+  ollama-data-dev:
+  qdrant-data-dev:
+

@@ -1,0 +1,886 @@
+@import "tailwindcss";
+@import "highlight.js/styles/github.css";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "./styles/chat-theme.css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ─── Theme Tokens ─── */
+:root {
+  --background: #F7F3ED;
+  --foreground: #2D2520;
+  --card: #FDFAF4;
+  --card-foreground: #2D2520;
+  --popover: #FDFAF4;
+  --popover-foreground: #2D2520;
+  --primary: #973C00;
+  --primary-foreground: #FDFAF4;
+  --secondary: #EDE6DB;
+  --secondary-foreground: #5C4A3D;
+  --muted: #EDE6DB;
+  --muted-foreground: #8A7866;
+  --accent: #E8D9C5;
+  --accent-foreground: #5C4A3D;
+  --destructive: #B54434;
+  --destructive-foreground: #FDFAF4;
+  --border: #D9CFC1;
+  --input: #D9CFC1;
+  --ring: #973C00;
+  --chart-1: #973C00;
+  --chart-2: #8A7866;
+  --chart-3: #5C4A3D;
+  --chart-4: #B54434;
+  --chart-5: #E8D9C5;
+  --radius: 0.625rem;
+  --sidebar: #F2EBE0;
+  --sidebar-foreground: #2D2520;
+  --sidebar-primary: #973C00;
+  --sidebar-primary-foreground: #FDFAF4;
+  --sidebar-accent: #E8D9C5;
+  --sidebar-accent-foreground: #5C4A3D;
+  --sidebar-border: #D9CFC1;
+  --sidebar-ring: #973C00;
+  --font-size-multiplier: 1;
+  --ui-font-scale: 1rem;
+  --sidebar-dropdown-label: #8A7866;
+}
+
+.dark {
+  --background: oklch(0.147 0.004 49.25);
+  --foreground: oklch(0.985 0.001 106.423);
+  --card: oklch(0.216 0.006 56.043);
+  --card-foreground: oklch(0.985 0.001 106.423);
+  --popover: oklch(0.216 0.006 56.043);
+  --popover-foreground: oklch(0.985 0.001 106.423);
+  --primary: #973C00;
+  --primary-foreground: oklch(0.987 0.022 95.277);
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.268 0.007 34.298);
+  --muted-foreground: oklch(0.709 0.01 56.259);
+  --accent: oklch(0.268 0.007 34.298);
+  --accent-foreground: oklch(0.985 0.001 106.423);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0.001 106.423);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: #973C00;
+  --chart-1: oklch(0.869 0.005 56.366);
+  --chart-2: oklch(0.553 0.013 58.071);
+  --chart-3: oklch(0.444 0.011 73.639);
+  --chart-4: oklch(0.374 0.01 67.558);
+  --chart-5: oklch(0.268 0.007 34.298);
+  --sidebar: oklch(0.216 0.006 56.043);
+  --sidebar-foreground: oklch(0.985 0.001 106.423);
+  --sidebar-primary: #973C00;
+  --sidebar-primary-foreground: oklch(0.279 0.077 45.635);
+  --sidebar-accent: oklch(0.268 0.007 34.298);
+  --sidebar-accent-foreground: oklch(0.985 0.001 106.423);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: #973C00;
+  /* Sidebar dropdown titles (Progetto/Workspace) — bright #e6edf3 on dark.
+     .theme-hacker layers on top of .dark but doesn't override this, so both
+     dark and hacker themes resolve to rgb(230, 237, 243). */
+  --sidebar-dropdown-label: rgb(230, 237, 243);
+}
+
+.text-size-sm { --font-size-multiplier: 0.875; }
+.text-size-md { --font-size-multiplier: 1; }
+.text-size-lg { --font-size-multiplier: 1.125; }
+
+/* ─── Base Layer ─── */
+@layer base {
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--muted);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
+  }
+
+  /* Dark theme support for select/option elements */
+  select option {
+    background: var(--background);
+    color: var(--foreground);
+  }
+
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply font-sans;
+    font-size: calc(1rem * var(--font-size-multiplier));
+  }
+
+  button:not(:disabled),
+  a,
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in {
+  animation: slide-in 0.2s ease-out;
+}
+
+/* Transition utility for custom interactive elements */
+.transition-theme {
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: 'Inter Variable', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  --color-hacker-bg: #0a0e14;
+  --color-hacker-surface: #0f1419;
+  --color-hacker-elevated: #151b23;
+  --color-hacker-neon-green: #00ff9c;
+  --color-hacker-neon-cyan: #00d4ff;
+  --color-hacker-neon-magenta: #ff00aa;
+  --color-hacker-neon-amber: #ffaa00;
+  /* ─── Neon shadow tokens (Feature 6.1) → shadow-neon-* utilities ─── */
+  --shadow-neon-green: 0 0 12px rgba(0, 255, 156, 0.4), 0 0 4px rgba(0, 255, 156, 0.2), inset 0 0 8px rgba(0, 255, 156, 0.05);
+  --shadow-neon-cyan: 0 0 12px rgba(0, 212, 255, 0.4), 0 0 4px rgba(0, 212, 255, 0.2), inset 0 0 8px rgba(0, 212, 255, 0.05);
+  --shadow-neon-magenta: 0 0 12px rgba(255, 0, 170, 0.4), 0 0 4px rgba(255, 0, 170, 0.2), inset 0 0 8px rgba(255, 0, 170, 0.05);
+  --shadow-neon-amber: 0 0 12px rgba(255, 170, 0, 0.4), 0 0 4px rgba(255, 170, 0, 0.2), inset 0 0 8px rgba(255, 170, 0, 0.05);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  /* ─── Chat "Simmetric Native" tokens (Feature 4.6.1) → bg-chat-*, text-chat-* ─── */
+  --color-chat-user-bg: var(--chat-user-bg);
+  --color-chat-user-fg: var(--chat-user-fg);
+  --color-chat-ai-bg: var(--chat-ai-bg);
+  --color-chat-input-bg: var(--chat-input-bg);
+  --color-chat-border: var(--chat-border);
+  --color-chat-accent: var(--chat-accent);
+  --color-chat-code-bg: var(--chat-code-bg);
+  --color-chat-code-header-bg: var(--chat-code-header-bg);
+  --color-chat-cursor-color: var(--chat-cursor-color);
+  --color-chat-citation-glow: var(--chat-citation-glow);
+}
+
+/* CSS View Transitions API — used by <ViewTransition> in components/ui/view-transition.tsx.
+   Defaults to a quick crossfade; override per-name in component CSS if needed. */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 200ms;
+  }
+}
+
+/* ─── Hacker Evoluto design system — Feature 3.1 (UI_DESIGN.md) ───
+   The .theme-hacker class re-themes the whole shadcn UI by overriding the
+   same CSS custom properties that :root and .dark define. ThemeContext will
+   toggle this class on <html> (wired in a follow-up slice). */
+.theme-hacker {
+  --background: #0a0e14;
+  --foreground: #e6edf3;
+  --card: #0f1419;
+  --card-foreground: #e6edf3;
+  --popover: #151b23;
+  --popover-foreground: #e6edf3;
+  --primary: #00ff9c;
+  --primary-foreground: #0a0e14;
+  --secondary: #151b23;
+  --secondary-foreground: #e6edf3;
+  --muted: #0f1419;
+  --muted-foreground: #8b949e;
+  --accent: #151b23;
+  --accent-foreground: #00ff9c;
+  --destructive: #ff4466;
+  --destructive-foreground: #e6edf3;
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.1);
+  --ring: #00ff9c;
+  --sidebar: #0a0e14;
+  --sidebar-foreground: #e6edf3;
+  --sidebar-primary: #00ff9c;
+  --sidebar-primary-foreground: #0a0e14;
+  --sidebar-accent: #151b23;
+  --sidebar-accent-foreground: #00ff9c;
+  --sidebar-border: rgba(255, 255, 255, 0.06);
+  --sidebar-ring: #00ff9c;
+}
+
+/* Glassmorphism — use only on top-level panels (backdrop-filter is costly) */
+.glass-panel {
+  background: #f5f3f0;
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 4px;
+}
+.dark .glass-panel {
+  background: rgba(15, 20, 25, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.theme-hacker .glass-panel {
+  background: rgba(10, 14, 20, 0.85);
+  border: 1px solid rgba(0, 255, 156, 0.15);
+}
+
+/* Neon glow shadows for active states / primary actions */
+.neon-glow-green {
+  box-shadow:
+    0 0 12px rgba(0, 255, 156, 0.4),
+    0 0 4px rgba(0, 255, 156, 0.2),
+    inset 0 0 8px rgba(0, 255, 156, 0.05);
+}
+.neon-glow-cyan {
+  box-shadow:
+    0 0 12px rgba(0, 212, 255, 0.4),
+    0 0 4px rgba(0, 212, 255, 0.2),
+    inset 0 0 8px rgba(0, 212, 255, 0.05);
+}
+
+/* Subtle scanline overlay — apply on a top-level wrapper, very low opacity */
+.scanlines::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0,
+    transparent 2px,
+    rgba(0, 255, 156, 0.015) 2px,
+    rgba(0, 255, 156, 0.015) 3px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Subtle terminal grid background */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(0, 255, 156, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 156, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Glitch text — for important titles only (data-text attribute required) */
+.glitch-text {
+  position: relative;
+  color: #e6edf3;
+}
+.glitch-text::before,
+.glitch-text::after {
+  content: attr(data-text);
+  position: absolute;
+  top: 0;
+  left: 0;
+  opacity: 0.8;
+}
+.glitch-text::before {
+  color: #00d4ff;
+  animation: glitch-1 3s infinite;
+  clip-path: polygon(0 0, 100% 0, 100% 45%, 0 45%);
+}
+.glitch-text::after {
+  color: #ff00aa;
+  animation: glitch-2 3s infinite;
+  clip-path: polygon(0 55%, 100% 55%, 100% 100%, 0 100%);
+}
+@keyframes glitch-1 {
+  0%, 90%, 100% { transform: translate(0); }
+  92% { transform: translate(-2px, 1px); }
+  94% { transform: translate(2px, -1px); }
+}
+@keyframes glitch-2 {
+  0%, 90%, 100% { transform: translate(0); }
+  92% { transform: translate(2px, -1px); }
+  94% { transform: translate(-2px, 1px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glitch-text::before,
+  .glitch-text::after {
+    animation: none;
+  }
+  .scanlines::before {
+    display: none;
+  }
+}
+
+/* ─── Chat Interface Redesign — "Simmetric Native" (Feature 4.7) ───
+   Message appearance + send-button micro-interactions. All transforms are
+   disabled under prefers-reduced-motion (fade-only) per WCAG 2.3.3. */
+@keyframes chat-msg-user-in {
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes chat-msg-ai-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes send-press {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(0.95); }
+  100% { transform: scale(1); }
+}
+@keyframes send-glow-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--primary); }
+  60%  { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@keyframes send-glitch-flash {
+  0%   { transform: translate(0); filter: none; }
+  25%  { transform: translate(-1px, 1px); filter: hue-rotate(20deg); }
+  50%  { transform: translate(1px, -1px); }
+  100% { transform: translate(0); filter: none; }
+}
+
+.chat-msg-user { animation: chat-msg-user-in 150ms ease-out both; }
+.chat-msg-ai   { animation: chat-msg-ai-in 200ms ease-out both; }
+
+/* Send button feedback (4.7.3): active scale + glow pulse on click. */
+.send-press:active { animation: send-press 100ms ease-out; }
+.send-glow { animation: send-glow-pulse 350ms ease-out; }
+/* Hacker theme: brief glitch flash on send (50ms). */
+.theme-hacker .send-glitch { animation: send-glitch-flash 50ms steps(2, end); }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-msg-user,
+  .chat-msg-ai {
+    animation-name: chat-msg-ai-in; /* keep fade-only */
+    animation-duration: 120ms;
+  }
+  /* Disable transforms entirely — fall back to a plain fade. */
+  .chat-msg-user { animation: chat-msg-ai-in 120ms ease-out both; }
+  .send-press:active,
+  .send-glow,
+  .theme-hacker .send-glitch { animation: none; }
+}
+
+/* ─── Appearance preferences (Feature 3.4b) ───
+   Driven by SettingsAppearance.tsx via inline style / class on <html>.
+   --ui-font-scale scales the chrome font-size (chat text size is separate,
+   controlled by the user profile textSize). density-compact tightens the
+   spacing utilities used across the shell. */
+html {
+  font-size: var(--ui-font-scale, 1rem);
+}
+
+.density-compact {
+  --space-scale: 0.75;
+}
+.density-compact :where(.p-4) { padding: 0.75rem; }
+.density-compact :where(.p-6) { padding: 1.125rem; }
+.density-compact :where(.gap-4) { gap: 0.75rem; }
+.density-compact :where(.gap-6) { gap: 1.125rem; }
+
+/* ─── Feature 7.1 — Hacker theme globale (PARTE 17) ───
+   Extends the hacker aesthetic beyond chat to every non-chat page and
+   generic component. Translated from UI_DESIGN.md PARTE 17.1 + 17.2 with
+   the LOCKED convention `.theme-hacker` (NOT the data-theme attribute form).
+   Reuses neon tokens + shadcn var names so rules stay in sync with the
+   `.theme-hacker` var override block above. */
+
+/* ── 17.1 Page header ── */
+.theme-hacker .page-header {
+  border-bottom: 1px solid var(--color-hacker-neon-green);
+  padding: 0.75rem 1rem;
+  background: rgba(0, 255, 156, 0.02);
+}
+.theme-hacker .page-header__title {
+  font-family: var(--font-mono);
+  color: var(--color-hacker-neon-green);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.95rem;
+}
+.theme-hacker .page-header__subtitle {
+  font-family: var(--font-mono);
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+/* ── 17.1 Generic cards ── */
+.theme-hacker .card {
+  border: 1px solid rgba(0, 255, 156, 0.15);
+  background: var(--card);
+  font-family: var(--font-mono);
+}
+.theme-hacker .card:hover {
+  border-color: var(--color-hacker-neon-green);
+  box-shadow: var(--shadow-neon-green);
+}
+.theme-hacker .card__title {
+  color: var(--color-hacker-neon-green);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.85rem;
+}
+.theme-hacker .card__meta {
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+}
+
+/* ── 17.1 Tables ── */
+.theme-hacker .table {
+  border: 1px solid rgba(0, 255, 156, 0.12);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+.theme-hacker .table th {
+  color: var(--color-hacker-neon-green);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid rgba(0, 255, 156, 0.2);
+  background: rgba(0, 255, 156, 0.03);
+}
+.theme-hacker .table td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--foreground);
+}
+.theme-hacker .table tr:hover td {
+  background: rgba(0, 255, 156, 0.04);
+  color: var(--color-hacker-neon-green);
+}
+
+/* ── 17.1 Form inputs ── */
+.theme-hacker .input,
+.theme-hacker .select,
+.theme-hacker .textarea {
+  border: 1px solid rgba(0, 255, 156, 0.15);
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+.theme-hacker .input:focus,
+.theme-hacker .select:focus,
+.theme-hacker .textarea:focus {
+  border-color: var(--color-hacker-neon-green);
+  box-shadow: 0 0 0 1px var(--color-hacker-neon-green), var(--shadow-neon-green);
+  outline: none;
+}
+.theme-hacker .input::placeholder {
+  color: var(--muted-foreground);
+  opacity: 0.6;
+}
+.theme-hacker .label {
+  color: var(--color-hacker-neon-green);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+}
+
+/* ── 17.1 Buttons ── */
+.theme-hacker .btn-primary {
+  border: 1px solid var(--color-hacker-neon-green);
+  background: rgba(0, 255, 156, 0.08);
+  color: var(--color-hacker-neon-green);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.theme-hacker .btn-primary:hover {
+  background: rgba(0, 255, 156, 0.16);
+  box-shadow: var(--shadow-neon-green);
+}
+.theme-hacker .btn-primary:active {
+  animation: send-glitch-flash 50ms steps(2, end);
+}
+.theme-hacker .btn-secondary {
+  border: 1px solid var(--color-hacker-neon-cyan);
+  background: rgba(0, 212, 255, 0.06);
+  color: var(--color-hacker-neon-cyan);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.theme-hacker .btn-secondary:hover {
+  background: rgba(0, 212, 255, 0.14);
+  box-shadow: var(--shadow-neon-cyan);
+}
+.theme-hacker .btn-danger {
+  border: 1px solid var(--color-hacker-neon-magenta);
+  background: rgba(255, 0, 170, 0.06);
+  color: var(--color-hacker-neon-magenta);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.theme-hacker .btn-danger:hover {
+  background: rgba(255, 0, 170, 0.14);
+  box-shadow: var(--shadow-neon-magenta);
+}
+.theme-hacker .btn-ghost {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+}
+.theme-hacker .btn-ghost:hover {
+  border-color: rgba(0, 255, 156, 0.3);
+  color: var(--color-hacker-neon-green);
+}
+
+/* ── 17.1 Modals ── */
+.theme-hacker .modal-backdrop {
+  background: rgba(10, 14, 20, 0.85);
+  backdrop-filter: blur(4px);
+}
+.theme-hacker .modal {
+  border: 1px solid var(--color-hacker-neon-green);
+  background: var(--card);
+  box-shadow: var(--shadow-neon-green);
+  font-family: var(--font-mono);
+}
+.theme-hacker .modal__header {
+  border-bottom: 1px solid rgba(0, 255, 156, 0.2);
+}
+.theme-hacker .modal__title {
+  color: var(--color-hacker-neon-green);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.theme-hacker .modal__title::before {
+  content: '▌ ';
+  color: var(--color-hacker-neon-green);
+}
+.theme-hacker .modal__close:hover {
+  color: var(--color-hacker-neon-magenta);
+}
+
+/* ── 17.1 Toasts ── */
+.theme-hacker .toast {
+  border: 1px solid rgba(0, 255, 156, 0.2);
+  background: var(--card);
+  font-family: var(--font-mono);
+  color: var(--foreground);
+}
+.theme-hacker .toast--success { border-color: var(--color-hacker-neon-green); }
+.theme-hacker .toast--success::before { content: '> '; color: var(--color-hacker-neon-green); }
+.theme-hacker .toast--error { border-color: var(--color-hacker-neon-magenta); }
+.theme-hacker .toast--error::before { content: '! '; color: var(--color-hacker-neon-magenta); }
+.theme-hacker .toast--info { border-color: var(--color-hacker-neon-cyan); }
+.theme-hacker .toast--info::before { content: 'i '; color: var(--color-hacker-neon-cyan); }
+.theme-hacker .toast--warning { border-color: var(--color-hacker-neon-amber); }
+.theme-hacker .toast--warning::before { content: '* '; color: var(--color-hacker-neon-amber); }
+
+/* ── 17.1 Badges ── */
+.theme-hacker .badge {
+  border: 1px solid rgba(0, 255, 156, 0.2);
+  background: rgba(0, 255, 156, 0.05);
+  color: var(--color-hacker-neon-green);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.65rem;
+}
+.theme-hacker .badge--success { border-color: var(--color-hacker-neon-green); color: var(--color-hacker-neon-green); }
+.theme-hacker .badge--info { border-color: var(--color-hacker-neon-cyan); color: var(--color-hacker-neon-cyan); }
+.theme-hacker .badge--warning { border-color: var(--color-hacker-neon-amber); color: var(--color-hacker-neon-amber); }
+.theme-hacker .badge--danger { border-color: var(--color-hacker-neon-magenta); color: var(--color-hacker-neon-magenta); }
+
+/* ── 17.1 Empty states ── */
+.theme-hacker .empty-state {
+  border: 1px dashed rgba(0, 255, 156, 0.15);
+  background: rgba(0, 255, 156, 0.01);
+  font-family: var(--font-mono);
+}
+.theme-hacker .empty-state__icon {
+  color: var(--muted-foreground);
+  opacity: 0.5;
+}
+.theme-hacker .empty-state__title {
+  color: var(--color-hacker-neon-green);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.theme-hacker .empty-state__title::before {
+  content: '> ';
+  color: var(--color-hacker-neon-green);
+}
+.theme-hacker .empty-state__description {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+/* ── 17.1 Scrollbar ── */
+.theme-hacker ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.theme-hacker ::-webkit-scrollbar-track {
+  background: var(--background);
+}
+.theme-hacker ::-webkit-scrollbar-thumb {
+  background: rgba(0, 255, 156, 0.2);
+  border-radius: 3px;
+}
+.theme-hacker ::-webkit-scrollbar-thumb:hover {
+  background: var(--color-hacker-neon-green);
+  box-shadow: var(--shadow-neon-green);
+}
+
+/* ── 17.1 Body background (global fallback for out-of-wrapper surfaces) ── */
+.theme-hacker body {
+  background-color: #0a0e14;
+  background-image:
+    linear-gradient(rgba(0, 255, 156, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 156, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  color: var(--foreground);
+}
+.theme-hacker body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0,
+    transparent 2px,
+    rgba(0, 255, 156, 0.015) 2px,
+    rgba(0, 255, 156, 0.015) 3px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── 17.2 Documents ── */
+.theme-hacker .document-card {
+  border: 1px solid rgba(0, 255, 156, 0.12);
+  background: var(--card);
+  font-family: var(--font-mono);
+}
+.theme-hacker .document-card:hover {
+  border-color: var(--color-hacker-neon-green);
+  box-shadow: var(--shadow-neon-green);
+}
+.theme-hacker .document-card__name {
+  color: var(--color-hacker-neon-green);
+  font-size: 0.85rem;
+}
+.theme-hacker .document-card__meta {
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+}
+.theme-hacker .document-card__status--indexed {
+  color: var(--color-hacker-neon-green);
+}
+.theme-hacker .document-card__status--processing {
+  color: var(--color-hacker-neon-amber);
+}
+.theme-hacker .document-card__status--error {
+  color: var(--color-hacker-neon-magenta);
+}
+
+/* ── 17.2 Knowledge Base ── */
+.theme-hacker .kb-entry {
+  border: 1px solid rgba(0, 212, 255, 0.12);
+  background: var(--card);
+  font-family: var(--font-mono);
+}
+.theme-hacker .kb-entry:hover {
+  border-color: var(--color-hacker-neon-cyan);
+  box-shadow: var(--shadow-neon-cyan);
+}
+
+/* ── 17.2 Widgets ── */
+.theme-hacker .widget-card {
+  border: 1px solid rgba(255, 0, 170, 0.12);
+  background: var(--card);
+  font-family: var(--font-mono);
+}
+.theme-hacker .widget-card__embed-code {
+  border: 1px solid rgba(0, 255, 156, 0.15);
+  background: var(--background);
+  color: var(--color-hacker-neon-green);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+
+/* ── 17.2 Analytics ── */
+.theme-hacker .analytics-chart {
+  border: 1px solid rgba(0, 212, 255, 0.12);
+  background: var(--card);
+  font-family: var(--font-mono);
+}
+.theme-hacker .analytics-chart__title {
+  color: var(--color-hacker-neon-cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.theme-hacker .analytics-chart__title::before {
+  content: '▌ ';
+  color: var(--color-hacker-neon-cyan);
+}
+.theme-hacker .chart-line--primary {
+  stroke: var(--color-hacker-neon-green);
+}
+.theme-hacker .chart-line--secondary {
+  stroke: var(--color-hacker-neon-cyan);
+}
+.theme-hacker .chart-line--tertiary {
+  stroke: var(--color-hacker-neon-amber);
+}
+.theme-hacker .chart-grid line {
+  stroke: rgba(0, 255, 156, 0.08);
+}
+.theme-hacker .chart-axis text {
+  fill: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+}
+
+/* ── 17.2 Admin ── */
+.theme-hacker .admin-section {
+  border: 1px solid rgba(0, 255, 156, 0.12);
+  background: var(--card);
+  font-family: var(--font-mono);
+}
+.theme-hacker .admin-section__title {
+  color: var(--color-hacker-neon-green);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.theme-hacker .admin-section__title::before {
+  content: '▌ ';
+  color: var(--color-hacker-neon-green);
+}
+.theme-hacker .admin-user-row {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-family: var(--font-mono);
+}
+.theme-hacker .admin-user-row:hover {
+  background: rgba(0, 255, 156, 0.04);
+}
+.theme-hacker .admin-permission-badge {
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  background: rgba(0, 212, 255, 0.05);
+  color: var(--color-hacker-neon-cyan);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── 7.4 UserDropdown hacker sign-out (neon-magenta) ── */
+.theme-hacker .hacker-signout {
+  color: var(--color-hacker-neon-magenta);
+}
+.theme-hacker .hacker-signout:hover,
+.theme-hacker .hacker-signout:focus {
+  color: var(--color-hacker-neon-magenta);
+  background: rgba(255, 0, 170, 0.08);
+}
+
+/* ── Reduced-motion guard for 7.1 btn-primary glitch ── */
+@media (prefers-reduced-motion: reduce) {
+  .theme-hacker .btn-primary:active {
+    animation: none;
+  }
+}
+
+/* ── 7.5 Settings menu neon active state (LOCKED: .theme-hacker selector, never data-theme) ── */
+.theme-hacker .settings-menu-item[data-active="true"] {
+  border-left-color: var(--color-hacker-neon-green);
+  color: var(--color-hacker-neon-green);
+  background: color-mix(in srgb, var(--color-hacker-neon-green) 12%, transparent);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--color-hacker-neon-green) 60%, transparent);
+}
+.theme-hacker .settings-menu-item[data-active="true"]:hover {
+  background: color-mix(in srgb, var(--color-hacker-neon-green) 18%, transparent);
+}
+.theme-hacker .settings-menu-item:not([data-active="true"]):hover {
+  border-left-color: color-mix(in srgb, var(--color-hacker-neon-green) 50%, transparent);
+  color: var(--color-hacker-neon-green);
+}
+/* ── 7.6/7.7 App subtitle neon (LOCKED: .theme-hacker selector, never data-theme) ── */
+/* App icon border/glow removed per user request (2026-07-14) — icon renders borderless. */
+.theme-hacker .app-subtitle {
+  color: var(--color-hacker-neon-cyan);
+  text-shadow: 0 0 4px color-mix(in srgb, var(--color-hacker-neon-cyan) 50%, transparent);
+}
+
+.chat-ai-body a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 150ms ease, opacity 150ms ease;
+}
+.chat-ai-body a:hover {
+  color: var(--chat-accent);
+  opacity: 0.85;
+}
+.chat-ai-body .file-ref {
+  color: var(--primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.chat-ai-body .file-ref:hover {
+  opacity: 0.8;
+}

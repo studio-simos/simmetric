@@ -1,0 +1,291 @@
+services:
+  # ─── Frontend (Nginx) ──────────────────────────────
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    container_name: simmetric-chat-frontend
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+      - "443:443"
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Server (Express API) ──────────────────────────
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    container_name: simmetric-chat-server
+    expose:
+      - "3000"
+    ports:
+      - "${SERVER_PORT:-3000}:3000"
+    volumes:
+      - server-storage:/app/storage
+      - ${LOCAL_BACKUP_PATH:-/var/backups}:${LOCAL_BACKUP_PATH:-/var/backups}:rw
+      # Ollama Cloud Login: the server runs `docker exec <OLLAMA_CONTAINER_NAME>
+      # ollama login` against the host Docker daemon to trigger the daemon's
+      # SSH-key-based cloud auth. Root-equivalent access — see .env.example
+      # hardening note about a restricted Docker socket proxy alternative.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # ─── Enterprise plugin (optional — air-gap tarball delivery) ───
+      # Extract the enterprise tarball to ./simmetric-enterprise/dist/ on the host,
+      # then uncomment to mount it into the server container. The loader's
+      # require.resolve("@simmetric-chat/enterprise") finds it here at boot.
+      # Compose paths are relative to this file's dir (docker/), so the SIBLING
+      # repo is ../../simmetric-enterprise/dist — NOT ../simmetric-enterprise/dist
+      # (which resolves to a stray dir inside the simmetric-chat repo).
+      # Mount the WHOLE sibling repo at /simmetric-enterprise (the image's
+      # symlink target): dist/ (plugin code) AND node_modules/ (plugin deps —
+      # passport, openid-client, node-saml, bree, yauzl, ... are NOT installed
+      # in the server image) resolve from the same tree. A dist-only mount
+      # breaks dep resolution AND nested mounts get shadowed by the parent.
+      - ../../simmetric-enterprise:/simmetric-enterprise:ro
+    environment:
+      - NODE_ENV=production
+      - SERVER_PORT=3000
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_MODEL=${LLM_MODEL:-gemma4:latest}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=${LLM_MODEL:-gemma4:latest}
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-10m}
+      # Ollama Cloud Login: container name passed to `docker exec` for the
+      # daemon's `ollama login` cloud auth flow. See .env.example hardening note.
+      - OLLAMA_CONTAINER_NAME=${OLLAMA_CONTAINER_NAME:-simmetric-chat-ollama}
+      - SERVER_URL=http://server:3000
+      - COLLECTOR_URL=http://collector:3210
+      - COLLECTOR_PORT=3210
+      - WIDGET_SERVICE_URL=http://widget:3211
+      - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-true}
+      - DISABLE_TELEMETRY=${DISABLE_TELEMETRY:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DATABASE_URL=postgresql://simmetricchat:simmetricchat@postgres:5432/simmetricchat
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      # ENCRYPTION_KEY: injected via env_file (../.env) when present. When
+      # absent, the entrypoint auto-generates it once and persists it at
+      # /app/storage/.encryption-key inside the server-storage volume.
+      # Do NOT add an `- ENCRYPTION_KEY=${ENCRYPTION_KEY:-}` passthrough here:
+      # shell interpolation resolves to "" and OVERRIDES env_file — the same
+      # trap documented for LICENSE_KEY below.
+      # LICENSE_KEY comes from env_file (../.env) — do NOT redeclare it here:
+      # a shell-interpolated override (e.g. `- LICENSE_KEY=${LICENSE_KEY:-}`)
+      # resolves to "" and OVERRIDES env_file, silently downgrading to Community.
+      # NODE_PATH: the enterprise bind mount follows the image symlink to
+      # /simmetric-enterprise (outside node_modules), so Node must resolve its
+      # express/shared deps from the server's own node_modules, and the
+      # plugin-only deps (passport, openid-client, ...) from the mounted
+      # /simmetric-enterprise/node_modules.
+      - NODE_PATH=/app/packages/server/node_modules:/simmetric-enterprise/node_modules
+      - COLLECTOR_SECRET=${COLLECTOR_SECRET:-change-me-in-production}
+      # WIDGET_API_KEY: shared secret with the widget service (must match the
+      # widget service env below). The server uses it to (a) auto-seed the
+      # api_keys row that apiKeyMiddleware requires for the widget service's
+      # outbound /api/internal/widget calls (151-02 G-151-1a/1b follow-up —
+      # without the row every widget session/config call 401s) and (b) push
+      # cache-busts to the widget service.
+      - WIDGET_API_KEY=${WIDGET_API_KEY:-sk-default-widget-key}
+      - REDIS_URL=redis://redis:6379
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-local}
+      - VECTOR_DB_PROVIDER=${VECTOR_DB_PROVIDER:-lancedb}
+      - SEED_BOOTSTRAP_ADMIN=${SEED_BOOTSTRAP_ADMIN:-true}
+    env_file:
+      - path: ../.env
+        required: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ─── Collector (Document Ingestion) ────────────────
+  collector:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.collector
+    container_name: simmetric-chat-collector
+    expose:
+      - "3210"
+    volumes:
+      - collector-storage:/app/storage
+      - server-storage:/app/server-storage:ro
+      - xenova-cache:/app/.cache/xenova
+    environment:
+      - NODE_ENV=production
+      - COLLECTOR_PORT=3210
+      - STORAGE_PATH=/app/storage
+      - SERVER_STORAGE_PATH=/app/server-storage
+      - SERVER_URL=http://server:3000
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-10m}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-local}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-Xenova/all-MiniLM-L6-v2}
+      - VECTOR_DB_PROVIDER=${VECTOR_DB_PROVIDER:-lancedb}
+      - COLLECTOR_SECRET=${COLLECTOR_SECRET:-change-me-in-production}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - XENOVA_CACHE_DIR=/app/.cache/xenova
+      - HF_ALLOW_REMOTE_MODELS=${HF_ALLOW_REMOTE_MODELS:-true}
+    env_file:
+      - path: ../.env
+        required: false
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3210/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ─── Widget Service (Embeddable Chat) ──────────────
+  widget:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.widget
+    container_name: simmetric-chat-widget
+    expose:
+      - "3211"
+    volumes:
+      - widget-storage:/app/storage
+    environment:
+      - NODE_ENV=production
+      - WIDGET_PORT=3211
+      - SERVER_URL=http://server:3000
+      - WIDGET_API_KEY=${WIDGET_API_KEY:-sk-default-widget-key}
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    env_file:
+      - path: ../.env
+        required: false
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3211/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ─── PostgreSQL (Default Database) ───────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: simmetric-chat-db
+    expose:
+      - "5432"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-simmetricchat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-simmetricchat}
+      POSTGRES_DB: ${POSTGRES_DB:-simmetricchat}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d ${POSTGRES_DB:-simmetricchat} -U ${POSTGRES_USER:-simmetricchat}"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # ─── Ollama (Local LLM) ──────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: simmetric-chat-ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-10m}
+      - OLLAMA_HOST=0.0.0.0:11434
+    expose:
+      - "11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      # The ollama/ollama image ships NO curl/wget/node — the previous curl
+      # probe could never execute (container permanently "unhealthy").
+      # `ollama ls` talks to the local daemon its own binary serves.
+      test: ["CMD-SHELL", "ollama ls >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # ─── Redis (Horizontal Scaling Cache) ────────────
+  redis:
+    image: redis:7-alpine
+    container_name: simmetric-chat-redis
+    expose:
+      - "6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  # ─── Qdrant (Vector Database) ──────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: simmetric-chat-qdrant
+    expose:
+      - "6333"
+      - "6334"
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__HTTP_PORT=6333
+    healthcheck:
+      # qdrant/qdrant image ships no curl/wget/busybox — the wget probe could
+      # never execute (rc=127, "unhealthy" forever). Use a bash /dev/tcp
+      # socket probe — bash EXISTS in the qdrant 1.19 image but CMD-SHELL
+      # runs /bin/sh (no /dev/tcp support), so invoke bash explicitly.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # ─── Chroma (Vector Database) ──────────────────────
+  # chroma:
+  #   image: chromadb/chroma:latest
+  #   container_name: simmetric-chat-chroma
+  #   expose:
+  #     - "8000"
+  #   volumes:
+  #     - chroma-data:/chroma/chroma
+  #   environment:
+  #     - IS_PERSISTENT=TRUE
+  #     - PERSIST_DIRECTORY=/chroma/chroma
+  #     - ANONYMIZED_TELEMETRY=FALSE
+  #   healthcheck:
+  #     test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/api/v1/heartbeat"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 10s
+  #   restart: unless-stopped
+
+volumes:
+  server-storage:
+  collector-storage:
+  xenova-cache:
+  widget-storage:
+  pgdata:
+  ollama-data:
+  redis-data:
+  qdrant-storage:
+#  chroma-data:

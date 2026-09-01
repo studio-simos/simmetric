@@ -1,0 +1,37 @@
+# Development override — mount source code for hot reload
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    volumes:
+      - ../packages/server/src:/app/packages/server/src
+      - server-storage:/app/storage
+      # Ollama Cloud Login: mirror the docker.sock mount from the base compose
+      # file so dev mode also supports cloud login. Env var OLLAMA_CONTAINER_NAME
+      # is inherited via the compose merge, so no env change needed here.
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - NODE_ENV=development
+    command: ["pnpm", "--filter", "server", "dev"]
+    profiles:
+      - full
+      - default
+
+  collector:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.collector
+    volumes:
+      - ../packages/collector/src:/app/packages/collector/src
+      - collector-storage:/app/storage
+    environment:
+      - NODE_ENV=development
+    command: ["pnpm", "--filter", "collector", "dev"]
+    profiles:
+      - full
+      - default
+
+  frontend:
+    profiles:
+      - frontend-prod

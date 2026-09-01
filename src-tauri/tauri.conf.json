@@ -1,0 +1,50 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicef0x/tauri-v2-schema/main/tauri.conf.v2.schema.json",
+  "productName": "Simmetric Chat",
+  "version": "0.1.0",
+  "identifier": "com.simmetric-chat.desktop",
+  "build": {
+    "beforeBuild": "pnpm build",
+    "beforeDevCommand": "pnpm --filter server dev & pnpm --filter collector dev & sleep 3",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../packages/frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Simmetric Chat — Enterprise AI Chatbot",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* ws://localhost:*; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "dmg", "msi", "appimage"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "../packages/server/dist/**",
+      "../packages/collector/dist/**",
+      "../packages/shared/dist/**",
+      "../packages/server/prisma/**",
+      "../packages/server/node_modules/.prisma/**"
+    ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}

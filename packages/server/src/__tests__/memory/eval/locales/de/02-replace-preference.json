@@ -1,0 +1,17 @@
+{
+  "id": "de-02-replace-preference",
+  "locale": "de",
+  "category": "replace_preference",
+  "transcript": [
+    { "role": "user", "content": "Eigentlich, schalte mich auf den Light Mode. Ich habe meine Meinung geändert." },
+    { "role": "assistant", "content": "Aktualisiert — ich verwende jetzt den Light Mode." }
+  ],
+  "existingMemories": [
+    { "id": "00000000-0000-4000-8000-000000000070", "type": "user", "path": "preferences.theme", "content": "bevorzugt den Dark Mode" }
+  ],
+  "expectedOps": [
+    { "op": "replace", "id": "00000000-0000-4000-8000-000000000070", "type": "user", "path": "preferences.theme", "content": "bevorzugt den Light Mode", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "User corrects a preference — German"
+}

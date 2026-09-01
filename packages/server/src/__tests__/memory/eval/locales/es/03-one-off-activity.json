@@ -1,0 +1,13 @@
+{
+  "id": "es-03-one-off-activity",
+  "locale": "es",
+  "category": "one_off_activity",
+  "transcript": [
+    { "role": "user", "content": "Hoy comí pasta para el almuerzo." },
+    { "role": "assistant", "content": "¡Suena bien! ¿Cómo estuvo?" }
+  ],
+  "existingMemories": [],
+  "expectedOps": [],
+  "expectedDenyList": false,
+  "notes": "Negative case — one-off activity (Spanish)"
+}

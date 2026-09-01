@@ -1,0 +1,185 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # 1. GitHub Release (changelog extraction + release notes)
+  # ─────────────────────────────────────────────────────────────
+  github-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract tag metadata
+        id: meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $TAG (version: $VERSION)"
+
+      - name: Verify package.json version matches tag
+        run: |
+          PKG_VERSION=$(jq -r '.version' package.json)
+          TAG_VERSION="${{ steps.meta.outputs.version }}"
+          # D-01: compare major.minor components only — a two-part tag (v1.5)
+          # must match a three-part package.json version (1.5.0). Mirrors
+          # scripts/version-check.cjs normalize() (split on '.', first 2 parts).
+          PKG_MM=$(echo "$PKG_VERSION" | cut -d. -f1-2)
+          TAG_MM=$(echo "$TAG_VERSION" | cut -d. -f1-2)
+          if [ "$PKG_MM" != "$TAG_MM" ]; then
+            echo "::error::package.json version ($PKG_VERSION → major.minor $PKG_MM) does not match tag ($TAG_VERSION → major.minor $TAG_MM)."
+            echo "::error::Update package.json version to match tag major.minor $TAG_MM before tagging."
+            exit 1
+          fi
+          echo "OK: package.json version ($PKG_VERSION) matches tag ($TAG_VERSION) (major.minor $PKG_MM)"
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          # Extract the section between the tag header and the next header.
+          # Supports both [v1.4] and [1.4] formats, with an optional patch
+          # component ([v1.5.0] / [v1.5]) — D-02 fix.
+          TAG="${{ steps.meta.outputs.tag }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+
+          # D-02: escape the dots in the tag/version for the awk regex
+          # interpolation below (`.` is regex any-char otherwise).
+          TAG_ESC=$(printf '%s' "$TAG" | sed 's/\./\\./g')
+          VER_ESC=$(printf '%s' "$VERSION" | sed 's/\./\\./g')
+
+          # Try [vX.Y(.Z)] first, then [X.Y(.Z)] — escaped brackets + optional
+          # patch component match BOTH two-part and three-part headers.
+          NOTES=$(awk -v tag="$TAG_ESC" -v ver="$VER_ESC" '
+            $0 ~ "^## \\[" tag "(\\.[0-9]+)?\\] " { print; in_sec=1; next }
+            $0 ~ "^## \\[" ver "(\\.[0-9]+)?\\] " { print; in_sec=1; next }
+            in_sec && /^## \[/ { exit }
+            in_sec { print }
+          ' CHANGELOG.md)
+
+          if [ -z "$NOTES" ]; then
+            NOTES="Release $TAG. See CHANGELOG.md for details."
+          fi
+
+          # Write to a file to preserve multi-line formatting
+          printf '%s\n' "$NOTES" > /tmp/release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            --title "${{ steps.meta.outputs.tag }}" \
+            --notes-file /tmp/release-notes.md \
+            --verify-tag
+
+  # ─────────────────────────────────────────────────────────────
+  # 2. Docker images → GitHub Container Registry (GHCR)
+  # ─────────────────────────────────────────────────────────────
+  # Builds and publishes 4 service images (server, frontend, collector,
+  # widget) plus an all-in-one image. All images are multi-arch
+  # (amd64 + arm64) for Raspberry Pi / ARM server deployments.
+  #
+  # The enterprise plugin is NOT included in any published image —
+  # it is delivered as a private tarball (see docs/ENTERPRISE_PLUGIN.md).
+  # The community images run in community mode by default; mounting the
+  # enterprise tarball into node_modules upgrades them to enterprise.
+  docker-images:
+    runs-on: ubuntu-latest
+    needs: github-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: simmetric-chat-server
+            dockerfile: docker/Dockerfile.server
+          - image: simmetric-chat-frontend
+            dockerfile: docker/Dockerfile.frontend
+          - image: simmetric-chat-collector
+            dockerfile: docker/Dockerfile.collector
+          - image: simmetric-chat-widget
+            dockerfile: docker/Dockerfile.widget
+          - image: simmetric-chat-all-in-one
+            dockerfile: docker/Dockerfile
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Set up QEMU (multi-arch emulation)
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for image labels
+        id: img-meta
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="${{ matrix.image }}"
+          TAG="${{ needs.github-release.outputs.tag }}"
+          VERSION="${{ needs.github-release.outputs.version }}"
+          echo "image-lower=ghcr.io/${OWNER}/${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.img-meta.outputs.image-lower }}:${{ steps.img-meta.outputs.version }}
+            ${{ steps.img-meta.outputs.image-lower }}:latest
+          labels: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.version=${{ steps.img-meta.outputs.version }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────────────────────────────
+  # 3. Post-release housekeeping
+  # ─────────────────────────────────────────────────────────────
+  # Verifies the published images are pullable and the GitHub Release
+  # is visible. Does NOT auto-close milestones or issues — that's a
+  # manual owner decision.
+  verify-release:
+    runs-on: ubuntu-latest
+    needs: [github-release, docker-images]
+    steps:
+      - name: Verify GitHub Release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ needs.github-release.outputs.tag }}" --repo "${{ github.repository }}"
+          echo "Release ${{ needs.github-release.outputs.tag }} is live."
+
+      - name: Verify server image is pullable
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          docker pull "ghcr.io/${OWNER}/simmetric-chat-server:${{ needs.github-release.outputs.version }}"
+          echo "Server image pulled successfully."

@@ -1,0 +1,416 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least-privilege default (Phase 137 D-03a): no job needs write.
+# Apply to all jobs unless a job explicitly overrides.
+permissions:
+  contents: read
+
+jobs:
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          # Full history required by the changelog discipline gate (Phase 173
+          # CL-01 / D-02): the gate computes `git diff --name-only
+          # origin/main...HEAD` (PR) / `HEAD~1` (push) against the merge base —
+          # a default shallow checkout has no such history and the gate fails
+          # loud. Phase 172's version:check does NOT need this (`git describe`
+          # works shallow); keep this for the changelog diff detection only.
+          # Precedent: the `security` job checkout (line 364).
+          fetch-depth: 0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4 (annotated tag — dereferenced to commit, Pitfall P1)
+        # version is sourced from package.json `packageManager` (corepack).
+        # Do NOT pass `version:` here — action-setup conflicts if both are set.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm lint
+      - run: pnpm typecheck
+      # Phase 180 PUB-04: dead-code gate — knip fails on unused files/deps/
+      # exports outside the documented allowlists (knip.json: enterprise-
+      # consumed tags + ts-jest rollback transformer + generated ui/**).
+      # ~3s, no build/DB needed. The sweep preceded the gate so the first
+      # run is green; the gate only blocks NEW dead code.
+      - name: Dead-code gate (knip)
+        run: pnpm knip
+      # Phase 172 VER-01 / D-02: fail CI if root package.json major.minor ≠
+      # Phase 173 CL-01 / D-04: fail CI if [Unreleased] is empty on PRs
+      # touching packages/*/src/** (excluding __tests__/ at any depth). Pairs
+      # with release.yml note extraction (awk between ## [TAG] headers) — the
+      # section-header format is a contract. Runs right after version:check
+      # (same job, same checkout, no new job).
+      - name: Changelog discipline check ([Unreleased] non-empty + KaC format)
+        run: pnpm changelog:check
+
+  test-unit:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4 (annotated tag — dereferenced to commit, Pitfall P1)
+        # version is sourced from package.json `packageManager` (corepack).
+        # Do NOT pass `version:` here — action-setup conflicts if both are set.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - name: Verify @prisma/client resolvable (Prisma 7 + pnpm symlink check)
+        run: pnpm --filter server exec node -e "const { PrismaClient } = require('@prisma/client'); if (typeof PrismaClient !== 'function') process.exit(1); console.log('PrismaClient OK');"
+      - run: pnpm test
+      - name: Air-gap grep gate (no outbound HTTP from license service)
+        # Phase 148 SC-2 / D-04 / D-06: the license service MUST be phone-home-free.
+        # The grep matches actual HTTP-call primitives (not the bare string "http",
+        # which false-positives on doc comments). Zero matches = pass.
+        run: |
+          if rg -n 'fetch\(|axios|got\(|request\(|http\.get|http\.request|https\.get|https\.request|undici' \
+             packages/server/src/services/licenseService.ts; then
+            echo "::error::License service contains outbound HTTP primitives — air-gap violation."
+            exit 1
+          fi
+          echo "OK: license service has zero outbound HTTP primitives."
+      - name: FTS locale grep gate (no english-only query literals outside ftsService.ts)
+        # Phase 151 RAG-01: the query side must use the OR-ed 7-config fragments
+        # (MULTI_CONFIG_TSQUERY / MULTI_CONFIG_PLAINTO_TSQUERY) against
+        # searchVectorMulti. An english-only tsquery against the multi-config
+        # column is a silent-miss bug (research-verified: 'analisi' fails with
+        # an english-only query). The anchored pattern excludes the NEW correct
+        # form websearch_to_tsquery('english' (substring trap) and the write-side
+        # to_tsvector('english' literals (retained by design — D-03, old column
+        # kept until v1.3). ftsService.ts (the constants home) and __tests__/
+        # (fixtures may reference the old form) are excluded.
+        run: |
+          if rg -P "(?<!websearch_)to_tsquery\('english'|(?<!websearch_)plainto_tsquery\('english'" \
+             packages/server/src --glob '!**/services/ftsService.ts' --glob '!**/__tests__/**'; then
+            echo "::error::English-only tsquery literal found outside ftsService.ts — locale regression (RAG-01)."
+            exit 1
+          fi
+          echo "OK: no english-only query literals outside ftsService.ts."
+      - name: Test-count guard (community suite ≤ 3900, recalibrated quick 260831-sqr)
+        # Phase 148 SC-3 / D-07: cap community suite growth. The glob is top-level
+        # __tests__/ files only (NOT recursive — Pitfall 6). The enterprise package's
+        # own __tests__/ is a separate package and NOT counted (D-07).
+        # Recalibration (quick 260831-sqr): the original cap 3404 (15% over the
+        # v1.0 baseline 2960) went stale — the v0.22 milestone grew the suite to
+        # 3781 (server 2995 + frontend 786), so the guard could never pass and
+        # the step had never actually run (test-unit always failed upstream).
+        # New cap 3900 ≈ 3% headroom over the audited 3781 — still an anti-bloat
+        # tripwire, not a permanent red. Re-audit when this trips again.
+        run: |
+          COUNT=$(rg -c '^\s*(it|test|describe)\(' \
+            packages/server/src/__tests__/*.test.ts \
+            packages/frontend/src/__tests__/*.test.tsx \
+            2>/dev/null | awk -F: '{s+=$2} END {print s}')
+          echo "Community suite test count: $COUNT (cap: 3900, recalibrated baseline: 3781)"
+          if [ "$COUNT" -gt 3900 ]; then
+            echo "::error::Test count $COUNT exceeds cap 3900 (recalibrated quick 260831-sqr over the audited 3781). Suite bloat — add tests only when the behavior demands it."
+            exit 1
+          fi
+          echo "OK: $COUNT tests under cap 3900"
+    env:
+      JWT_SECRET: ci-test-secret-key-32chars-long!!
+      DATABASE_URL: postgresql://simmetricchat:simmetricchat@127.0.0.1:5432/simmetricchat_test
+      LICENSE_KEY: ci-test-license
+      COLLECTOR_SECRET: ci-test-collector-secret
+      NODE_ENV: test
+      NODE_OPTIONS: --max-old-space-size=4096
+
+  test-airgap:
+    # Phase 148 SC-2 / D-05: runtime air-gap proof. Runs the unit suite with
+    # NETWORK_EGRESS_BLOCKED=1 (a belt-and-suspenders guard — no test should
+    # make an outbound call, but the env var lets setup skip if one would).
+    # The airgap-grep step in test-unit is the PRIMARY enforcement; this job
+    # is the SECONDARY runtime proof.
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4 (annotated tag — dereferenced to commit, Pitfall P1)
+        # version is sourced from package.json `packageManager` (corepack).
+        # Do NOT pass `version:` here — action-setup conflicts if both are set.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      # Build shared BEFORE the tests: this job invokes the package test
+      # scripts DIRECTLY (pnpm --filter …), bypassing turbo's `^build` edge —
+      # and the server jest moduleNameMapper resolves @simmetric-chat/shared
+      # to packages/shared/dist/index.js. Without the build 124/223 server
+      # suites die at resolve time ("Could not locate module
+      # @simmetric-chat/shared"). Same rationale as the test-e2e job's
+      # explicit shared build (see its comment).
+      - run: pnpm --filter @simmetric-chat/shared build
+      - name: Unit suite with NETWORK_EGRESS_BLOCKED=1 (air-gap runtime proof)
+        run: |
+          pnpm --filter shared test
+          pnpm --filter server test
+          pnpm --filter frontend test
+        env:
+          NETWORK_EGRESS_BLOCKED: "1"
+          JWT_SECRET: ci-test-secret-key-32chars-long!!
+          DATABASE_URL: postgresql://simmetricchat:simmetricchat@127.0.0.1:5432/simmetricchat_test
+          LICENSE_KEY: ci-test-license
+          COLLECTOR_SECRET: ci-test-collector-secret
+          NODE_ENV: test
+          NODE_OPTIONS: --max-old-space-size=4096
+
+  migration-safety-check:
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, test-unit]
+    env:
+      # Per CONTEXT.md D-08: enforcement is CI-only, not in docker/entrypoint-server.sh
+      # Per RESEARCH.md Pattern 4: accepted values are yes / 1 / true (case-insensitive, trimmed)
+      CONSENT: ${{ vars.PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4 (annotated tag — dereferenced to commit, Pitfall P1)
+        # version is sourced from package.json `packageManager` (corepack).
+        # Do NOT pass `version:` here — action-setup conflicts if both are set.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run migration audit
+        # Plan 58-01 task 1 wired `pnpm audit:migrations` as the root-level entry point.
+        # The script writes docs/MIGRATION_AUDIT.md and .migration-audit.json (gitignored).
+        run: pnpm audit:migrations
+      - name: Verify committed audit report is up to date
+        # Drift detection: the committed docs/MIGRATION_AUDIT.md must match the
+        # freshly-generated content. If a developer added a migration without
+        # regenerating the report, this step fails with a clear actionable error.
+        run: |
+          if ! git diff --quiet docs/MIGRATION_AUDIT.md; then
+            echo "::error::docs/MIGRATION_AUDIT.md is stale. Run \`pnpm audit:migrations\` and commit the result in the same PR as the migration."
+            git diff docs/MIGRATION_AUDIT.md
+            exit 1
+          fi
+      - name: Read destructive_count from sidecar
+        id: audit
+        # jq is pre-installed on ubuntu-latest GitHub Actions runners (RESEARCH.md A7).
+        run: |
+          DESTRUCTIVE_COUNT=$(jq -r '.destructive_count' .migration-audit.json)
+          echo "destructive_count=$DESTRUCTIVE_COUNT"
+          echo "destructive_count=$DESTRUCTIVE_COUNT" >> "$GITHUB_OUTPUT"
+      - name: Enforce consent on destructive migrations
+        if: steps.audit.outputs.destructive_count > 0
+        run: |
+          CONSENT_LOWER=$(echo "$CONSENT" | tr '[:upper:]' '[:lower:]' | xargs)
+          if [[ "$CONSENT_LOWER" != "yes" && "$CONSENT_LOWER" != "1" && "$CONSENT_LOWER" != "true" ]]; then
+            echo "::error::Destructive Prisma migration(s) detected. The PR introduces operations that can drop tables, columns, or data."
+            echo "::error::See docs/MIGRATION_SAFETY.md for the policy and the 4 cases where destructive is acceptable."
+            echo "::error::If this PR is intentionally destructive, set the PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION variable (in workflow env or repo Settings > Secrets and variables > Actions > Variables) to 'yes', '1', or 'true', then re-run the workflow."
+            exit 1
+          fi
+          echo "Consent granted via env var: $CONSENT_LOWER"
+
+  test-e2e:
+    runs-on: ubuntu-latest
+    needs: test-unit
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: simmetricchat
+          POSTGRES_PASSWORD: simmetricchat
+          POSTGRES_DB: simmetricchat_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U simmetricchat"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4 (annotated tag — dereferenced to commit, Pitfall P1)
+        # version is sourced from package.json `packageManager` (corepack).
+        # Do NOT pass `version:` here — action-setup conflicts if both are set.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      # Apply the Prisma schema to the empty simmetricchat_test DB. Without this the
+      # server's auto-seed queries a non-existent `users` table, crashes, tsx
+      # watch restarts it in a loop, and Playwright times out waiting for :3000.
+      # `migrate deploy` is non-interactive (unlike `db:migrate` = migrate dev);
+      # the server's boot-time seedService then creates admin/admin123 + roles +
+      # permissions + templates on first start.
+      - run: pnpm --filter server exec prisma migrate deploy
+      # Playwright's webServer boots the server (:3000) and widget (:3211) via
+      # plain `tsx src/index.ts` (NOT `tsx watch` — see playwright.config.ts),
+      # both CommonJS — they require('@simmetric-chat/shared') which resolves to
+      # packages/shared/dist/index.js. The frontend dev uses a Vite alias to the
+      # shared *source*, so it does not need the build. CI runners are isolated
+      # from the `build` job, so build shared here or the server crashes on module
+      # resolve and Playwright times out waiting for :3000.
+      - run: pnpm --filter @simmetric-chat/shared build
+      - run: pnpm --filter frontend build
+      - run: npx playwright install --with-deps chromium
+      - run: pnpm test:e2e
+    env:
+      JWT_SECRET: ci-test-secret-key-32chars-long!!
+      DATABASE_URL: postgresql://simmetricchat:simmetricchat@127.0.0.1:5432/simmetricchat_test
+      LICENSE_KEY: ci-test-license
+      COLLECTOR_SECRET: ci-test-collector-secret
+      NODE_ENV: test
+      # E2E wiring (quick 260831-sqr CI fix): the widget webServer fails loud
+      # at boot without WIDGET_API_KEY (Zod .min(1)); the plaintext must match
+      # the one baked into e2e/globalSetup.ts (WIDGET_API_KEY_PLAINTEXT) so
+      # the widget→server shared-secret handshake validates against the
+      # api_keys row globalSetup seeds. API_KEY_HMAC_SECRET signs that row's
+      # key_hash (HMAC-SHA256 digest) — 32 zero bytes, same throwaway value
+      # class as packages/server/.env.test (CI-only, never a real secret).
+      # NOTE: LICENSE_KEY stays the non-JWT literal → initLicense falls back
+      # to Community → the enterprise-gated specs (widget-embed, marketplace
+      # audit) self-skip via the license-tier probe (by design: a CI-minted
+      # enterprise token is impossible without the vendor private key, and
+      # the verifier deliberately has no env-override).
+      WIDGET_API_KEY: sk-c6a7b6662ab64f4c9582bf83e147675b
+      API_KEY_HMAC_SECRET: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      # Fresh CI DB → setup_wizard_mode derives "active" → the bootstrap-admin
+      # seed skips (wizard owns admin creation). globalSetup handles this via
+      # POST /api/system/initialize (admin/admin123), but SEED_BOOTSTRAP_ADMIN
+      # stays at its Zod default here — do not set it.
+
+  license-policy-check:
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, test-unit]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          # Full history REQUIRED by the notices drift gate: generate-notices.cjs
+          # stamps docs/LICENSE_AUDIT.md with the committer date of the LAST
+          # commit touching pnpm-lock.yaml (`git log -1 --format=%cI --`). In a
+          # depth-1 clone that query resolves to the checkout commit itself —
+          # a different timestamp than the full-history value, so the drift
+          # gate false-fails on every run (quick 260831-sqr CI fix).
+          fetch-depth: 0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4 (annotated tag — dereferenced to commit, Pitfall P1)
+        # version is sourced from package.json `packageManager` (corepack).
+        # Do NOT pass `version:` here — action-setup conflicts if both are set.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: License policy gate
+        # Per-package license-checker-rseidelsohn --onlyAllow (PUB-03-02).
+        # Any license string not in the allowlist fails the gate (D-05 strictness).
+        run: node scripts/license-policy-check.cjs
+      - name: Regenerate third-party notices + SPDX report
+        # Emits BOTH THIRD_PARTY_NOTICES.md (sentinel-delimited auto-gen section)
+        # and docs/LICENSE_AUDIT.md (full SPDX report) from one pnpm licenses call.
+        run: node scripts/generate-notices.cjs
+      - name: Verify notices are up to date (drift gate)
+        # Stale committed file = a dependency was added without regenerating.
+        run: |
+          if ! git diff --quiet THIRD_PARTY_NOTICES.md; then
+            echo "::error::THIRD_PARTY_NOTICES.md is stale. Run \`node scripts/generate-notices.cjs\` and commit the result."
+            git diff THIRD_PARTY_NOTICES.md
+            exit 1
+          fi
+      - name: Verify SPDX report is up to date (drift gate)
+        run: |
+          if ! git diff --quiet docs/LICENSE_AUDIT.md; then
+            echo "::error::docs/LICENSE_AUDIT.md is stale. Run \`node scripts/generate-notices.cjs\` and commit the result."
+            git diff docs/LICENSE_AUDIT.md
+            exit 1
+          fi
+      - name: Verify project-self license fields
+        # Phase 168 D-03 (optional hardening): assert the root + all 5 package
+        # license fields equal AGPL-3.0-or-later. Catches accidental license-field
+        # edits (the field is static, but a stray edit would silently change the
+        # project's own license). Does NOT replace license-policy-check (which
+        # scans the dependency tree) — this reads the project's own package.json.
+        run: pnpm license:check-self
+      - name: Stale Apache-2.0 reference gate (user-facing docs)
+        # Phase 168 LIC-03: the project license is AGPL-3.0. User-facing docs
+        # must not reference Apache-2.0 as the project's own license. The
+        # excluded docs legitimately reference Apache-2.0 for *dependencies*
+        # (LICENSE_AUDIT.md, COPY_VERDICTS.md, THIRD_PARTY_NOTICES.md) or in
+        # historical/decision-analysis context (LICENSE_DECISION.md,
+        # ENTERPRISE_LICENSE_TERMS.md, ENTERPRISE_PLUGIN.md, ARCHITECTURE.md
+        # — the phase-log changelog records the pre-AGPL era factually).
+        # Excluded by glob from this grep, NOT reworded: the CONTRIBUTING.md
+        # descriptions of this gate use the reworded "old permissive license"
+        # phrasing so the gate can scan CONTRIBUTING.md itself.
+        run: |
+          if rg -n 'Apache-2\.0' docs/ README.md CONTRIBUTING.md \
+             --glob '!docs/LICENSE_AUDIT.md' \
+             --glob '!docs/COPY_VERDICTS.md' \
+             --glob '!docs/LICENSE_DECISION.md' \
+             --glob '!docs/ENTERPRISE_LICENSE_TERMS.md' \
+             --glob '!docs/ENTERPRISE_PLUGIN.md' \
+             --glob '!docs/ARCHITECTURE.md'; then
+            echo "::error::Stale Apache-2.0 reference found in user-facing docs. The project license is AGPL-3.0 (per docs/LICENSE_DECISION.md)."
+            exit 1
+          fi
+          echo "OK: no stale Apache-2.0 references in user-facing docs."
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, test-unit, test-airgap, migration-safety-check, license-policy-check]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4 (annotated tag — dereferenced to commit, Pitfall P1)
+        # version is sourced from package.json `packageManager` (corepack).
+        # Do NOT pass `version:` here — action-setup conflicts if both are set.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Build-freshness check (dist not stale relative to src)
+        run: pnpm --filter server exec node scripts/check-build-freshness.cjs
+
+  # license-keygen job REMOVED (quick 260831-sqr CI fix): it referenced the
+  # gitignored license-tools/ directory (never present on a CI runner → the
+  # `cd license-tools && npm install` step could only fail) and its contract
+  # test signed HS256 tokens against the RS256-only verifier (verifyLicenseKey
+  # pins algorithms: ["RS256"] since the d14198a8 HS256→RS256 migration) —
+  # the round-trip could never pass. License signing now lives in the
+  # separate private simmetric-license-tool repo (see docs/LICENSE_KEY_ROTATION.md
+  # and CONTRIBUTING.md); prepare-public-release.cjs already asserts
+  # license-tools/ must never ship.
+
+  # Per Phase 137 D-03d: in-pipeline secret-scanning net. .gitleaks.toml at
+  # repo root is auto-detected by `gitleaks dir .` (no GITLEAKS_CONFIG env).
+  # Phase 181: gitleaks-action v3 requires a paid GITLEAKS_LICENSE secret on
+  # ORG-owned repos (studio-simos is an org) — replaced with the gitleaks
+  # BINARY (open-source, no license) pinned to a versioned release.
+  # Scans the working tree (`gitleaks dir .`): the public orphan commit has
+  # no history; the private repo's dev-cert history noise stays private.
+  security:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks (pinned v8.24.3, no license required)
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz -o gitleaks.tgz
+          tar -xzf gitleaks.tgz gitleaks
+          sudo install gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: Secret scan (working tree, .gitleaks.toml config)
+        run: gitleaks dir . --redact -v

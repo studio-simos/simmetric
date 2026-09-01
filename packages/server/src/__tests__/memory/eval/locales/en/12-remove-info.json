@@ -1,0 +1,17 @@
+{
+  "id": "en-12-remove-info",
+  "locale": "en",
+  "category": "remove_info",
+  "transcript": [
+    { "role": "user", "content": "Forget where I live, I moved and don't want it stored." },
+    { "role": "assistant", "content": "Removed your location from my memory." }
+  ],
+  "existingMemories": [
+    { "id": "00000000-0000-4000-8000-000000000030", "type": "user", "path": "facts.location", "content": "lives in Rome" }
+  ],
+  "expectedOps": [
+    { "op": "remove", "id": "00000000-0000-4000-8000-000000000030" }
+  ],
+  "expectedDenyList": false,
+  "notes": "User requests explicit removal — remove op"
+}

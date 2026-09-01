@@ -1,0 +1,17 @@
+{
+  "id": "en-02-replace-preference",
+  "locale": "en",
+  "category": "replace_preference",
+  "transcript": [
+    { "role": "user", "content": "Actually, switch me to light mode. I changed my mind." },
+    { "role": "assistant", "content": "Updated — I'll use light mode now." }
+  ],
+  "existingMemories": [
+    { "id": "00000000-0000-4000-8000-000000000001", "type": "user", "path": "preferences.theme", "content": "prefers dark mode" }
+  ],
+  "expectedOps": [
+    { "op": "replace", "id": "00000000-0000-4000-8000-000000000001", "type": "user", "path": "preferences.theme", "content": "prefers light mode", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "User corrects a preference — replace the existing memory"
+}

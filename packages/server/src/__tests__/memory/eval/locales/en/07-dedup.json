@@ -1,0 +1,17 @@
+{
+  "id": "en-07-dedup",
+  "locale": "en",
+  "category": "dedup",
+  "transcript": [
+    { "role": "user", "content": "I really like dark themes for my UI." },
+    { "role": "assistant", "content": "Noted — dark themes." }
+  ],
+  "existingMemories": [
+    { "id": "00000000-0000-4000-8000-000000000010", "type": "user", "path": "preferences.theme", "content": "prefers dark mode" }
+  ],
+  "expectedOps": [
+    { "op": "replace", "id": "00000000-0000-4000-8000-000000000010", "type": "user", "path": "preferences.theme", "content": "prefers dark themes", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "Dedup: user restates an existing fact — expect replace, not add (cosine >= 0.92 OR path collision)"
+}

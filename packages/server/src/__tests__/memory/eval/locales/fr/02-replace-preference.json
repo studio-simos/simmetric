@@ -1,0 +1,17 @@
+{
+  "id": "fr-02-replace-preference",
+  "locale": "fr",
+  "category": "replace_preference",
+  "transcript": [
+    { "role": "user", "content": "En fait, passe-moi en mode clair. J'ai changé d'avis." },
+    { "role": "assistant", "content": "Mis à jour — j'utilise le mode clair maintenant." }
+  ],
+  "existingMemories": [
+    { "id": "00000000-0000-4000-8000-000000000080", "type": "user", "path": "preferences.theme", "content": "préfère le mode sombre" }
+  ],
+  "expectedOps": [
+    { "op": "replace", "id": "00000000-0000-4000-8000-000000000080", "type": "user", "path": "preferences.theme", "content": "préfère le mode clair", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "User corrects a preference — French"
+}

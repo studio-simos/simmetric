@@ -1,0 +1,17 @@
+{
+  "id": "zh-02-replace-preference",
+  "locale": "zh",
+  "category": "replace_preference",
+  "transcript": [
+    { "role": "user", "content": "其实，把我切换到浅色模式。我改变主意了。" },
+    { "role": "assistant", "content": "已更新 — 现在我会使用浅色模式。" }
+  ],
+  "existingMemories": [
+    { "id": "00000000-0000-4000-8000-0000000000a0", "type": "user", "path": "preferences.theme", "content": "喜欢用深色模式" }
+  ],
+  "expectedOps": [
+    { "op": "replace", "id": "00000000-0000-4000-8000-0000000000a0", "type": "user", "path": "preferences.theme", "content": "喜欢用浅色模式", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "User corrects a preference — Chinese (Hanzi)"
+}

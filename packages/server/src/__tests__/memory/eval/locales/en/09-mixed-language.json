@@ -1,0 +1,16 @@
+{
+  "id": "en-09-mixed-language",
+  "locale": "en",
+  "category": "mixed_language",
+  "transcript": [
+    { "role": "user", "content": "I prefer dark mode. Also, mi piace la pizza margherita." },
+    { "role": "assistant", "content": "Noted your dark mode preference and your pizza taste." }
+  ],
+  "existingMemories": [],
+  "expectedOps": [
+    { "op": "add", "type": "user", "path": "preferences.theme", "content": "prefers dark mode", "sensitivity": "low" },
+    { "op": "add", "type": "user", "path": "preferences.food", "content": "mi piace la pizza margherita", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "Mixed language EN+IT — extraction must preserve the original language of each fact"
+}

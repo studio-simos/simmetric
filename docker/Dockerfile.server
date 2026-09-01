@@ -1,0 +1,84 @@
+# ============================================================
+# Server — Multi-stage Dockerfile
+# ============================================================
+
+# Stage 1: Build shared + server
+FROM node:24-alpine AS builder
+
+# (unpinned build deps — project policy: rely on Alpine point-release rebuilds)
+# hadolint ignore=DL3018
+RUN corepack enable && apk add --no-cache python3 make g++ cairo-dev pango-dev libjpeg-turbo-dev giflib-dev librsvg-dev
+
+WORKDIR /app
+
+# Copy workspace config
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json turbo.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/server/package.json packages/server/
+COPY packages/collector/package.json packages/collector/
+COPY packages/frontend/package.json packages/frontend/
+COPY packages/widget/package.json packages/widget/
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
+COPY packages/shared/ packages/shared/
+COPY packages/server/ packages/server/
+
+# Generate Prisma client (into pnpm store)
+RUN pnpm --filter server db:generate
+
+# Build shared first, then server
+RUN pnpm --filter shared build && pnpm --filter server build
+
+# Stage 2: Runtime
+FROM node:24-alpine AS runtime
+
+# (unpinned runtime deps — project policy: rely on Alpine point-release rebuilds)
+# hadolint ignore=DL3018
+RUN corepack enable && apk add --no-cache git poppler-utils chromium nss freetype harfbuzz ca-certificates ttf-freefont docker-cli
+
+WORKDIR /app
+
+# Copy workspace config for pnpm
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/server/package.json packages/server/
+COPY packages/collector/package.json packages/collector/
+COPY packages/frontend/package.json packages/frontend/
+COPY packages/widget/package.json packages/widget/
+
+# Install production dependencies only (prisma is now a prod dep)
+RUN pnpm install --frozen-lockfile --prod
+
+# Copy built artifacts
+COPY --from=builder /app/packages/shared/dist/ packages/shared/dist/
+COPY --from=builder /app/packages/server/dist/ packages/server/dist/
+
+# Copy Prisma schema, config, and scripts from builder
+COPY --from=builder /app/packages/server/prisma/ packages/server/prisma/
+COPY --from=builder /app/packages/server/prisma.config.ts packages/server/prisma.config.ts
+COPY --from=builder /app/packages/server/scripts/ packages/server/scripts/
+
+# Copy template JSON files (seeded on startup — must be in dist/ for compiled path resolution)
+COPY --from=builder /app/packages/server/src/templates/ packages/server/dist/templates/
+
+# Create storage directories
+RUN mkdir -p /app/storage/data /app/storage/backups /app/storage/documents /app/storage/vectors /app/storage/uploads
+
+# Environment defaults
+ENV NODE_ENV=production
+ENV SERVER_PORT=3000
+ENV DATABASE_URL=postgresql://simmetricchat:simmetricchat@postgres:5432/simmetricchat
+
+EXPOSE 3000
+
+VOLUME ["/app/storage"]
+
+# Copy server entrypoint + ENCRYPTION_KEY provisioning helper for migration + startup
+COPY docker/entrypoint-server.sh /app/entrypoint-server.sh
+COPY docker/provision-encryption-key.sh /app/provision-encryption-key.sh
+RUN chmod +x /app/entrypoint-server.sh /app/provision-encryption-key.sh
+
+ENTRYPOINT ["/app/entrypoint-server.sh"]

@@ -1,0 +1,17 @@
+{
+  "id": "ru-02-replace-preference",
+  "locale": "ru",
+  "category": "replace_preference",
+  "transcript": [
+    { "role": "user", "content": "На самом деле, переключи меня на светлую тему. Я передумал." },
+    { "role": "assistant", "content": "Обновлено — теперь буду использовать светлую тему." }
+  ],
+  "existingMemories": [
+    { "id": "00000000-0000-4000-8000-000000000060", "type": "user", "path": "preferences.theme", "content": "предпочитает тёмную тему" }
+  ],
+  "expectedOps": [
+    { "op": "replace", "id": "00000000-0000-4000-8000-000000000060", "type": "user", "path": "preferences.theme", "content": "предпочитает светлую тему", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "User corrects a preference — Russian (Cyrillic)"
+}

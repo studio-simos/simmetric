@@ -1,0 +1,13 @@
+{
+  "id": "it-03-one-off-activity",
+  "locale": "it",
+  "category": "one_off_activity",
+  "transcript": [
+    { "role": "user", "content": "Oggi ho mangiato la pasta a pranzo." },
+    { "role": "assistant", "content": "Sembra buono! Com'era?" }
+  ],
+  "existingMemories": [],
+  "expectedOps": [],
+  "expectedDenyList": false,
+  "notes": "Negative case — one-off activity (Italian)"
+}

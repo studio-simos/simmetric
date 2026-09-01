@@ -1,0 +1,17 @@
+{
+  "id": "it-07-dedup",
+  "locale": "it",
+  "category": "dedup",
+  "transcript": [
+    { "role": "user", "content": "Mi piacciono proprio i temi scuri per la mia interfaccia." },
+    { "role": "assistant", "content": "Annotato — temi scuri." }
+  ],
+  "existingMemories": [
+    { "id": "00000000-0000-4000-8000-000000000050", "type": "user", "path": "preferences.theme", "content": "preferisce la modalità scura" }
+  ],
+  "expectedOps": [
+    { "op": "replace", "id": "00000000-0000-4000-8000-000000000050", "type": "user", "path": "preferences.theme", "content": "preferisce i temi scuri", "sensitivity": "low" }
+  ],
+  "expectedDenyList": false,
+  "notes": "Dedup (Italian) — user restates an existing fact"
+}

@@ -1,0 +1,1170 @@
+// Prisma Schema — PostgreSQL Native
+// PostgreSQL-only after Phase 22 (Infrastructure Foundation).
+
+generator client {
+  provider = "prisma-client-js"
+  // D-Prisma7: in Prisma 7, `prisma-client-js` requires an explicit `output` path.
+  // We generate into the package-local node_modules (where pnpm hoists nothing)
+  // and then symlink node_modules/@prisma/client/.prisma -> ../.prisma/client
+  // so the runtime require chain `default.js -> .prisma/client/default -> client.js` works.
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================
+// RBAC Models
+// ============================================================
+
+model User {
+  id           String          @id @default(uuid())
+  username     String          @unique
+  email        String          @unique
+  passwordHash String
+  salt         String
+  firstName     String?
+  lastName      String?
+  avatar        String?
+  customInstructions String? @db.Text
+  textSize      String?
+  mustChangePassword Boolean    @default(false)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  // Relations
+  roles           UserRole[]
+  projectAccess   ProjectAccess[]
+  workspaceAccess WorkspaceAccess[]
+  apiKeys         ApiKey[]
+  createdProjects Project[]      @relation("ProjectCreator")
+  eventLogs       EventLog[]
+  widgets         Widget[]
+  chatPins        ChatPin[]
+  mcpPins         ChatMCPPin[]
+  archives        Archive[]
+  archivePages    ArchivePage[]
+  ocrJobs         OcrJob[]
+  synthesisRuns          SynthesisRun[]  @relation("SynthesisRunCreator")
+  approvedSynthesisRuns  SynthesisRun[]  @relation("SynthesisRunApprover")
+  wikiEditRuns           WikiEditRun[]  @relation("WikiEditRunCreator")
+  approvedWikiEditRuns   WikiEditRun[]  @relation("WikiEditRunApprover")
+  archiveImportJobs      ArchiveImportJob[]
+  backupDestinations     BackupDestination[]
+  restoredBackups        BackupLog[]     @relation("restoredByUserRelation")
+  uploadDrafts UploadDraft[]
+  // Phase 97 (MEM-01 D-01 — Pitfall 3 per-user): memories authored by this user.
+  // onDelete: Cascade via Memory.userId FK — user deletion cascades their memories (GDPR).
+  memories Memory[]
+  // Phase 113 (SSO): external identity provider links for this user (SAML/OIDC).
+  // onDelete: Cascade via IdentityProvider.userId FK — user deletion removes their IdP links.
+  identityProviders IdentityProvider[]
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique
+    description String? @db.Text
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  users       UserRole[]
+  permissions RolePermission[]
+  menuSections RoleMenuSection[]
+
+  @@map("roles")
+}
+
+// Enum-as-table pattern for SQLite compatibility.
+// Each row represents a single permission name (e.g. "workspace:read").
+model Permission {
+  name        String           @id
+    description String? @db.Text
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  userId     String
+  roleId     String
+  assignedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId         String
+  permissionName String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionName], references: [name], onDelete: Cascade)
+
+  @@id([roleId, permissionName])
+  @@map("role_permissions")
+}
+
+model RoleMenuSection {
+  roleId      String
+  menuSection String
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, menuSection])
+  @@map("role_menu_sections")
+}
+
+model ProjectAccess {
+  userId    String
+  projectId String
+  grantedAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([userId, projectId])
+  @@map("project_access")
+}
+
+model WorkspaceAccess {
+  userId      String
+  workspaceId String
+  grantedAt   DateTime @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([userId, workspaceId])
+  @@map("workspace_access")
+}
+
+// ============================================================
+// Domain Models
+// ============================================================
+
+model Project {
+  id          String    @id @default(uuid())
+  name        String
+    description String? @db.Text
+  createdBy   String
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  creator      User           @relation("ProjectCreator", fields: [createdBy], references: [id])
+  workspaces   Workspace[]
+  accessGrants ProjectAccess[]
+  mcpConnections MCPConnection[]
+
+  // D-01 (quick 260809-wte): unique per-owner name, partial index WHERE "deletedAt" IS NULL (soft-deleted rows free the name).
+  @@unique([createdBy, name])
+  @@map("projects")
+}
+
+model Workspace {
+  id             String   @id @default(uuid())
+  projectId      String
+  name           String
+    instructions   String? @db.Text
+  embeddingModel String   @default("Xenova/all-MiniLM-L6-v2")
+  allowMemberUploads Boolean @default(true)
+  icon           String?
+  templateId     String?
+  deletedAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  template      WorkspaceTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  chats         Chat[]
+  documents     Document[]
+  folders       ChatFolder[]
+  accessGrants  WorkspaceAccess[]
+  agentConfig   WorkspaceAgentConfig?
+  mcpConnections MCPConnection[]
+  widgetWorkspaces WidgetWorkspace[]
+  uploadDrafts UploadDraft[]
+  // Phase 97 (MEM-01 D-01 — Pitfall 3 per-workspace): memories scoped to this workspace.
+  // onDelete: Cascade via Memory.workspaceId FK — workspace deletion cascades memories.
+  memories Memory[]
+
+  // D-01 (quick 260809-wte): unique per-project name, partial index WHERE "deletedAt" IS NULL (soft-deleted rows free the name).
+  @@unique([projectId, name])
+  @@map("workspaces")
+}
+
+model Chat {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  name         String   @default("New Chat")
+    prompt       String? @db.Text
+  // D-01 (Phase 98): "auto" = title gen eligible; "user" = user renamed, skip title gen (Pitfall 10).
+  // Enum-as-string pattern (NOT Prisma enum) for consistency with Chat.model (String).
+  titleSource  String   @default("auto")
+  model        String   @default("qwen2.5:3b")
+  temperature  Float    @default(0.7)
+  providerId   String?
+  folderId     String?
+  archiveId    String?
+  deletedAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  messages  ChatMessage[]
+  folder    ChatFolder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  archive   Archive?     @relation(fields: [archiveId], references: [id], onDelete: SetNull)
+  pins      ChatPin[]
+  mcpPins   ChatMCPPin[]
+
+  @@map("chats")
+}
+
+model ChatFolder {
+  id          String    @id @default(uuid())
+  workspaceId String
+    name        String @db.Text
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  chats     Chat[]
+
+  @@map("chat_folders")
+}
+
+model ChatPin {
+  userId    String
+  chatId    String
+  pinnedAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@id([userId, chatId])
+  @@map("chat_pins")
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  chatId    String
+  role      String   // "user" | "assistant" | "system"
+    content   String @db.Text
+    metadata  String? @db.Text  // JSON string for citations, tokens, etc.
+  attachedDocumentId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime?
+  deletedAt DateTime?
+
+  // Relations
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  // Phase 97 (MEM-01 D-07 — Pitfall 3 no orphan PII): Memories derived from this
+  // message. onDelete: Cascade via Memory.sourceMessageId FK — reaper hard-purge of
+  // ChatMessage cascades derived memories automatically; the reaper also issues an
+  // explicit Memory.deleteMany + memory.reaper.purge audit (defense-in-depth).
+  sourceMemories Memory[] @relation("ChatMessageSourceMemories")
+
+  @@map("chat_messages")
+}
+
+model Document {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  name           String
+  type           String    // "pdf" | "md" | "csv" | "docx" | "xlsx" | "txt"
+  filePath       String
+  cacheKey       String    @unique
+  chunkCount     Int       @default(0)
+  embeddingModel String    @default("Xenova/all-MiniLM-L6-v2")
+  status         String    @default("pending")  // "pending" | "processing" | "completed" | "failed"
+    statusMessage  String? @db.Text   // Error message if failed
+  fileSize       Int       @default(0)
+  deletedAt      DateTime?
+  /// D-08 — null = pending cleanup, set on 2xx from collector
+  vectorCleanupAt DateTime?
+  /// IN-02 — purge attempt counter for the vector-cleanup retry job. Bounded
+  /// by MAX_VECTOR_CLEANUP_ATTEMPTS so a permanently-failing collector purge
+  /// doesn't retry forever / spam logs.
+  vectorCleanupAttempts Int @default(0)
+  /// IN-02 — tombstone set once vectorCleanupAttempts reaches the cap. The
+  /// retry job skips tombstoned docs, surfacing stuck purges to ops.
+  vectorCleanupFailedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Relations
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  chunks    DocumentChunk[]
+
+  @@map("documents")
+}
+
+model DocumentChunk {
+  id          String   @id @default(uuid())
+  documentId  String
+    chunkText   String @db.Text
+    metadata    String @db.Text   // JSON: pageNumber, lineStart, lineEnd, paragraph
+  embeddingId String   // Reference ID in the Vector DB
+  createdAt   DateTime @default(now())
+  searchVector Unsupported("tsvector")?
+  // Phase 151 (RAG-01): 7-config concatenated tsvector (english||italian||german||french||spanish||russian||simple).
+  // Populated by the startup backfill (searchVectorMultiBackfill.ts) + all write sites. Old searchVector retained until v1.3.
+  searchVectorMulti Unsupported("tsvector")?
+
+  // Relations
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("document_chunks")
+  @@index([searchVector], type: Gin)
+  @@index([searchVectorMulti], type: Gin)
+}
+
+// ============================================================
+// LLM Wiki Archive System
+// ============================================================
+
+model Archive {
+  id          String    @id @default(uuid())
+  slug        String    @unique
+  name        String
+  description String?   @db.Text
+  createdBy   String
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  creator User          @relation(fields: [createdBy], references: [id])
+  pages   ArchivePage[]
+  chats         Chat[]
+  ocrJobs        OcrJob[]
+  synthesisRuns  SynthesisRun[]
+  wikiEditRuns   WikiEditRun[]
+  archiveImportJobs ArchiveImportJob[]
+  uploadDrafts UploadDraft[]
+  autoIndex      Boolean           @default(false)
+  config         ArchiveConfig?
+  templates      ArchiveSchemaTemplate[]
+
+  // D-01 (quick 260809-wte): unique per-owner name, partial index WHERE "deletedAt" IS NULL (soft-deleted rows free the name).
+  @@unique([createdBy, name])
+  @@map("archives")
+}
+
+model ArchivePage {
+  id           String    @id @default(uuid())
+  archiveId    String
+  slug         String
+  title        String
+  category     String
+  frontmatter  Json?
+  bodyText          String    @db.Text
+  contentHash          String
+  vectorContentHash    String?
+  vectorProvider       String?
+  lastIndexedAt        DateTime?
+  wikilinks         String[]
+  createdBy         String
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  searchVector Unsupported("tsvector")?
+  // Phase 151 (RAG-01): 7-config concatenated tsvector (english||italian||german||french||spanish||russian||simple).
+  // Populated by the startup backfill (searchVectorMultiBackfill.ts) + all write sites. Old searchVector retained until v1.3.
+  searchVectorMulti Unsupported("tsvector")?
+
+  // Relations
+  archive Archive @relation(fields: [archiveId], references: [id])
+  creator User    @relation(fields: [createdBy], references: [id])
+
+  @@unique([archiveId, slug])
+  @@index([archiveId, category])
+  @@index([searchVector], type: Gin)
+  @@index([searchVectorMulti], type: Gin)
+  @@map("archive_pages")
+}
+
+// ============================================================
+// System Configuration
+// ============================================================
+
+model SystemConfig {
+  id    String @id @default(uuid())
+  key   String @unique
+  value String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_config")
+}
+
+// ============================================================
+// Provider & Model Management
+// ============================================================
+
+model Provider {
+  id          String         @id @default(uuid())
+  name        String
+  type        String         // "ollama" | "openai" | "anthropic"
+  baseUrl     String
+  apiKey      String?        // Encrypted (AES-256-GCM)
+  isEnabled   Boolean        @default(true)
+  isDefault   Boolean        @default(false)
+    lastError   String? @db.Text
+  lastSyncAt  DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  models      ProviderModel[]
+
+  @@map("providers")
+}
+
+model ProviderModel {
+  id          String   @id @default(uuid())
+  providerId  String
+  name        String
+  displayName String?
+  isLocal     Boolean  @default(false)
+  isEnabled   Boolean  @default(true)
+  isAvailable Boolean  @default(true)
+  isEmbedding Boolean  @default(false)
+  isOcr       Boolean  @default(false)
+  isDefault   Boolean  @default(false)
+  temperature Float?
+  maxTokens   Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  provider    Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, name])
+  @@map("provider_models")
+}
+
+// ============================================================
+// API Keys
+// ============================================================
+
+model ApiKey {
+  id        String    @id @default(uuid())
+  name      String
+  prefix    String    @unique  // First 8 chars of plaintext key — display only (D-03, no lookup)
+  key_hash  String    @unique  // HMAC-SHA256 hex digest (64 chars) — replaces bcrypt hashedKey (Phase 163, SCALE-03)
+  createdBy String
+  lastUsed  DateTime?
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+
+  // Relations
+  user User @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@map("api_keys")
+}
+
+// ============================================================
+// Agent & Skills Configuration
+// ============================================================
+
+model WorkspaceAgentConfig {
+  id             String  @id @default(uuid())
+  workspaceId    String  @unique
+    systemPrompt   String @db.Text  @default("You are a helpful AI assistant with access to workspace documents and tools.")
+    enabledSkills  String @db.Text  @default("[\"rag_search\",\"workspace_memory\"]")
+    constraints    String? @db.Text  @default("{}")
+    parsingConfig  String? @db.Text  @default("{}")
+  model          String  @default("qwen2.5:3b")
+  temperature    Float   @default(0.7)
+  maxIterations  Int     @default(7)
+  providerId     String?
+  planMode       Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("workspace_agent_configs")
+}
+
+model AgentSkill {
+  id          String @id @default(uuid())
+  name        String // e.g. "rag_search", "workspace_memory", "document_temp_process", or custom MCP tool name
+  displayName String
+    description String @db.Text
+  type        String @default("builtin") // "builtin" | "mcp"
+  config      String @default("{}") // JSON config for the skill
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([name])
+  @@map("agent_skills")
+}
+
+model McpCatalogEntry {
+  id            String   @id @default(uuid())
+  name          String
+  url           String
+  transportType String   @default("sse") // "sse" | "streamable-http"
+    headers       String   @db.Text @default("{}") // JSON: custom HTTP headers for connection
+    description   String?  @db.Text
+  category      String?
+  version       String?
+  author        String?
+  verificationTier   String    @default("unverified") // "official" | "verified_community" | "unverified"
+  healthStatus        String    @default("healthy")    // "healthy" | "stale" | "down"
+  lastHealthCheck     DateTime?
+  lastHealthError     String?   @db.Text
+  lastCommitDate      DateTime?
+  consecutiveFailures Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  connections MCPConnection[]
+
+  @@map("mcp_catalog_entries")
+}
+
+// ============================================================
+// Provider Preset Catalog (quick task 260723-ps2)
+// Additive-only model mirroring the McpCatalogEntry pattern. The 20
+// presets are defined as constants in packages/shared and seeded here
+// by `prisma/seed.ts`. Install creates a `Provider` row from the preset;
+// this table itself is read-only at runtime (no admin writes beyond seed).
+// ============================================================
+
+model ProviderPreset {
+  id            String   @id @default(uuid())
+  slug          String   @unique // stable id from PROVIDER_PRESETS (e.g. "deepseek")
+  name          String
+  type          String   // ProviderType — "openai" | "gemini" | "xiaomi" | "minimax" | ...
+  baseUrl       String?
+  defaultModel  String?
+  authMethod    String   // "bearer" | "x-api-key" | "none" | "oauth"
+  docsUrl       String
+  requiresOAuth Boolean  @default(false)
+  category      String
+  description   String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("provider_presets")
+}
+
+model MCPConnection {
+  id            String          @id @default(uuid())
+  projectId     String?
+  workspaceId   String?
+  name          String
+  transportType String          @default("sse") // "sse" | "streamable-http" (stdio excluded from UI per D-01)
+  url           String          // Connection URL for SSE/HTTP, or command for stdio
+    headers       String          @db.Text @default("{}") // JSON: custom headers for HTTP connections
+  enabled       Boolean         @default(true)
+  lastSyncAt    DateTime?
+  catalogEntryId String?        // FK to McpCatalogEntry — set when installed from marketplace
+  source        String          @default("manual") // "manual" | "marketplace"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  project      Project?         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workspace    Workspace?       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  catalogEntry McpCatalogEntry? @relation(fields: [catalogEntryId], references: [id], onDelete: SetNull)
+  chatMCPPins  ChatMCPPin[]
+
+  @@map("mcp_connections")
+}
+
+model ChatMCPPin {
+  id           String   @id @default(uuid())
+  chatId       String
+  connectionId String
+  userId       String
+  createdAt    DateTime @default(now())
+
+  chat       Chat          @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  connection MCPConnection @relation(fields: [connectionId], references: [id], onDelete: NoAction)
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([chatId, connectionId])
+  @@map("chat_mcp_pins")
+}
+
+// ============================================================
+// Workspace Templates (Industry Verticalization)
+// ============================================================
+
+model WorkspaceTemplate {
+  id            String   @id @default(uuid())
+  slug          String   @unique   // e.g. "legal", "medical", "general"
+  name          String              // display name e.g. "Legal Case"
+    description   String? @db.Text
+  icon          String?             // emoji or icon key
+    systemPrompt  String @db.Text              // injected into orchestrator
+  skills        String   @default("[\"rag_search\",\"workspace_memory\"]") // JSON array
+    parsingConfig String @db.Text   @default("{}") // JSON: { ocrRequired, citationRequired, ... }
+    constraints   String @db.Text   @default("{}") // JSON: { localLLMOnly, hybridSearchForced, ... }
+  embeddingModel String?            // recommended embedding model for this vertical
+  isBuiltIn     Boolean  @default(false) // true for shipped templates
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  workspaces Workspace[]
+
+  @@map("workspace_templates")
+}
+
+// ============================================================
+// Enterprise: Token Usage Tracking
+// ============================================================
+
+model WorkspaceTokenUsage {
+  id              String   @id @default(uuid())
+  userId          String
+  workspaceId     String
+  model           String
+  modelDisplayName String?
+  promptTokens    Int      @default(0)
+  completionTokens Int     @default(0)
+  totalTokens     Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([userId])
+  @@map("workspace_token_usage")
+}
+
+// ============================================================
+// Enterprise: Webhooks
+// ============================================================
+
+model Webhook {
+  id          String   @id @default(uuid())
+  name        String
+  url         String
+    events      String @db.Text   // JSON array: ["document.uploaded", "chat.created", ...]
+    secret      String? @db.Text  // HMAC secret for payload signing
+  enabled     Boolean  @default(true)
+  lastSentAt  DateTime?
+  failureCount Int     @default(0)
+  createdBy   String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("webhooks")
+}
+
+// ============================================================
+// Enterprise: Push Subscriptions
+// ============================================================
+
+model PushSubscription {
+  id        String   @id @default(uuid())
+  userId    String
+  endpoint  String   @unique
+    keys      String @db.Text   // JSON: { p256dh, auth }
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+// ============================================================
+// Password Reset
+// ============================================================
+
+// ============================================================
+// Widget System
+// ============================================================
+
+model Widget {
+  id              String    @id @default(uuid())
+  name            String
+    welcomeMessage  String? @db.Text
+    fallbackMessage String? @db.Text   @default("I don't have an answer for that. Please contact us for more help.")
+  position        String    @default("bottom-right")
+  isActive        Boolean   @default(true)
+
+  // Branding fields (Enterprise-only customization, CUST-01)
+  logoUrl         String?
+  primaryColor    String?   @default("#4c6ef5")
+  botName         String?   @default("AI Assistant")
+  avatarUrl       String?
+    allowedOrigins  String? @db.Text   // JSON array of allowed origin URLs for CORS
+
+  // Display trigger fields (CUST-03, per D-01/D-02/D-03/D-04/D-05)
+  autoOpenDelay        Int?      // Seconds before auto-open, null = disabled
+  autoOpenUrlPatterns  String?   // JSON array of glob patterns, null = disabled
+  exitIntentEnabled    Boolean   @default(false)
+  exitIntentCooldownMs Int       @default(1800000) // 30 min in ms per D-04
+  // Lead capture fields (ADM-04, per D-06/D-07/D-08)
+  leadCaptureEnabled   Boolean   @default(false)
+    leadCapturePrompt   String? @db.Text   // Custom prompt text for lead form header
+
+  // Per-widget rate-limit override (SCALE-04, D-05). null = use global default.
+  rateLimitPerMinute  Int?
+
+  // Per-widget daily MESSAGE limit (151-02, G-151-1b). null = use global
+  // default (5/day prod, 50/day dev). Enforced on the message-send path by
+  // widgetDailyMessageLimiter (widget service, per-widget+IP, 24h window).
+  sessionLimitPerDay  Int?
+
+  // Per-widget localization + credits (v0.20, D-02..D-05)
+  localizedTexts     Json?    // { [locale]: { welcomeMessage?, fallbackMessage?, placeholder?, piiConsent?, leadPrompt? } }
+  suggestedQuestions Json?    // { [locale]: string[] } — null = not configured, [] = disabled
+  credits            Json?    // { enabled, label, url }
+  fallbackLocale     String   @default("en")
+
+  // Bound knowledge archive for widget chat (260809-uxk, D-08 wiki_query
+  // binding). Null = unbound. Deliberately NO relation — archives are global
+  // (no workspaceId column) and the admin UI validates existence at selection;
+  // a stale id degrades gracefully in wiki_query (FTS miss → RAG miss → LLM
+  // "no info").
+  archiveId         String?
+
+  // Per-widget response model pin (260831-hgy). The LLM provider+model that
+  // serves THIS widget's chat responses. Deliberately NO relation — mirrors
+  // the archiveId philosophy above: a stale provider/model id degrades
+  // gracefully because resolveProviderConfig falls through to the default
+  // provider → env fallback; the widget keeps answering. Null = not
+  // configured → existing resolution chain (workspace default → global
+  // default). responseProviderId is a Provider UUID; responseModel is the
+  // model NAME on that provider (mirrors Chat.model, not ProviderModel.id).
+  responseProviderId String?
+  responseModel      String?
+
+  createdBy       String
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  creator    User            @relation(fields: [createdBy], references: [id])
+  workspaces WidgetWorkspace[]
+  sessions   WidgetSession[]
+  leads      WidgetLead[]
+  events     WidgetEvent[]
+
+  @@map("widgets")
+}
+
+model WidgetWorkspace {
+  widgetId    String
+  workspaceId String
+
+  widget    Widget    @relation(fields: [widgetId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([widgetId, workspaceId])
+  @@map("widget_workspaces")
+}
+
+model WidgetSession {
+  id                String   @id @default(uuid())
+  widgetId          String
+  sessionToken      String   @unique
+  ipAddress         String?
+  messageCount      Int      @default(0)
+  conversationCount Int      @default(0)
+  lastMessageAt     DateTime?
+  lastResetAt       DateTime @default(now())
+  createdAt         DateTime @default(now())
+  expiresAt         DateTime
+
+  // Relations
+  widget Widget @relation(fields: [widgetId], references: [id], onDelete: Cascade)
+  leads   WidgetLead[]
+  events  WidgetEvent[]
+
+  @@index([sessionToken])
+  @@index([widgetId])
+  @@map("widget_sessions")
+}
+
+model WidgetLead {
+  id         String   @id @default(uuid())
+  widgetId   String
+  sessionId  String?
+  name       String?
+  email      String
+  transcript Json     // Array of { role, content, timestamp } messages per D-10
+  createdAt  DateTime @default(now())
+
+  // Relations
+  widget   Widget         @relation(fields: [widgetId], references: [id], onDelete: Cascade)
+  session  WidgetSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([widgetId])
+  @@index([email])
+  @@index([createdAt])
+  @@map("widget_leads")
+}
+
+model WidgetEvent {
+  id              String   @id @default(uuid())
+  widgetId        String
+  sessionId       String?
+  query           String
+  topicCategory   String   @default("general")
+  hasCitations    Boolean  @default(false)
+  qualityScore    Float    @default(0)
+  responseLength  Int?
+  createdAt       DateTime @default(now())
+
+  widget   Widget         @relation(fields: [widgetId], references: [id], onDelete: Cascade)
+  session  WidgetSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([widgetId, createdAt])
+  @@index([topicCategory])
+  @@index([createdAt])
+  @@map("widget_events")
+}
+
+// ============================================================
+// OCR Job System (Phase 29)
+// ============================================================
+
+enum OcrJobType {
+  OCR
+  URL
+}
+
+enum OcrJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum SynthesisRunStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  APPROVED
+  REJECTED
+  PARTIAL
+  FAILED
+}
+
+enum WikiEditRunStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  APPLIED
+  REVERTED
+}
+
+model OcrJob {
+  id             String        @id @default(uuid())
+  archiveId      String
+  archive        Archive       @relation(fields: [archiveId], references: [id])
+  type           OcrJobType
+  status         OcrJobStatus  @default(PENDING)
+  progress       Int           @default(0)
+  totalPages     Int?
+  processedPages Int           @default(0)
+  currentPage    Int?
+  modelName      String?
+  ocrMode        String?
+  customInstructions String? @db.Text
+  sourceFileName String?
+  contentHash    String?
+  result         Json?
+  error          String?       @db.Text
+  createdBy      String
+  user           User          @relation(fields: [createdBy], references: [id])
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([archiveId, createdAt])
+  @@index([archiveId, status])
+  @@map("ocr_jobs")
+}
+
+// D-03: ArchiveImportJob — mirrors OcrJob shape for KB-05/KB-06 archive import
+// pipeline. Status values: "PROCESSING" | "COMPLETED" | "FAILED".
+model ArchiveImportJob {
+  id             String        @id @default(uuid())
+  archiveId      String
+  documentId     String?
+  status         String        @default("PROCESSING")
+  sourceFileName String?
+  contentHash    String?
+  result         Json?
+  error          String?       @db.Text
+  createdBy      String
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  // Relations
+  archive Archive @relation(fields: [archiveId], references: [id])
+  user    User    @relation(fields: [createdBy], references: [id])
+
+  @@index([archiveId, status])
+  @@map("archive_import_jobs")
+}
+
+model SynthesisRun {
+  id                  String              @id @default(uuid())
+  archiveId           String
+  status              SynthesisRunStatus  @default(PENDING)
+  // D-10: human-readable, editable name. Non-nullable with a default of "" so
+  // the additive migration is Phase 58-safe; the backfill UPDATE populates
+  // existing rows with "Sintesi · {archive.name} · {DD/MM/YYYY HH:mm}", and
+  // the create path (runSynthesisPipeline + /trigger) sets it at creation.
+  name                String              @default("")
+  pagesRead           Int                 @default(0)
+  pagesWritten        Int                 @default(0)
+  // D-02: distinguish proposed (non-SKIP changes pushed to preview) from
+  // applied (real writes after approve). pagesWritten is kept for backward
+  // compatibility but set to 0 at pipeline time (nothing is applied until
+  // the user approves). Both columns are additive (Phase 58-safe).
+  pagesProposed       Int                 @default(0)
+  pagesApplied        Int                 @default(0)
+  tokensUsed          Int                 @default(0)
+  llmCallsUsed        Int                 @default(0)
+  contradictionsFound Int                 @default(0)
+  previewJson         Json?
+  error               String?             @db.Text
+  approvedBy          String?
+  // D-14: createdAt + 2h; reaper flips PROCESSING→FAILED when expiresAt < now
+  expiresAt           DateTime?
+  createdBy           String
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Relations
+  archive  Archive  @relation(fields: [archiveId], references: [id])
+  creator  User     @relation("SynthesisRunCreator", fields: [createdBy], references: [id])
+  approver User?    @relation("SynthesisRunApprover", fields: [approvedBy], references: [id])
+
+  @@index([archiveId, createdAt])
+  @@index([archiveId, status])
+  @@map("synthesis_runs")
+}
+
+model WikiEditRun {
+  id          String           @id @default(uuid())
+  archiveId   String
+  pageSlug    String
+  action      String
+  previewJson Json
+  status      WikiEditRunStatus  @default(PENDING)
+  createdBy   String
+  approvedBy  String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  // Relations
+  archive  Archive  @relation(fields: [archiveId], references: [id])
+  creator  User     @relation("WikiEditRunCreator", fields: [createdBy], references: [id])
+  approver User?    @relation("WikiEditRunApprover", fields: [approvedBy], references: [id])
+
+  @@index([archiveId, status])
+  @@index([createdBy, status])
+  @@map("wiki_edit_runs")
+}
+
+model ArchiveConfig {
+  id          String   @id @default(uuid())
+  archiveId   String   @unique
+  config      Json     // { namingConvention, requiredFrontmatter, lintRules, linkingDensity, agentPersona, maintenanceSchedule, purpose, scope }
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  archive     Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+
+  @@map("archive_configs")
+}
+
+model ArchiveSchemaTemplate {
+  id          String   @id @default(uuid())
+  archiveId   String?
+  name        String
+  description String?  @db.Text
+  config      Json     // same shape as ArchiveConfig.config
+  pageTypes   Json?    // [{ name, requiredSections: string[], optionalSections: string[] }]
+  isBuiltIn   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  archive     Archive? @relation(fields: [archiveId], references: [id], onDelete: SetNull)
+
+  @@map("archive_schema_templates")
+}
+
+// ============================================================
+// Unified Upload Drafts (Phase 68 — v0.12 Upload Consolidation)
+// ============================================================
+
+// UploadDraft — staging entity for the unified upload area (D-07).
+// Two independent boolean flags `ragEnabled`/`kbEnabled` model the
+// destination: "both" = both true; "unassigned" = both false.
+// `parseStatus` is a plain String (NO Prisma enum) so the Phase 68
+// migration stays additive (A4); type-safety is enforced at the Zod
+// layer in plan 68-02 (D-05). Migration is applied in plan 68-04.
+model UploadDraft {
+  id                String    @id @default(uuid())
+  uploadedBy        String
+  workspaceId       String
+  assignedArchiveId String?
+  ragEnabled        Boolean   @default(false)
+  kbEnabled         Boolean   @default(false)
+  filePath          String
+  originalName      String
+  fileSize          Int       @default(0)
+  mimeType          String
+  parseStatus String @default("uploaded")  // "uploaded" | "assigned" | "done" — NO Prisma enum (A4)
+  ragJobId          String?   // soft FK to Document.id created by the RAG leg
+  kbJobId           String?   // soft FK to ArchiveImportJob.id created by the KB leg
+  expiresAt         DateTime
+  deletedAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations — D-01: onDelete Cascade on uploadedBy (user delete drags drafts)
+  user User @relation(fields: [uploadedBy], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  archive Archive? @relation(fields: [assignedArchiveId], references: [id], onDelete: SetNull)
+
+  @@index([uploadedBy, deletedAt])
+  @@map("upload_drafts")
+}
+
+// ============================================================
+// Per-user-per-workspace Memory (Phase 97 — MEM-01 D-01)
+//
+// Pitfall 3 HIGHEST RISK security + GDPR invariant:
+// - Memory is per-user-per-workspace (userId + workspaceId FKs).
+//   IDOR routes filter `where: { userId, workspaceId }`.
+// - `sourceMessageId` FK `onDelete: Cascade` (nullable for user-edited memories)
+//   guarantees no orphan PII when ChatMessage rows are hard-purged (reaper Pass 2).
+// - `sensitivity` field: `high` memories are stored for user review/delete but
+//   NEVER injected into the agent system prompt (97-02 retrieval filter).
+// - `embedding` is the first Prisma-managed pgvector column (Unsupported("vector(384)?")).
+//   The `?` makes the column nullable so Prisma `create` works without an embedding;
+//   embeddings are written via `$executeRaw` and read queries always `select` to
+//   EXCLUDE `embedding` (Unsupported columns cannot be deserialized by Prisma).
+// - `path` is a materialized dotted string (e.g. `preferences.theme`), NOT `ltree`.
+//   Query via `LIKE 'preferences.%'` or prefix match in pathRank (97-02).
+// - `@@unique([userId, workspaceId, path])` deduplicates memories per path per
+//   user-per-workspace (Pitfall 3 dedup explosion).
+// - `@@index([userId, workspaceId])` is the per-user-per-workspace query hot path.
+// ============================================================
+
+enum MemoryType {
+  // User-authored or LLM-extracted fact about the user (preferences, enduring details).
+  user
+  // Contextual memory derived from a conversation (e.g. "user is debugging X today").
+  context
+}
+
+enum MemorySensitivity {
+  // Safe to inject into the agent system prompt.
+  low
+  // Inject with care (default — balances safety and utility).
+  medium
+  // Stored for user review/delete but NEVER injected (Pitfall 3 — high PII risk).
+  high
+}
+
+model Memory {
+  id             String           @id @default(uuid())
+  userId         String
+  workspaceId    String
+  type           MemoryType
+  // Materialized dotted path (e.g. `preferences.theme`). NON `ltree` — ROADMAP explicit.
+  // Nullable: contextual memories may not have a structured path.
+  path           String?
+  content        String
+  // FK to the ChatMessage the memory was extracted from. Nullable for user-edited
+  // memories (created via POST /api/memories, no source message). onDelete: Cascade
+  // — Pitfall 3 no orphan PII: when the source message is hard-purged, the derived
+  // memory is purged too (reaper Pass 2 adds an explicit Memory.deleteMany for audit).
+  sourceMessageId String?
+  sensitivity    MemorySensitivity @default(low)
+  // Prisma-managed pgvector column (first server-side use). Unsupported columns can
+  // only be written via `$executeRaw` UPDATE; they CANNOT be set in `prisma.create`
+  // and CANNOT be deserialized in `findMany` without a `select` that excludes them.
+  embedding      Unsupported("vector(384)?")
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  // Relations — Pitfall 3 per-user-per-workspace invariant.
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sourceMessage ChatMessage?  @relation("ChatMessageSourceMemories", fields: [sourceMessageId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId, path])
+  @@index([userId, workspaceId])
+  @@map("memories")
+}
+
+// ============================================================
+// DLP pattern configuration (quick 260829-ony — DLP_FEATURES_SPEC §2.3)
+//
+// DB-backed PII patterns replacing the hardcoded DLP_PATTERNS const as the
+// source of truth (the const stays as fallback when the DB is unreachable).
+// - 6 built-in rows seeded idempotently by the migration SQL (isBuiltIn true);
+//   admins toggle them but can never change their regex (spec §4.4 — PUT on a
+//   built-in accepts ONLY displayName + isEnabled).
+// - Custom patterns are GLOBAL (no workspaceId — spec §4.8), capped at 50 per
+//   instance (spec §4.9), ordered createdAt ASC built-ins-first (§4.3).
+// - The service layer compiles `pattern`+`patternFlags` into a RegExp and
+//   caches it per row id (spec §2.4 performance note).
+// - Soft deletes: DLP audit history references pattern NAMES in metadata, not
+//   FKs, so a hard delete is the right semantics here (deleting a custom
+//   pattern must stop scanning with it immediately) — no deletedAt column
+//   (deviates from the soft-delete norm on purpose; spec fields have none).
+// ============================================================
+
+model DlpPattern {
+  id           String   @id @default(uuid())
+  // Stable machine name, snake_case per shared dlp.schema.ts — the conflict
+  // target for the built-in seed and the audit-log identifier.
+  name         String   @unique
+  // Admin-facing label ("Email", "Italian Fiscal Code").
+  displayName  String
+  // Regex SOURCE string (no /…/ delimiters), e.g. "[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{5}".
+  pattern      String   @db.Text
+  // Regex flags shipped to the RegExp constructor ("gu" default — unicode
+  // like the built-ins; kept as a column per spec §2.3).
+  patternFlags String   @default("gu")
+  // Replacement applied on redaction ("[REDACTED]" default).
+  replacement  String   @default("[REDACTED]")
+  isEnabled    Boolean  @default(true)
+  // true for the 6 seeded originals — regex frozen, only toggle+rename allowed.
+  isBuiltIn    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("dlp_patterns")
+}
+
+// SSO models (SsoConfig, IdentityProvider, ScimGroup) moved to
+// schema-enterprise.prisma (Phase 143 D-04, Phase 141 verdict (a)).
+// `prismaSchemaFolder` (directory mode in prisma.config.ts — Phase 142 D-08)
+// merges that fragment with this file at `prisma generate` time, so the
+// generated client still has the `prisma.ssoConfig` / `prisma.identityProvider`
+// / `prisma.scimGroup` delegates. The `User.identityProviders` back-relation
+// (above, in the User model) stays here — the cross-fragment relation is
+// resolved by the prismaSchemaFolder merge (Phase 141 spike verified).

@@ -1,0 +1,13 @@
+{
+  "id": "de-03-one-off-activity",
+  "locale": "de",
+  "category": "one_off_activity",
+  "transcript": [
+    { "role": "user", "content": "Ich hatte heute Pasta zum Mittagessen." },
+    { "role": "assistant", "content": "Klingt gut! Wie war es?" }
+  ],
+  "existingMemories": [],
+  "expectedOps": [],
+  "expectedDenyList": false,
+  "notes": "Negative case — one-off activity (German)"
+}

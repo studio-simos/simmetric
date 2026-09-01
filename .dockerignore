@@ -1,0 +1,45 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build outputs
+dist
+build
+*.tsbuildinfo
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Git
+.git
+.gitignore
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage
+
+# Docker compose files (not needed in build context)
+docker-compose*.yml
+docker-compose*.yaml
+
+# IDE
+.vscode
+.idea
+.devcontainer
+
+# Documentation (not needed in build context)
+docs
+README.md
+*.md
