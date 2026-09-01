@@ -122,6 +122,17 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
+      # Free ~30GB before multi-arch builds: a single amd64+arm64 buildx run
+      # (QEMU emulation + buildkit cache) exhausts the ~21GB the runner has
+      # left out of the box (Phase 181: "no space left on device").
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
+            /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost /usr/lib/jvm || true
+          sudo docker image prune -af || true
+          df -h / | tail -1
+
       - name: Set up QEMU (multi-arch emulation)
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
 
