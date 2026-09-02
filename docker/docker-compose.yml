@@ -197,26 +197,26 @@ services:
     restart: unless-stopped
 
   # ─── Ollama (Local LLM) ──────────────────────────
-  ollama:
-    image: ollama/ollama:latest
-    container_name: simmetric-chat-ollama
-    environment:
-      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-10m}
-      - OLLAMA_HOST=0.0.0.0:11434
-    expose:
-      - "11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    healthcheck:
-      # The ollama/ollama image ships NO curl/wget/node — the previous curl
-      # probe could never execute (container permanently "unhealthy").
-      # `ollama ls` talks to the local daemon its own binary serves.
-      test: ["CMD-SHELL", "ollama ls >/dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: simmetric-chat-ollama
+  #   environment:
+  #     - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-10m}
+  #     - OLLAMA_HOST=0.0.0.0:11434
+  #   expose:
+  #     - "11434"
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+  #   healthcheck:
+  #     # The ollama/ollama image ships NO curl/wget/node — the previous curl
+  #     # probe could never execute (container permanently "unhealthy").
+  #     # `ollama ls` talks to the local daemon its own binary serves.
+  #     test: ["CMD-SHELL", "ollama ls >/dev/null 2>&1 || exit 1"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 40s
+  #   restart: unless-stopped
 
   # ─── Redis (Horizontal Scaling Cache) ────────────
   redis:
@@ -236,28 +236,28 @@ services:
     restart: unless-stopped
 
   # ─── Qdrant (Vector Database) ──────────────────────
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: simmetric-chat-qdrant
-    expose:
-      - "6333"
-      - "6334"
-    volumes:
-      - qdrant-storage:/qdrant/storage
-    environment:
-      - QDRANT__SERVICE__GRPC_PORT=6334
-      - QDRANT__SERVICE__HTTP_PORT=6333
-    healthcheck:
-      # qdrant/qdrant image ships no curl/wget/busybox — the wget probe could
-      # never execute (rc=127, "unhealthy" forever). Use a bash /dev/tcp
-      # socket probe — bash EXISTS in the qdrant 1.19 image but CMD-SHELL
-      # runs /bin/sh (no /dev/tcp support), so invoke bash explicitly.
-      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333' || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
+  # qdrant:
+  #   image: qdrant/qdrant:latest
+  #   container_name: simmetric-chat-qdrant
+  #   expose:
+  #     - "6333"
+  #     - "6334"
+  #   volumes:
+  #     - qdrant-storage:/qdrant/storage
+  #   environment:
+  #     - QDRANT__SERVICE__GRPC_PORT=6334
+  #     - QDRANT__SERVICE__HTTP_PORT=6333
+  #   healthcheck:
+  #     # qdrant/qdrant image ships no curl/wget/busybox — the wget probe could
+  #     # never execute (rc=127, "unhealthy" forever). Use a bash /dev/tcp
+  #     # socket probe — bash EXISTS in the qdrant 1.19 image but CMD-SHELL
+  #     # runs /bin/sh (no /dev/tcp support), so invoke bash explicitly.
+  #     test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333' || exit 1"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 10s
+  #   restart: unless-stopped
 
   # ─── Chroma (Vector Database) ──────────────────────
   # chroma:
@@ -285,7 +285,7 @@ volumes:
   xenova-cache:
   widget-storage:
   pgdata:
-  ollama-data:
+#  ollama-data:
   redis-data:
-  qdrant-storage:
+#  qdrant-storage:
 #  chroma-data:
