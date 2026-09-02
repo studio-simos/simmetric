@@ -196,6 +196,13 @@ jobs:
           gh release view "${{ needs.github-release.outputs.tag }}" --repo "${{ github.repository }}"
           echo "Release ${{ needs.github-release.outputs.tag }} is live."
 
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Verify server image is pullable
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
