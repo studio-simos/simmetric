@@ -17,8 +17,10 @@ COPY packages/frontend/package.json packages/frontend/
 COPY packages/collector/package.json packages/collector/
 COPY packages/widget/package.json packages/widget/
 
-# Install dependencies
-RUN pnpm install --frozen-lockfile
+# Install dependencies (pnpm store persisted via BuildKit cache mount:
+# avoids re-downloading the whole lockfile every build and caps peak disk usage)
+RUN --mount=type=cache,id=pnpm-store-collector,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 
 # Copy source code
 COPY packages/shared/ packages/shared/
@@ -56,7 +58,8 @@ COPY packages/collector/package.json packages/collector/
 COPY packages/widget/package.json packages/widget/
 
 # Install production dependencies only
-RUN pnpm install --frozen-lockfile --prod
+RUN --mount=type=cache,id=pnpm-store-collector,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --prod
 
 # Copy built artifacts
 COPY --from=builder /app/packages/shared/dist/ packages/shared/dist/
