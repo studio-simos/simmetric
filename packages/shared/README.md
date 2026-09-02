@@ -138,12 +138,14 @@ The Turborepo build pipeline enforces this: `shared` must build before any consu
 pnpm --filter @simmetric-chat/shared test
 ```
 
-Tests are co-located in `src/__tests__/` (14 test files):
+Tests are co-located in `src/__tests__/` (16 test files):
 - `schemas.test.ts` — Core schema validation and shared type assertions
 - `archiveSchemas.test.ts` — Archive schema validation
+- `envSchema.test.ts` — Env schema validation per package
 - `featureFlags.test.ts` — `FEATURE_FLAGS` regression guard (removed commodity flags must not reappear)
 - `fileName.test.ts` — `sanitizeFileName` contract (traversal neutralization, extension preservation, 255-char cap)
 - `ingestSchemas.test.ts` — Ingest contract schema validation (incl. `chunkText` Bug B regression guard)
+- `loadEnv.test.ts` — `loadRootEnv()` marker-walk resolution and merge behavior
 - `mcp-connection-schema.test.ts` — MCP connection schema validation
 - `mcpHeadersSchema.test.ts` — MCP headers schema validation
 - `ocrSchemas.test.ts` — OCR schema validation

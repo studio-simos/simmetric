@@ -14,7 +14,7 @@ Zustand was fully removed on 2026-05-24. The `src/stores/` directory no longer e
 
 ## Entry Points
 
-- `src/main.tsx` — Application bootstrap. Creates the React root and mounts the tree as `ErrorBoundary > QueryClientProvider > BrowserRouter > ThemeProvider > ChatProvider > PageMetaProvider > EnterpriseModulesProvider`. Side-effect imports apply FOUC-safe UI preferences (`./lib/uiFontScale`, `./lib/uiDensity`) plus i18n, `index.css`, and the Inter/Geist/JetBrains Mono fonts before `App` renders. Also registers the push-notification service worker (`/sw.js`) on window load.
+- `src/main.tsx` — Application bootstrap. Creates the React root (inside `StrictMode`) and mounts the tree as `ErrorBoundary > QueryClientProvider > BrowserRouter > ThemeProvider > ChatProvider > PageMetaProvider > EnterpriseModulesProvider`. Side-effect imports apply FOUC-safe UI preferences (`./lib/uiFontScale`, `./lib/uiDensity`) plus i18n, `index.css`, and the Inter/Geist/JetBrains Mono fonts before `App` renders. Also registers the push-notification service worker (`/sw.js`) on window load.
 - `src/App.tsx` — Root component. Handles auth initialization, sidebar navigation, route guards, menu-section gating, and global keyboard shortcuts.
 - `index.html` — Vite entry HTML. `window.__APP_VERSION__` is injected by a custom Vite plugin (reads the monorepo root `package.json` version).
 
@@ -30,15 +30,15 @@ Run these from the monorepo root or within this package directory:
 | `pnpm lint` | Run ESLint on `src/` |
 | `pnpm typecheck` | Run TypeScript without emitting |
 | `pnpm test` | Run Jest test suite (config `jest.config.cjs`, `@swc/jest` transform) |
-| `pnpm i18n:check` | Validate translation key parity across all 8 locales (EN baseline) for the `--namespaces=` list (`chat.palette`, `chat.comparison`, `chat.fallback`, `chat.modelSelector`, `chat.modelCommand`, `chat.capabilities`, `wiki`, `config`, `archives`, `uploads`, `chat.archive`, `mcpHelp`, `documents`, `synthesis.rename`, `settings.webSearch`, `widgets`, `setup.wizard`); `i18n-usage-check.cjs` additionally fails on `t()` keys absent from `en` |
+| `pnpm i18n:check` | Validate translation key parity across all 8 locales (EN baseline) for the `--namespaces=` list (`chat.palette`, `chat.comparison`, `chat.fallback`, `chat.modelSelector`, `chat.modelCommand`, `chat.capabilities`, `wiki`, `config`, `archives`, `uploads`, `chat.archive`, `mcpHelp`, `documents`, `synthesis.rename`, `settings.webSearch`, `widgets`, `setup.wizard`, `workspace`, `synthesis`, `ocr`); `i18n-usage-check.cjs` additionally fails on `t()` keys absent from `en` |
 
 ## Key Directories
 
-- `src/components/` — React components (PascalCase). Includes `ChatPanel` (chat orchestrator with citations, ModelSelector, `/model` slash command, and comparison mode), `ChatSidebar` (chat list with rename/delete, 30s polling, `variant: "panel" | "sheet"`), `ModelSelector` / `ModelPalette` (Cmd+K Spotlight-style switcher) / `ModelComparisonView` (side-by-side grid layout), `SettingsPage` (deep-link tabs: `profile`, `llm`, `appearance`, `security`, `advanced` — each containing permissioned sections), `SettingsRoles`, `SettingsProviders`, `SettingsEmbed`, `SettingsWidget`, `SettingsOcr`, `SettingsMaintenance`, `MarketplaceDetail` / `MarketplacePage` / `MarketplaceCard`, archive UI (`ArchivesPage`, `ArchiveDetailPage`, `ArchiveGraphView`, `ArchiveConfigPanel`), synthesis UI, OCR UI, and backup management.
-- `src/queries/` — TanStack Query hooks (27 hook modules, 152 exported hooks) for REST/CRUD server state: `useAuth`, `useChats`, `useChatTokens`, `useWorkspaces`, `useProjects`, `useProviders`, `useProviderPresets`, `useSettings`, `useDocuments`, `useArchives`, `useSynthesis`, `useMarketplace`, `useMcpConnections`, `useWidgets`, `useLicense`, `useOcrJobs`, `useOcrModels`, `useOcrDefaults`, `useOcrPreferences`, `useBackupDestinations`, `useBackupJobs`, `useBackupLogs`, `useUploadDrafts`, `useFilters`, `useSso`, `useTemplates`, `useSystem`. Centralized key registry in `queries/keys.ts`; client in `queries/queryClient.ts`.
+- `src/components/` — React components (PascalCase), with `chat/`, `sidebar/`, and `ui/` (shadcn primitives) subdirectories. Includes `ChatPanel` (chat orchestrator with citations, ModelSelector, `/model` slash command, and comparison mode), `ChatSidebar` (chat list with rename/delete, 30s polling, `variant: "panel" | "sheet"`), `ModelSelector` / `ModelPalette` (Cmd+K Spotlight-style switcher) / `ModelComparisonView` (side-by-side grid layout), `SettingsPage` (5 deep-linkable tabs: `profile`, `llm`, `appearance`, `security`, `advanced` — each containing permissioned sections), `SettingsRoles`, `SettingsProviders`, `SettingsWidget`, `SettingsOcr`, `SettingsMaintenance`, `MarketplacePage` / `MarketplaceDetail` / `MarketplaceCard`, archive UI (`ArchivesPage`, `ArchiveDetailPage`, `ArchiveGraphView`, `ArchiveConfigPanel`), synthesis UI, OCR UI, and backup management.
+- `src/queries/` — TanStack Query hooks (26 hook modules, 144 exported hooks) for REST/CRUD server state: `useAuth`, `useChats`, `useChatTokens`, `useWorkspaces`, `useProjects`, `useProviders`, `useProviderPresets`, `useSettings`, `useDocuments`, `useArchives`, `useSynthesis`, `useMarketplace`, `useMcpConnections`, `useWidgets`, `useLicense`, `useOcrJobs`, `useOcrModels`, `useDlpPatterns`, `useBackupDestinations`, `useBackupJobs`, `useBackupLogs`, `useUploadDrafts`, `useFilters`, `useSso`, `useTemplates`, `useSystem`. Centralized key registry in `queries/keys.ts`; client in `queries/queryClient.ts`.
 - `src/contexts/` — React Context providers for UI lifecycle state: `ChatContext` (workspace/chat navigation with imperative setters), `PageMetaContext` (page metadata), `ThemeContext` (dark/light theme, persisted to localStorage), `EnterpriseModulesContext` (enterprise module manifest, mounted innermost).
 - `src/hooks/` — Custom React hooks. Key hooks: `useChat` (SSE streaming via `@microsoft/fetch-event-source`, split into `useChatStreaming` / `useChatPersistence` / `useChatModelSelection` / `useChatPanelState` / `useMessageHistory` siblings; per-chat model persistence, `resolveEffectiveModel` with three-tier fallback), `useFeature` / `useFeatureLimit` / `useLicenseTier` (license gating), `useKeyboardShortcuts` (global Cmd+K / Cmd+Shift+M via `useEffectEvent`), `useModelPalette`, `useModelAvailability` (30s poll), `useSpeechRecognition` (Web Speech API wrapper), `usePushNotifications` (web push), `useIsMobile`, `useBackupPermission`, `usePageMeta`, `usePaletteCallbacks`.
-- `src/utils/` — API utilities (`api.ts`: `apiGet` / `apiPost` / `apiPut` / `apiPatch` / `apiDelete` / `apiUpload` prepend `/api` and inject `Authorization: Bearer <token>` from localStorage; `handleResponse<T>` throws `ApiError` on non-2xx; `fetchMe` clears token only on 401/403, preserves on 429/500/network), markdown rendering (`markdown.ts` — markdown-it + highlight.js + DOMPurify), and other helpers.
+- `src/utils/` — API utilities (`api.ts`: `apiGet` / `apiPost` / `apiPut` / `apiPatch` / `apiDelete` / `apiUpload` prepend `/api` and inject `Authorization: Bearer <token>` from localStorage; `handleResponse<T>` throws `ApiError` on non-2xx; `fetchMe` clears token only on 401/403, preserves on 429/500/network), markdown rendering (`markdown.ts` — markdown-it + highlight.js + DOMPurify), widget embed helpers (`widgetSnippet.ts`, `widgetServiceUrl.ts`), and other utilities.
 - `src/lib/` — Shared library utilities: `toast.ts` (sonner helpers `showSuccess` / `showError` / `showInfo` / `toastWithAction`), `uiFontScale.ts` and `uiDensity.ts` (FOUC-safe module-init), `utils.ts`.
 - `src/i18n/` — Translation JSON files for 8 languages: `en` (parity baseline) plus `it`, `ru`, `de`, `fr`, `es`, `zh`, `pt` (all must stay in parity — run `pnpm i18n:check`).
 - `src/types/` — Frontend-only TypeScript types. Shared types are imported from `@simmetric-chat/shared`.
@@ -62,7 +62,7 @@ server: {
 }
 ```
 
-The widget regex keys are declared BEFORE the generic `/api` key — Vite matches proxy keys in insertion order with `startsWith()`, so the SPA's `/widgets` admin routes and MCP pin routes (`/api/chats`, `/api/chats/:id/pins`) are not hijacked.
+The widget regex keys are declared BEFORE the generic `/api` key — Vite matches proxy keys in insertion order with `startsWith()`, so the SPA's `/widgets` admin routes and MCP pin routes (`/api/chats`, `/api/chats/:id/pins`) are not hijacked. The same proxy table is applied to `vite preview`.
 
 `configureDevProxy` retries `ECONNREFUSED` up to 8 times with a 500ms backoff on GET/HEAD only (POST and SSE bodies are never replayed) to absorb the dev backend's slower boot (Prisma client + Postgres + auto-seed + license/FTS/scheduler init). Once the server binds, the retry succeeds; if it stays down, a single concise 502 is returned instead of a stack dump. In production, the frontend is served as static files by Nginx, which also handles API routing.
 
@@ -72,7 +72,7 @@ Vite resolves a `@` path alias to `./src` and `@simmetric-chat/shared` to `../sh
 
 Three-tier architecture (full boundary document in `docs/STATE_MANAGEMENT.md`):
 
-- **TanStack Query** (`src/queries/`, 27 hook modules) — REST/CRUD server state. Query client defaults: 30s staleTime, 1 retry (skipped for 401/403/429), no mutation retries. Centralized cache key registry in `queries/keys.ts`.
+- **TanStack Query** (`src/queries/`, 26 hook modules) — REST/CRUD server state. Query client defaults: 30s staleTime, refetch on window focus, 1 retry (skipped for 401/403/429), no mutation retries. Centralized cache key registry in `queries/keys.ts`.
 - **React Context** (`src/contexts/`) — UI lifecycle/navigation state. `ChatContext` exposes imperative setters so non-React callbacks (SSE handlers) can update navigation.
 - **fetchEventSource + useState/useRef** (`src/hooks/useChat.ts`) — SSE streaming. NOT TanStack Query; SSE is an open persistent connection, not request/response.
 
@@ -96,22 +96,22 @@ Registered in `App` via `useKeyboardShortcuts` (listens on `document`, prevents 
 
 ## Dependencies
 
-- **Framework**: React 19.2.8 (with `babel-plugin-react-compiler` 1.0.0, `target: "19"`), react-router-dom 7.18.2, Vite 8.2.2
-- **Styling**: Tailwind CSS 4.3.3 (`darkMode: "class"`, CSS custom properties in `src/index.css` `:root` / `.dark` — `--bg`, `--surface`, `--text`, `--text-muted`, `--border`, etc.; custom `primary-50`..`primary-900` scale in `tailwind.config.ts`; 150ms transitions on bg/border/color), Radix UI primitives + `radix-ui` umbrella (Slot.Root pattern), shadcn 4.19.0, Lucide, `@tailwindcss/typography`, `tw-animate-css`, `class-variance-authority`, `clsx`, `tailwind-merge`
+- **Framework**: React 19.2.8 (with `babel-plugin-react-compiler` 1.0.0, `target: "19"`), react-router-dom 7.18.2, Vite 8.2.2, TypeScript 6
+- **Styling**: Tailwind CSS 4.3.3 (`darkMode: "class"`, CSS custom properties in `src/index.css` `:root` / `.dark` — `--bg`, `--surface`, `--text`, `--text-muted`, `--border`, etc.; custom `primary-50`..`primary-900` scale in `tailwind.config.ts`; 150ms transitions on bg/border/color), Radix UI primitives + `radix-ui` umbrella (Slot.Root pattern), shadcn 4.19.1, Lucide, `@tailwindcss/typography`, `tw-animate-css`, `class-variance-authority`, `clsx`, `tailwind-merge`
 - **State**: TanStack Query 5.102.3, React Context (no Zustand — removed 2026-05-24)
 - **HTTP / Streaming**: Native fetch (`src/utils/api.ts`), `@microsoft/fetch-event-source` 2.0.1
 - **Markdown / Code**: markdown-it 14.3.0, highlight.js 11.12.0, dompurify 3.4.14
 - **Charts**: Recharts 3.10.1, D3 7.9.0
-- **Forms / DnD**: react-hook-form 7.86 + `@hookform/resolvers` 5.9 (Zod), `@dnd-kit/core` 6.3.1, react-dropzone 15
+- **Forms / DnD**: react-hook-form 7.86 + `@hookform/resolvers` 5.9 (Zod), `@dnd-kit/core` 6.3.1, react-dropzone 15, zod 4.4
 - **TTS / Voice**: native `speechSynthesis` API (read-aloud on assistant messages), `useSpeechRecognition` (Web Speech API wrapper)
 - **i18n**: react-i18next 17.0.12 + i18next 26.4.0 (8 locales)
-- **UI extras**: sonner 2.0.8 (toasts), cmdk 1.1.1 (command palette), react-resizable-panels 4.12.3, diff-match-patch 1.0.5, `@fontsource-variable/inter` / `@fontsource-variable/geist` / `@fontsource/jetbrains-mono`
+- **UI extras**: sonner 2.0.8 (toasts), cmdk 1.1.1 (command palette), diff-match-patch 1.0.5, `@fontsource-variable/inter` / `@fontsource-variable/geist` / `@fontsource/jetbrains-mono`
 - **Compiler / Lint**: `babel-plugin-react-compiler` 1.0.0, `eslint-plugin-react-compiler` + `eslint-plugin-react-hooks` (registered manually in the root flat config)
 - **Shared**: `@simmetric-chat/shared` (types, schemas, constants) — only cross-package import
 
 ## Build Configuration
 
-- Module system: ESM (`"type": "module"`, `"module": "ESNext"`); target `ES2022`; TypeScript `strict: true` plus `noUnusedLocals` / `noUnusedParameters`.
+- Module system: ESM (`"type": "module"`, `"module": "ESNext"`); target `ES2022`; TypeScript `strict: true` plus `noUnusedLocals` / `noUnusedParameters` / `noUncheckedIndexedAccess`.
 - No runtime env injection — Vite bakes `import.meta.env` at build time. The only build-time global injected into `index.html` is `window.__APP_VERSION__` (from the monorepo root `package.json`).
 - `vite build` emits to `dist/` with hashed asset filenames and source maps (disable source maps for air-gapped deployments). Code splitting via dynamic imports is used for Settings tabs to reduce initial load.
 - ESLint flat config lives at the monorepo root (`eslint.config.mjs`); frontend-specific `react-compiler` and `react-hooks` plugins are registered there.

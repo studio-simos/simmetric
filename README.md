@@ -1,48 +1,33 @@
-
+<!-- generated-by: gsd-doc-writer -->
 # Simmetric Chat
 
-Enterprise-grade, local-first, privacy-first AI chat workspace with RAG, RBAC, and full air-gap capability.
+Enterprise-grade, local-first, privacy-first AI chat workspace with RAG, RBAC, and full air-gap capability — for teams that need strict data residency, offline operation, and fine-grained access control.
 
+[![Version](https://img.shields.io/badge/version-0.22.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D24-green)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-11.24-orange)](https://pnpm.io)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
-<!-- To add a hero screenshot, place it at docs/assets/hero.png and replace this comment with:
-![Simmetric Chat](docs/assets/hero.png)
--->
-
 Simmetric Chat pairs a ReAct agent with hybrid RAG search, role-based access control, and an embeddable chat widget — deployable fully air-gapped with zero cloud dependencies. External website visitors can chat with an AI assistant powered by the platform's RAG knowledge, while internal teams get a full chat workspace with fine-grained permissions.
-
-> *AI ChatBot and RAG for strict data residency, offline operation, and fine-grained access control.*
-
-📖 **[Full documentation](docs/INDEX.md)** — start at `docs/INDEX.md` for the canonical dev docs (architecture, getting started, development, testing, configuration, API, deployment, widget, contributing).
-
----
 
 ## Why Simmetric Chat?
 
-- 🛡️ **Privacy-first & air-gap ready** — runs fully offline with Ollama (local LLM), LanceDB (local vector store), and Xenova transformers (local embeddings). Zero cloud dependencies. A DLP filter redacts PII (email, credit cards, API keys, private keys) before it ever leaves your network.
-
-- 🔎 **RAG with citations + RBAC** — hybrid vector + PostgreSQL full-text search fused with Reciprocal Rank Fusion (RRF), with source citations and relevance scores in every response. 31 permissions across 13 menu sections, workspace-level access grants, and IDOR prevention keep knowledge siloed by design.
-
-- 🧩 **Embeddable widget** — iframe/script embeddable chat widgets for external websites, with isolated anonymous sessions, rate limiting, layered knowledge-base access, and lead capture. Powered by the same RAG pipeline and agent infrastructure as the internal chat. (Enterprise tier.)
-
-- 🤖 **Multi-LLM + MCP** — Ollama, OpenAI, Anthropic, OpenRouter, Gemini, and 20 provider presets (16 one-click installable + 4 OAuth/manual references) (DeepSeek, Mistral, Kimi/Moonshot, NVIDIA NIM, OpenAI Codex, Qwen, xAI, Z.AI/GLM, MiniMax, LM Studio, GitHub Copilot, and more) with per-chat model selection, a Cmd+K quick-switch palette, side-by-side model comparison, and graceful fallback when a model becomes unavailable. Bidirectional MCP: expose RAG to IDEs, or connect external MCP servers as agent skills via the marketplace.
-
----
+- **Privacy-first & air-gap ready** — runs fully offline with Ollama (local LLM), LanceDB (local vector store), and Xenova transformers (local embeddings). Zero cloud dependencies. A DLP filter redacts PII (email, credit cards, API keys, private keys) before it ever leaves your network.
+- **RAG with citations + RBAC** — hybrid vector + PostgreSQL full-text search fused with Reciprocal Rank Fusion (RRF), with source citations and relevance scores in every response. 31 permissions across 13 menu sections, workspace-level access grants, and IDOR prevention keep knowledge siloed by design.
+- **Embeddable widget** — iframe/script embeddable chat widgets for external websites, with isolated anonymous sessions, rate limiting, layered knowledge-base access, and lead capture. Powered by the same RAG pipeline and agent infrastructure as the internal chat. (Enterprise tier.)
+- **Multi-LLM + MCP** — Ollama, OpenAI, Anthropic, OpenRouter, Gemini, and 20 provider presets (DeepSeek, Mistral, Kimi/Moonshot, NVIDIA NIM, Qwen, xAI, Z.AI/GLM, MiniMax, LM Studio, GitHub Copilot, and more) with per-chat model selection, a Cmd+K quick-switch palette, side-by-side model comparison, and graceful fallback. Bidirectional MCP: expose RAG to IDEs, or connect external MCP servers as agent skills via the marketplace.
 
 ## Features at a glance
 
 - **Hybrid RAG** — vector + PostgreSQL FTS (RRF), source citations, document upload (PDF/MD/CSV/DOCX/XLSX/PPTX, YouTube transcripts)
 - **ReAct agent** — reason-then-act orchestrator with built-in skills (`rag_search`, `workspace_memory`, `document_temp_process`) and pluggable MCP tools
-- **Multi-LLM** — Ollama / OpenAI / Anthropic / OpenRouter / Gemini + 20+ OpenAI-compatible providers (DeepSeek, Mistral, Kimi/Moonshot, Qwen, xAI, Z.AI/GLM, MiniMax, LM Studio, GitHub Copilot, …), per-chat selection, palette, comparison, graceful fallback
 - **RBAC** — 31 permissions, 13 menu sections, workspace + project access grants, IDOR prevention
 - **Embeddable widget** — iframe/script embed, isolated sessions, lead capture, layered knowledge access (Enterprise)
 - **OCR** — server-side vision-model OCR for image-based PDFs and scanned documents
 - **Synthesis pipeline** — multi-document synthesis with contradiction detection, budget tracking, and selective approval
-- **Backups** — scheduled and on-demand, encrypted, with retention policies (Enterprise; scheduler lives in the enterprise package)
-- **i18n** — 8 locales (en, it, ru, de, fr, es, zh, pt — pt added 2026-08-26) with parity checks
+- **Backups** — scheduled and on-demand, encrypted, with retention policies (Enterprise)
+- **i18n** — 8 locales (en, it, ru, de, fr, es, zh, pt) with parity checks
 - **Analytics** — token usage dashboards (daily, by model, top users)
 - **Webhooks + Web Push** — HMAC-SHA256 signed webhooks and VAPID browser push (always-on in Community)
 - **HMAC API keys** — `sk-` prefixed keys verified with a dedicated HMAC-SHA256 secret (`API_KEY_HMAC_SECRET`), decoupled from JWT/encryption key rotation
@@ -52,11 +37,9 @@ Simmetric Chat pairs a ReAct agent with hybrid RAG search, role-based access con
 
 Full feature guide: [docs/USAGE.md](docs/USAGE.md).
 
----
+## Quick start
 
-## Quick Start (60s)
-
-**Prerequisites:** Node.js ≥ 24, pnpm 11.24.0 (`corepack enable && corepack prepare pnpm@11.24.0 --activate`), and [Ollama](https://ollama.com) for local LLMs.
+**Prerequisites:** Node.js >= 24, pnpm 11.24.0 (`corepack enable && corepack prepare pnpm@11.24.0 --activate`), PostgreSQL 16, and [Ollama](https://ollama.com) for local LLMs.
 
 ```bash
 # 1. Pull the default local model
@@ -67,8 +50,7 @@ git clone git@github.com:studio-simos/simmetric simmetric-chat
 cd simmetric-chat
 pnpm install
 
-# 3. Configure — root .env is THE single runtime config (the per-package
-#    .env override layer was removed)
+# 3. Configure — the repo-root .env is THE single runtime config
 cp .env.example .env
 # Set at minimum: JWT_SECRET=$(openssl rand -hex 32) and COLLECTOR_SECRET=$(openssl rand -hex 32)
 
@@ -81,16 +63,28 @@ pnpm --filter server db:seed   # optional — see note below
 pnpm dev
 ```
 
-Open **http://localhost:5173**
-User admin
-Password: admin123
-Change password and welcome to the chatbot
+Open **http://localhost:5173** and log in with the seeded admin account:
 
-A setup wizard (SetupWizard) renders when `setupWizardMode === 'active'` on a fresh DB. Two admin paths exist: run `pnpm --filter server db:seed` to seed roles, permissions, templates, and an `admin` / `admin123` account (Path A), or skip seeding and let the server auto-seed the bootstrap admin on startup (`SEED_BOOTSTRAP_ADMIN=true` by default; credentials from `SEED_ADMIN_USERNAME`/`SEED_ADMIN_PASSWORD`/`SEED_ADMIN_EMAIL`, defaults `admin` / `admin123` / `admin@example.com`). In both cases the seeded account carries `mustChangePassword=true`, so on first login `ForcePasswordChange.tsx` blocks the app until you set a new password via `/api/auth/set-initial-password`. Self-service registration is closed by default; additional users are created by an admin from Settings.
+- User: `admin`
+- Password: `admin123`
+
+The seeded account carries `mustChangePassword=true`, so on first login you are required to set a new password before using the app. Two admin paths exist: run `pnpm --filter server db:seed` to seed roles, permissions, templates, and the `admin` / `admin123` account, or skip seeding and let the server auto-seed the bootstrap admin on startup (`SEED_BOOTSTRAP_ADMIN=true` by default; credentials configurable via `SEED_ADMIN_USERNAME` / `SEED_ADMIN_PASSWORD` / `SEED_ADMIN_EMAIL`, defaults `admin` / `admin123` / `admin@example.com`). Self-service registration is closed by default; additional users are created by an admin from Settings.
 
 > Services: frontend `:5173` · server `:3000` · collector `:3210` · widget `:3211`.
 
----
+## Usage examples
+
+**Chat with your documents (RAG):** upload PDFs, Markdown, CSV, DOCX, XLSX, or PPTX from the Documents page; the collector parses, chunks, and embeds them. Then ask a question in chat — the ReAct agent calls `rag_search` (hybrid vector + FTS with RRF) and answers with source citations and relevance scores.
+
+**Connect external models:** open Settings and add a provider preset (Ollama is the local default; OpenAI, Anthropic, OpenRouter, Gemini, and OpenAI-compatible presets like DeepSeek or Mistral are one click). Select the model per chat via the Cmd+K quick-switch palette, or compare two models side by side.
+
+**Embed a widget on your site** (Enterprise): create a widget from Settings, then add the embed snippet to your site:
+
+```html
+<script src="http://localhost:3211/widget.js" data-workspace="<workspace-id>"></script>
+```
+
+See [docs/WIDGET.md](docs/WIDGET.md) for the full integration guide.
 
 ## Architecture
 
@@ -113,34 +107,30 @@ flowchart LR
   REDIS[(Redis 7<br/>optional scale layer)] -.->|SSE fan-out · rate limits · locks| API
 ```
 
-Monorepo packages: `@simmetric-chat/shared` ← `@simmetric-chat/server`, `@simmetric-chat/collector`, `@simmetric-chat/frontend`, `@simmetric-chat/widget`. Strict unidirectional dependency graph — `shared` is the only cross-package import; server and collector never import from each other and communicate via HTTP only.
+Monorepo packages: `@simmetric-chat/shared` <- `@simmetric-chat/server`, `@simmetric-chat/collector`, `@simmetric-chat/frontend`, `@simmetric-chat/widget`. Strict unidirectional dependency graph — `shared` is the only cross-package import; server and collector never import from each other and communicate via HTTP only.
 
 Deep dive: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
----
-
-## Tech Stack
+## Tech stack
 
 | Layer | Technology |
 |---|---|
 | Backend | Node.js, Express 5, Prisma ORM |
 | Frontend | React 19, Vite 8, Tailwind CSS 4, react-router-dom 7 |
-| State | TanStack Query + React Context (no Zustand) |
+| State | TanStack Query + React Context |
 | Database | PostgreSQL 16 |
 | Scale layer (optional) | Redis 7 — auth cache, token revocation, SSE fan-out, distributed locks, Redis-backed rate limits (graceful in-memory fallback when absent) |
-| Job queue | pg-boss (Postgres-backed) — 8 cron schedulers (reapers, fidelity sampling, wiki consistency, MCP health checks); OCR + synthesis pipelines stay as setInterval 10s pollers |
-| Schema/migrations | Prisma 7 (`@prisma/adapter-pg` driver adapter) — Prisma client singleton at `packages/server/src/utils/prisma.ts` |
+| Job queue | pg-boss (Postgres-backed) — 8 cron schedulers; OCR + synthesis pipelines stay as setInterval 10s pollers |
+| Schema/migrations | Prisma 7 (`@prisma/adapter-pg` driver adapter) |
 | Vector DB | LanceDB (local) · Qdrant · pgvector · Chroma |
 | Embeddings | Xenova/Transformers (local) · HuggingFace v4 · Ollama · OpenAI |
-| LLM | Ollama (local) · OpenAI · Anthropic · OpenRouter · Gemini + OpenAI-compatible (DeepSeek, Mistral, Kimi/Moonshot, Qwen, xAI, Z.AI/GLM, MiniMax, LM Studio, GitHub Copilot, …) |
+| LLM | Ollama (local) · OpenAI · Anthropic · OpenRouter · Gemini + OpenAI-compatible presets |
 | Auth | JWT + bcrypt, HMAC-SHA256 API keys (`sk-` prefix), RBAC middleware |
 | Streaming | SSE via `@microsoft/fetch-event-source` |
 | Monorepo | pnpm workspaces (pnpm 11.24.0 pinned via `packageManager`) + Turborepo |
 | Desktop | Tauri v2 (optional — `src-tauri/` desktop shell) |
 
-> **Enterprise plugin** — optional proprietary package (separate private repo, `simmetric-enterprise/`) loaded at boot via `require.resolve` from `packages/server/src/services/enterpriseLoader.ts`. It imports only `@simmetric-chat/shared`; when absent the server runs in Community mode via graceful degradation. See [docs/ENTERPRISE_PLUGIN.md](docs/ENTERPRISE_PLUGIN.md).
-
----
+> **Enterprise plugin** — optional proprietary package (separate private repo) loaded at boot via `require.resolve` from `packages/server/src/services/enterpriseLoader.ts`. It imports only `@simmetric-chat/shared`; when absent the server runs in Community mode via graceful degradation. See [docs/ENTERPRISE_PLUGIN.md](docs/ENTERPRISE_PLUGIN.md).
 
 ## Documentation
 
@@ -162,8 +152,6 @@ Deep dive: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Interactive API docs (Swagger / OpenAPI 3.0) are served at `/api-docs` when the server is running.
 
----
-
 ## Deployment
 
 ```bash
@@ -174,15 +162,11 @@ Full guide (multi-container Compose, single-container all-in-one for air-gapped 
 
 Horizontal scaling (N server instances behind a load balancer with shared Postgres + Redis, SSE fan-out, pg-boss job queue): [docs/SCALING.md](docs/SCALING.md).
 
----
-
 ## Configuration
 
-The repo-root `.env` is the **single runtime config file** (Phases 176–177, per-package layer removed): copy `.env.example` to `.env` and fill in the bootstrap secrets (`JWT_SECRET`, `COLLECTOR_SECRET`; optional `WIDGET_API_KEY`, `API_KEY_HMAC_SECRET`, `ENCRYPTION_KEY`, `REDIS_URL`, `LICENSE_KEY`). The root `.env.example` documents **every** schema key of every package, organized in per-package sections with `[server]`/`[collector]`/`[widget]` applicability markers (guarded by the `envExampleParity` tripwires). Packages load the root file via a zero-dependency `loadRootEnv()` loader in `@simmetric-chat/shared` (marker-walk discovery — walks up parent directories until it finds `pnpm-workspace.yaml`). Precedence: `process.env` > root `.env` > code default; the per-package `.env` files no longer exist. The strictly required keys (Zod `.min(1)` in `packages/server/src/config/env.ts`) are `JWT_SECRET` and `COLLECTOR_SECRET` — `DATABASE_URL` has a code default and `LICENSE_KEY` is optional (absent = Community build). Runtime configuration precedence: `ALWAYS_READONLY` infra keys are ENV-only; every other UI-editable setting resolves DB > ENV > default.
+The repo-root `.env` is the **single runtime config file** (the per-package `.env` override layer was removed): copy `.env.example` to `.env` and fill in the bootstrap secrets (`JWT_SECRET`, `COLLECTOR_SECRET`; optional `WIDGET_API_KEY`, `API_KEY_HMAC_SECRET`, `ENCRYPTION_KEY`, `REDIS_URL`, `LICENSE_KEY`). The root `.env.example` documents every schema key of every package, organized in per-package sections with `[server]`/`[collector]`/`[widget]` applicability markers. Packages load the root file via a zero-dependency loader in `@simmetric-chat/shared` (marker-walk discovery up to the repo root). Precedence: `process.env` > root `.env` > code default. The strictly required keys are `JWT_SECRET` and `COLLECTOR_SECRET` — `DATABASE_URL` has a code default and `LICENSE_KEY` is optional (absent = Community build). Runtime configuration precedence: `ALWAYS_READONLY` infra keys are ENV-only; every other UI-editable setting resolves DB > ENV > default.
 
 Full details: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
-
----
 
 ## Contributing
 
@@ -208,8 +192,6 @@ pnpm db:generate  # Regenerate Prisma client
 pnpm db:seed      # Seed default roles, permissions, templates, config
 ```
 
----
-
 ## License
 
 **Dual-license model:**
@@ -218,8 +200,6 @@ pnpm db:seed      # Seed default roles, permissions, templates, config
 - **Enterprise plugin** — proprietary commercial — see [LICENSE_EE.md](LICENSE_EE.md) and [docs/ENTERPRISE_LICENSE_TERMS.md](docs/ENTERPRISE_LICENSE_TERMS.md).
 
 See [docs/LICENSE_DECISION.md](docs/LICENSE_DECISION.md) for the full rationale.
-
----
 
 ## See also
 

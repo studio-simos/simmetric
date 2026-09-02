@@ -167,7 +167,7 @@ Strategy pattern with the `EmbeddingProvider` interface (`embed`, `getDimension`
 |----------|-------|--------|-------|
 | Local (default) | `LocalEmbeddingProvider` | `EMBEDDING_PROVIDER=local`, `EMBEDDING_MODEL`, `XENOVA_CACHE_DIR` | `@xenova/transformers` pipeline, `quantized: true`. Remote downloads gated by `HF_ALLOW_REMOTE_MODELS` (default `true`; set `false` for air-gap). Cache dir overridable via `XENOVA_CACHE_DIR` |
 | HF v4 | `HuggingFaceLocalEmbeddingProvider` | `EMBEDDING_PROVIDER=hf-local`, `EMBEDDING_MODEL`, `HF_CACHE_DIR` | `@huggingface/transformers` v4 (Xenova's maintained successor). `dtype: "q8"` (NOT `quantized` — silently ignored in v4). `allowRemoteModels=false`, `allowLocalModels=true`; cache miss = hard error. Same model IDs/dims as Xenova → no re-index |
-| OpenAI | `OpenAIEmbeddingProvider` | `EMBEDDING_PROVIDER=openai`, `EMBEDDING_API_KEY` | Native `fetch` to `https://api.openai.com/v1/embeddings`. Default model `text-embedding-3-small` (1536-dim) |
+| OpenAI | `OpenAIEmbeddingProvider` | `EMBEDDING_PROVIDER=openai`, `EMBEDDING_API_KEY` | Native `fetch` to `https://api.openai.com/v1/embeddings`. Default model `text-embedding-3-small` (1536-dim). Dual-path key channel: `EMBEDDING_API_KEY` (Zod) or `OPENAI_API_KEY` (raw `process.env`); Zod wins when both are set |
 | Ollama | `OllamaEmbeddingProvider` | `EMBEDDING_PROVIDER=ollama`, `OLLAMA_BASE_URL`, `OLLAMA_KEEP_ALIVE` | Official `ollama` (ollama-js) client via `getOllamaClient()`; `keep_alive` flows from `OLLAMA_KEEP_ALIVE` (default `10m`) so the model stays resident between batches. 404 returns an actionable error with `ollama pull` hint |
 
 Providers are cached in a `Map<string, EmbeddingProvider>` keyed by `providerType:modelName` via `getEmbeddingProvider()`. Ollama model names (containing `:` or prefixed `ollama/`) are auto-detected even in `local`/`hf-local` mode. `checkEmbeddingModelAvailability()` verifies the 4-file on-disk cache layout (`config.json`, `tokenizer_config.json`, `tokenizer.json`, `onnx/model_quantized.onnx`) for the local and HF v4 providers so a missing model surfaces as a structured 503 instead of a silent 500.
@@ -223,6 +223,8 @@ The collector has a dedicated Jest test suite under `src/__tests__/`:
 | File | Coverage |
 |------|----------|
 | `embeddings.test.ts` | `OllamaEmbeddingProvider` — actionable 404 error messages, generic non-404 errors, successful embedding response; `LocalEmbeddingProvider` cold-start `progress_callback` |
+| `envExampleParity.test.ts` | Collector `envSchema` ↔ root `.env.example` parity tripwire (shape-only introspection; one-way schema ⊆ file enforcement) |
+| `rawEnvReads.test.ts` | Raw `process.env` channel behavioral guard — `HF_ALLOW_REMOTE_MODELS`, `XENOVA_CACHE_DIR`, `HF_CACHE_DIR`, reranker cache chain, `OPENAI_API_KEY` dual-path, `LOG_LEVEL`; turns RED if any raw read is absorbed into Zod |
 | `hfLocalEmbedding.airgap.test.ts` | HF v4 provider air-gap stance (`allowRemoteModels=false`, cache miss = hard error, dtype `q8`) |
 | `parser.test.ts` | Document parser per-format (PDF/DOCX/PPTX/XLSX/TXT/CSV/YouTube) |
 | `parserOcrRouting.test.ts` | `ocrMode` (`auto`/`vision`/`skip`) routing and `ocrSkipped` graceful degradation |
