@@ -103,10 +103,11 @@ jobs:
     needs: github-release
     strategy:
       fail-fast: false
-      # max-parallel 1 (Phase 181): 5 concurrent multi-arch buildx runs
-      # exhausted the runner disk (QEMU arm64 layer cache + pnpm store →
-      # "database or disk is full" / "No space left on device").
-      max-parallel: 1
+      # max-parallel 2 (Phase 181 follow-up): with amd64-only builds (QEMU
+      # removed) two concurrent buildx runs fit comfortably in runner disk;
+      # the earlier serialization (max-parallel 1) existed only because QEMU
+      # arm64 layer caches exhausted it.
+      max-parallel: 2
       matrix:
         include:
           - image: simmetric-chat-server
@@ -122,9 +123,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
-      # Free ~30GB before multi-arch builds: a single amd64+arm64 buildx run
-      # (QEMU emulation + buildkit cache) exhausts the ~21GB the runner has
-      # left out of the box (Phase 181: "no space left on device").
+      # Free ~30GB before builds: buildkit layer caches + pnpm store still
+      # need headroom for two concurrent amd64 runs (kept from Phase 181 —
+      # disk exhaustion was first observed without it).
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
@@ -132,9 +133,6 @@ jobs:
             /usr/local/share/boost /usr/lib/jvm || true
           sudo docker image prune -af || true
           df -h / | tail -1
-
-      - name: Set up QEMU (multi-arch emulation)
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
@@ -162,10 +160,14 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          # Widget: amd64 only (Phase 181 — the arm64 QEMU build hung ~5h
-          # and was cancelled; a browser-less embed service has no arm64
-          # users today. Re-add arm64 if demand appears).
-          platforms: ${{ matrix.image == 'simmetric-chat-widget' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          # amd64-only for all images (Phase 181 follow-up): QEMU arm64
+          # builds hung up to ~5h (widget was first, then all-in-one's
+          # pgvector source compile) and burned paid runner minutes on a
+          # private repo. arm64 users: self-build locally (docker build) or
+          # point a self-hosted arm64 runner at the matrix — the Dockerfiles
+          # are cross-build-safe. Re-add linux/arm64 when a native arm64
+          # runner joins the fleet.
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ steps.img-meta.outputs.image-lower }}:${{ steps.img-meta.outputs.version }}

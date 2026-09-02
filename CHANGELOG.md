@@ -87,11 +87,19 @@ for release tags (`vMAJOR.MINOR.PATCH`).
  while preserving every response shape and the revocation-before-lookup
  order.
 - Security: the widget cache-bust endpoint (`POST /api/config/:widgetId/cache-bust`)
- now compares the `X-Api-Key` header in constant time
- (`crypto.timingSafeEqual` with a length guard) and fails closed if the
- expected key is unset, instead of the previous plaintext compare with a
- fail-open `expected &&` shape — the widget's key check now matches the
- timing-safe discipline used by the server and collector secret gates.
+  now compares the `X-Api-Key` header in constant time
+  (`crypto.timingSafeEqual` with a length guard) and fails closed if the
+  expected key is unset, instead of the previous plaintext compare with a
+  fail-open `expected &&` shape — the widget's key check now matches the
+  timing-safe discipline used by the server and collector secret gates.
+- Release pipeline: all five Docker images are now built **amd64-only**. The
+  QEMU-emulated `linux/arm64` builds hung up to ~5h (widget first, then the
+  all-in-one pgvector source compile) and exhausted the runner disk on a
+  private repo's paid minutes; `setup-qemu` is removed, every matrix entry
+  publishes `linux/amd64`, and the build matrix is un-serialized to
+  `max-parallel: 2`. arm64 users can self-build locally (the Dockerfiles are
+  cross-build-safe) or attach a self-hosted arm64 runner — see
+  `docs/DEPLOYMENT.md`'s arm64 note.
 
 ## [v0.22.0] — 2026-08-30
 
