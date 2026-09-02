@@ -63,7 +63,7 @@ Full feature guide: [docs/USAGE.md](docs/USAGE.md).
 ollama pull gemma4:latest
 
 # 2. Clone and install
-git clone git@github.com:simooooone/simoschat-improved.git simmetric-chat
+git clone git@github.com:studio-simos/simmetric simmetric-chat
 cd simmetric-chat
 pnpm install
 
@@ -81,7 +81,12 @@ pnpm --filter server db:seed   # optional — see note below
 pnpm dev
 ```
 
-Open **http://localhost:5173**. A setup wizard (SetupWizard) renders when `setupWizardMode === 'active'` on a fresh DB. Two admin paths exist: run `pnpm --filter server db:seed` to seed roles, permissions, templates, and an `admin` / `admin123` account (Path A), or skip seeding and let the server auto-seed the bootstrap admin on startup (`SEED_BOOTSTRAP_ADMIN=true` by default; credentials from `SEED_ADMIN_USERNAME`/`SEED_ADMIN_PASSWORD`/`SEED_ADMIN_EMAIL`, defaults `admin` / `admin123` / `admin@example.com`). In both cases the seeded account carries `mustChangePassword=true`, so on first login `ForcePasswordChange.tsx` blocks the app until you set a new password via `/api/auth/set-initial-password`. Self-service registration is closed by default; additional users are created by an admin from Settings.
+Open **http://localhost:5173**
+User admin
+Password: admin123
+Change password and welcome to the chatbot
+
+A setup wizard (SetupWizard) renders when `setupWizardMode === 'active'` on a fresh DB. Two admin paths exist: run `pnpm --filter server db:seed` to seed roles, permissions, templates, and an `admin` / `admin123` account (Path A), or skip seeding and let the server auto-seed the bootstrap admin on startup (`SEED_BOOTSTRAP_ADMIN=true` by default; credentials from `SEED_ADMIN_USERNAME`/`SEED_ADMIN_PASSWORD`/`SEED_ADMIN_EMAIL`, defaults `admin` / `admin123` / `admin@example.com`). In both cases the seeded account carries `mustChangePassword=true`, so on first login `ForcePasswordChange.tsx` blocks the app until you set a new password via `/api/auth/set-initial-password`. Self-service registration is closed by default; additional users are created by an admin from Settings.
 
 > Services: frontend `:5173` · server `:3000` · collector `:3210` · widget `:3211`.
 
