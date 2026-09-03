@@ -14,7 +14,7 @@ Three long-running services cooperate over HTTP:
 | Collector | `packages/collector` | 3210 | Document parse, chunk, embed, vector-store write, status callback; no Prisma/ORM access |
 | Widget service | `packages/widget` | 3211 | Public embeddable chat widget API; serves the Preact bundle and proxies chat to the server |
 
-Two client surfaces are served alongside them: the React 19 SPA (`packages/frontend`, dev server on 5173, no Next.js) and a Tauri v2 desktop shell (`src-tauri/`) that boots the server and collector as sidecar processes and serves the frontend build (`frontendDist: ../packages/frontend/dist` in `src-tauri/tauri.conf.json`).
+Two client surfaces are served alongside them: the React 19 SPA (`packages/frontend`, dev server on 5173, no Next.js) and a Tauri v2 desktop shell (`src-tauri/`) that runs only the server as a packaged sidecar (`node ../packages/server/dist/index.js` in `src-tauri/src/lib.rs`; the collector is booted only in dev via `beforeDevCommand`) and serves the frontend build (`frontendDist: ../packages/frontend/dist` in `src-tauri/tauri.conf.json`).
 
 The overall style is layered inside the server (routes → middleware → filters → agent/services), strategy-patterned at every external boundary (LLM providers, embedding providers, vector stores), and gracefully degrading for every optional dependency (pg-boss, Redis, collector, enterprise plugin). Fail-loud is reserved for license/enterprise-binary situations and invalid environment configuration.
 
@@ -50,7 +50,7 @@ graph TD
 Key boundary rules (all verified in the source):
 
 - Each package's `package.json` declares exactly one workspace dependency: `@simmetric-chat/shared: workspace:*`. The server additionally declares `@simmetric-chat/enterprise` as an **optional peer dependency** resolved at runtime (see the enterprise seam below); `pnpm-workspace.yaml` disables `autoInstallPeers` so `pnpm install` succeeds without the private package.
-- Server and collector never import each other's code. All server-to-collector calls are HTTP with the shared secret on the `X-Collector-Secret` header (23 call sites across `routes/documents.ts`, `routes/archiveImport.ts`, `services/hybridSearchService.ts`, `services/wikiEmbeddingService.ts`, `agent/builtinSkills.ts`, and others). The collector calls back only via `PUT ${SERVER_URL}/api/documents/:documentId/status` and archive-import callbacks (`packages/collector/src/routes/ingest.ts`, `notifyServerStatus`).
+- Server and collector never import each other's code. All server-to-collector calls are HTTP with the shared secret on the `X-Collector-Secret` header (17 occurrences across 9 production files: `routes/documents.ts`, `routes/archiveImport.ts`, `services/archiveImportService.ts`, `services/wikiEmbeddingService.ts`, `services/vectorCleanupJob.ts`, `routes/system.ts`, `agent/builtinSkills.ts`, `agent/memoryService.ts`, and `agent/memoryRetrieval.ts`). The collector calls back only via `PUT ${SERVER_URL}/api/documents/:documentId/status` and archive-import callbacks (`packages/collector/src/routes/ingest.ts`, `notifyServerStatus`).
 - The collector has zero Prisma/ORM usage. Its only Postgres touchpoint is the pgvector provider (`packages/collector/src/services/pgVectorProvider.ts`), which opens a raw `pg.Pool` and queries directly — used only when pgvector is the selected vector-store strategy.
 - The shared package's `loadRootEnv()` (`packages/shared/src/config/loadEnv.ts`) is Node-only; the browser bundles must not value-import it (guarded by `packages/shared/src/__tests__/loadEnv.test.ts`).
 
@@ -130,10 +130,10 @@ Within the server, large domain files are split behind byte-identical facades th
 2. The DLP filter chain runs its inlet pass (`runInlet` in `packages/server/src/filters/filterChain.ts`); matches are post-processed by `services/dlpFilter.ts` + `services/dlpPatternService.ts`.
 3. The request enters the ReAct orchestrator (`packages/server/src/agent/orchestrator.ts`, `runAgentStreaming`): resolve provider config, inject plan-mode context if active, then run the skill/tool loop (hard backstop `MAX_ITERATIONS_BACKSTOP = 50`, budget watchdogs in `services/agentBudgetService.ts`).
 4. When the `rag_search` skill fires, `hybridSearch()` (`packages/server/src/services/hybridSearchService.ts`) runs two legs in parallel:
-   - **Vector leg** — HTTP POST to the collector (`COLLECTOR_URL`) with `X-Collector-Secret`. An embedding-model mismatch guard can skip this leg entirely (FTS-only degradation).
+   - **Vector leg** — HTTP POST to the collector (`COLLECTOR_URL`, `/api/ingest/query`, no secret header — the collector route deliberately requires no auth there; see `packages/collector/src/routes/ingest.ts:438`). An embedding-model mismatch guard can skip this leg entirely (FTS-only degradation).
    - **Full-text leg** — `ftsSearch()` (`packages/server/src/services/ftsService.ts`) over a 7-locale concatenated `tsvector` in Postgres.
 5. Results fuse via Reciprocal Rank Fusion (`RRF_K = 60` with a deterministic tiebreaker), then a **metadata backstop** (`applyMetadataBackstop`) re-filters against the authoritative `documents` table so `documentTypes`/`dateFrom`/`dateTo` are correct on every vector provider. An optional reranker over-fetches via `services/rerankService.ts`.
-6. LLM tokens stream through the per-provider parsers in `packages/server/src/agent/llmStreaming/` (ollama, openai, anthropic, gemini). SSE events are emitted as `token`, `status`, `citations`, `done` (carries `modelUsed`/`providerUsed`), and `error`.
+6. LLM tokens stream through the per-provider parsers in `packages/server/src/agent/llmStreaming/` (ollama, openai, anthropic, gemini). SSE events are emitted as `token`, `status`, `citations`, `done` (carries `model`/`providerType`; `modelUsed`/`providerUsed` exist only in persisted message metadata — the frontend maps `data.model` → `modelUsed`), and `error`.
 7. With Redis configured, SSE fan-out across multiple server instances uses pub/sub; without it, fan-out is in-process only.
 
 Frontend state follows three tiers: REST server state via TanStack Query (`packages/frontend/src/queries/`), SSE streams via `fetchEventSource` + refs (`hooks/useChatStreaming.ts`), and UI state via React Context (`contexts/` — Chat, Theme, EnterpriseModules, PageMeta). There is no Zustand; `src/stores/` does not exist.
@@ -181,7 +181,9 @@ packages/
                 across all packages.
   server/       Express 5 API. routes/ (one file per domain), middleware/,
                 filters/, agent/ (ReAct + MCP + skills), services/ (business
-                logic), ocr/, prisma/ (schema + templates). The monolith
+                logic), ocr/, src/templates/ (seed templates, copied to
+                dist/templates by build + Dockerfile.server), prisma/
+                (schema + migrations only). The monolith
                 concentrates all relational state here.
   collector/    Parse/chunk/embed pipeline. Deliberately dependency-free of
                 the ORM so it can be deployed, scaled, and air-gapped

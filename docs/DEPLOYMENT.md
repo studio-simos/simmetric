@@ -193,7 +193,7 @@ The loader's `require.resolve("@simmetric-chat/enterprise")` walks `node_modules
 curl -H "Authorization: Bearer <admin-jwt>" http://localhost:3000/api/enterprise/modules
 ```
 
-Expected: `200` with the module manifest (SSO, audit log, branding, backup). `404` = plugin did not load (check the extracted path); `402` = license missing/invalid/expired.
+Expected: `200` with the module manifest (SSO, audit log, branding, backup). `404` = plugin did not load (check the extracted path); `401` = bad/missing admin token (the route mounts via `mountProtected`, which applies only `authMiddleware` — 402 appears only on license-gated feature routes via `middleware/license.ts`, not on this check).
 
 Loader failure policy: plugin absent (`MODULE_NOT_FOUND`) is graceful — the server logs "Community build — no enterprise package found" at info level and continues. A broken install (the package resolves but `register(ctx)` throws) is fail-loud — `process.exit(1)`, never a silent downgrade for a paying customer.
 
@@ -220,7 +220,7 @@ For Coolify the same mount uses an absolute host path (`${ENTERPRISE_PLUGIN_PATH
 No automated rollback exists in CI — roll back by redeploying a known-good artifact:
 
 1. Compose/GHCR deployments: pin the previous image tag in your compose override or pull it explicitly, e.g. `docker pull ghcr.io/<owner>/simmetric-chat-server:<previous-version>`, then `docker compose up -d`.
-2. Self-built deployments: rebuild from the previous git tag (`git checkout v0.20.0 && docker compose -f docker/docker-compose.yml build && docker compose up -d`).
+2. Self-built deployments: rebuild from the previous git tag (`git checkout v0.21 && docker compose -f docker/docker-compose.yml build && docker compose up -d`).
 3. Coolify: redeploy the previous successful deployment from the Coolify UI (it keeps deployment history per resource).
 4. Database migrations are additive-only by policy (see [docs/MIGRATION_SAFETY.md](MIGRATION_SAFETY.md)); a rollback that reverts code does not revert applied migrations — verify schema compatibility of the older image before redeploying.
 
@@ -232,7 +232,7 @@ No external monitoring/telemetry service is integrated (`DISABLE_TELEMETRY=true`
 
 - **Container healthchecks** (wget probes): server `http://localhost:3000/api/health` (30s interval, 40s start period), collector `:3210/api/health`, widget `:3211/health`, Postgres `pg_isready`, Redis `redis-cli ping`. Compose `depends_on: condition: service_healthy` gates startup order.
 - **`/api/health` endpoint** returns `{"status":"ok","checks":{"database":true,...}}` — suitable for external uptime probes and load-balancer checks.
-- **Structured logs**: the server logs JSON via winston (`LOG_LEVEL` env); all services log to stdout for `docker compose logs -f <service>`.
+- **Structured logs**: the server logs via winston in a text format (`2026-01-01 12:00:00 [info]: message {"meta":"json"}` — only the metadata object is JSON) with `LOG_LEVEL` env; all services log to stdout for `docker compose logs -f <service>`.
 - **Teardown signals**: graceful shutdown stops plugin schedulers and shutdown callbacks before `prisma.$disconnect()`.
 
 <!-- VERIFY: If you front the stack with an external uptime checker, target the /api/health endpoint through your reverse proxy; no built-in metrics endpoint (Prometheus/OpenTelemetry) exists. -->

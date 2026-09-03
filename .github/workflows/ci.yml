@@ -3,6 +3,16 @@ name: CI
 on:
   push:
     branches: [main]
+    # Docs-only pushes skip CI (markdown changes cannot affect build/tests).
+    # Mixed commits (code + docs) always run CI.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE*"
+      - "THIRD_PARTY_NOTICES.md"
+      - "SECURITY.md"
+      - "CLA.md"
+      - ".gitignore"
   pull_request:
     branches: [main]
 

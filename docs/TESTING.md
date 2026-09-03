@@ -74,7 +74,7 @@ All commands run from the repository root.
 - **Template DB lifecycle:**
   1. `jest.globalSetup.js` drops and recreates `simmetricchat_test_template`, runs `prisma migrate deploy` and `prisma db seed` against it (roles, permissions, system config).
   2. `jest.setup.integration.ts` derives a per-test-file worker DB from the SHA-256 hash of the test file path (`simmetricchat_test_<16 hex chars>`), clones the template via `CREATE DATABASE ... TEMPLATE`, and overrides `process.env.DATABASE_URL`.
-  3. `jest.globalTeardown.js` drops the template and residual `simmetricchat_test_%` worker databases.
+  3. `jest.globalTeardown.js` drops the template database; its residual-worker sweep is a no-op due to a naming mismatch — it queries `datname LIKE 'simmetricchat_test_worker_%'`, but worker DBs are actually named `simmetricchat_test_<16 hex chars>` (SHA-256 of the test file path, per `jest.setup.integration.ts` `getDbNameForFile`), so the sweep never matches them. Interrupted runs therefore leave worker DBs behind (see Troubleshooting).
 - **No-DB subset:** `npx jest --config jest.config.integration-nodb.js -- migrateGuard.integration` runs integration-pattern tests that need no database (no global setup/teardown; Prisma mocked at the test level).
 - **Helpers:** `src/__tests__/helpers/integration.ts` exports `getTestApp()` (fresh app after `jest.resetModules()`), `getTestPrisma()`, and `clearTestData()` (per-table DELETE over the mutable tables).
 - Run integration tests **sequentially**: suites can read the cached `getEnv()` `DATABASE_URL` instead of the per-worker URL, which weakens isolation (known open debt).

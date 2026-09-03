@@ -81,7 +81,15 @@ The seeded account carries `mustChangePassword=true`, so on first login you are 
 **Embed a widget on your site** (Enterprise): create a widget from Settings, then add the embed snippet to your site:
 
 ```html
-<script src="http://localhost:3211/widget.js" data-workspace="<workspace-id>"></script>
+<div
+  id="simmetric-chat-widget"
+  data-widget-id="<widget-id>"
+  style="position: fixed; bottom: 0; right: 0; width: 400px; height: 600px; z-index: 9999; border: none; pointer-events: none;"
+></div>
+<script
+  data-target="simmetric-chat-widget"
+  src="http://localhost:3211/widget/<widget-id>.js"
+></script>
 ```
 
 See [docs/WIDGET.md](docs/WIDGET.md) for the full integration guide.

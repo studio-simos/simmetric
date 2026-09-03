@@ -209,7 +209,7 @@ pnpm i18n:check       # if strings changed
 pnpm license:check-self
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every push and PR: `lint-and-typecheck` (includes `version:check` + `changelog:check`), `test-unit`, `test-airgap` (unit suite re-run with `NETWORK_EGRESS_BLOCKED=1`), `migration-safety-check`, `license-policy-check`, `test-e2e` (Playwright against `pgvector/pgvector:pg16`), `build` (with a dist-freshness check), and `security` (gitleaks scan).
+CI (`.github/workflows/ci.yml`) runs on push to `main` and PRs targeting `main`: `lint-and-typecheck` (includes `knip` + `changelog:check`), `test-unit`, `test-airgap` (unit suite re-run with `NETWORK_EGRESS_BLOCKED=1`), `migration-safety-check`, `license-policy-check`, `test-e2e` (Playwright against `pgvector/pgvector:pg16`), `build` (with a dist-freshness check), and `security` (gitleaks scan).
 
 ## See also
 

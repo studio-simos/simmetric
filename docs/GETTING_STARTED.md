@@ -94,9 +94,9 @@ Alternatively, use any existing PostgreSQL 16 instance and point `DATABASE_URL` 
 ### 4. Initialize the database
 
 ```bash
-pnpm db:generate          # prisma generate + the Prisma 7 / pnpm symlink fix (scripts/fix-prisma-pnpm.cjs)
+pnpm db:generate          # prisma generate + the Prisma 7 / pnpm symlink fix (packages/server/scripts/fix-prisma-pnpm.cjs)
 pnpm --filter server db:migrate   # applies all pending migrations (prisma migrate dev)
-pnpm --filter server db:seed      # optional — seeds roles, permissions, templates, config, and the admin account
+pnpm --filter server db:seed      # optional — seeds RBAC roles+permissions, menu sections, MCP catalog, provider presets, system config, widget-service account, admin + demo user (templates are seeded at server boot)
 ```
 
 Notes:
@@ -217,7 +217,7 @@ ollama pull gemma4:latest      # if not
 
 ### `pnpm db:generate` fails with a `.prisma` symlink error
 
-Prisma 7 + pnpm needs a manual symlink inside `@prisma/client`. The `db:generate` script already applies the fix (`scripts/fix-prisma-pnpm.cjs`) — if it still fails, re-run `pnpm install` and then `pnpm db:generate` from the repo root.
+Prisma 7 + pnpm needs a manual symlink inside `@prisma/client`. The `db:generate` script already applies the fix (`packages/server/scripts/fix-prisma-pnpm.cjs`) — if it still fails, re-run `pnpm install` and then `pnpm db:generate` from the repo root.
 
 ### Setup wizard does not appear (login page shows instead)
 

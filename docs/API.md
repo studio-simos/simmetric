@@ -127,12 +127,12 @@ Mount wiring lives in `createApp()` in `packages/server/src/index.ts`. Several r
 | POST | `/api/system/ocr/prewarm` | Admin | Warm OCR engines |
 | GET | `/api/system/settings` | Auth | Read system settings |
 | PUT | `/api/system/settings` | Auth (admin validator on write) | Partial-success settings update (`{ updated, rejected }`) |
-| GET | `/api/system/settings/embedding-config` | Auth | Embedding configuration |
-| GET | `/api/system/settings/vector-db-config` | Auth | Vector DB configuration |
+| GET | `/api/system/settings/embedding-config` | Public (collector service) | Embedding configuration |
+| GET | `/api/system/settings/vector-db-config` | Public (collector service) | Vector DB configuration |
 | PUT | `/api/system/chat-retention` | Auth (audited) | Chat message retention days (confirm-data-loss contract) |
-| GET | `/api/system/dlp/patterns` | Auth (`filters:manage`) | List DLP patterns |
-| POST/PUT/DELETE | `/api/system/dlp/patterns[...]` | Auth (`filters:manage`) | DLP pattern CRUD |
-| POST | `/api/system/dlp/patterns/:id/test` | Auth (`filters:manage`) | Test a pattern against sample text |
+| GET | `/api/system/dlp/patterns` | Auth (`admin:settings`) | List DLP patterns |
+| POST/PUT/DELETE | `/api/system/dlp/patterns[...]` | Auth (`admin:settings`) | DLP pattern CRUD |
+| POST | `/api/system/dlp/patterns/:id/test` | Auth (`admin:settings`) | Test a pattern against sample text |
 | GET | `/api/system/analytics/tokens` | Admin | Token usage analytics |
 | GET | `/api/system/analytics/models` | Admin | Per-model usage |
 | GET | `/api/system/analytics/top-users` | Admin | Top users by usage |
@@ -202,7 +202,7 @@ All chat routes are mounted under `/api/workspaces` (the chat routers and the wo
 | GET | `/api/workspaces/:workspaceId/chats/:chatId/messages` | List messages of a chat |
 | PUT | `/api/workspaces/:workspaceId/chats/:chatId` | Rename chat |
 | PATCH | `/api/workspaces/:workspaceId/chats/:chatId/model` | Change chat model |
-| PATCH | `/api/workspaces/:workspaceId/chats/:chatId/link-archive` | Link/unlink an archive |
+| PATCH | `/api/workspaces/:workspaceId/chats/:chatId/archive` | Link/unlink an archive |
 | PUT | `/api/workspaces/:workspaceId/chats/:chatId/move` | Move chat between folders |
 | POST | `/api/workspaces/:workspaceId/chats/:chatId/pin` | Pin/unpin chat |
 | PUT/DELETE | `/api/workspaces/:workspaceId/chats/:chatId/messages/:messageId` | Edit/delete a message |

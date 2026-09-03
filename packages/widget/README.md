@@ -90,7 +90,7 @@ Key internal modules (not exported publicly, but relevant for development):
 | `src/routes/loader.ts` | Widget loader JS and iframe HTML routes (incl. storage handshake) |
 | `src/routes/lead.ts` | Lead capture submission route |
 | `src/widget/hooks/useWidgetChat.ts` | SSE streaming hook for Preact client (token/status/citations/done/error) + loader storage handshake |
-| `src/widget/hooks/useWidgetConfig.ts` | Config reading hook (data-attributes → CSS custom properties) |
+| `src/widget/hooks/useWidgetConfig.ts` | Config reading hook (parses the JSON `#widget-config` block's `textContent` — its only DOM input) |
 | `src/widget/hooks/useTriggers.ts` | Auto-open and exit-intent trigger hook (postMessage-driven) |
 | `src/widget/i18n/index.ts` | i18next init module (`initWidgetI18n(locale)`) — fresh instance per call, 8 statically-imported locale resources, `t()` helper; locale is server-resolved (`?locale=` → Accept-Language → config `fallbackLocale` → legacy scalars → `"en"`) and applied via `useWidgetConfig` |
 
@@ -136,7 +136,7 @@ src/
 ├── widget/               # Preact UI source (NOT React)
 │   ├── index.tsx         # UI entry point — mounts App into #widget-root
 │   ├── App.tsx           # Root component, config reading, state coordination
-│   ├── index.css         # Tailwind CSS custom properties and dark mode
+│   ├── index.css         # Tailwind CSS custom properties
 │   ├── i18n/             # i18next setup + 8 locale resources (en/de/es/fr/it/ru/zh/pt)
 │   ├── components/       # Chat UI components (ChatFab, ChatPanel, InputBar, etc.)
 │   └── hooks/            # Preact hooks (useWidgetChat, useWidgetConfig, useTriggers)
@@ -217,7 +217,7 @@ Per WID-03 D-05/D-06, chat message history and the session token are stored on t
 
 Keys (defined by `sessionKey()`/`messagesKey()`/`consentKey()`/`leadSubmittedKey()` in `src/routes/loader.ts`):
 
-- `sc-widget-<widgetId>-session` — cached session JWT (`{ token }`), reused on reload so a new session is **not** created (prevents blow-through of the session limit). Read before `POST /api/sessions` with a 500 ms timeout.
+- `sc-widget-<widgetId>-session` — cached session JWT (`{ token }`), reused on reload so a new session is **not** created (prevents blow-through of the session limit). Read before `POST /api/sessions` with a 1500 ms timeout.
 - `sc-widget-<widgetId>-messages` — chat message history, persisted only on `done`/`error`/unmount (D-05 — never per-token, to avoid postMessage flooding on multi-hundred-token SSE responses) and restored on reload so the conversation survives a page navigation.
 - `sc-widget-<widgetId>-consent` — visitor consent flag, set when the user accepts the chat (`ChatPanel.tsx`)
 - `sc-widget-<widgetId>-lead-submitted` — flag preventing duplicate lead submissions in the same session (`ChatPanel.tsx`)
@@ -237,7 +237,7 @@ Rate limiting is enforced at two layers — widget middleware and server-side (D
 | `widgetLeadLimiter` | Per IP | 3 / 30 | 1 hour | IP |
 | Server session counters | Per session | 20 messages (hourly) / 5 conversations (daily) | Session-lifetime (session expires after 24h) | DB counters on `WidgetSession` (`hourlyRemaining` / `dailyRemaining` returned to the client; the server rejects with 429 when a counter is exhausted) |
 
-Development (NODE_ENV !== "production") applies a 10x multiplier to middleware limits. Server-side limits are checked in the chat route before SSE proxying starts.
+Development (NODE_ENV !== "production") raises middleware limits to the dev values in the table above — a 10x multiplier for the daily/session/lead limiters, but ~6.7x for `widgetChatLimiter` (30/min prod → 200/min dev). Server-side limits are checked in the chat route before SSE proxying starts.
 
 Since v0.19, `widgetChatLimiter` and `widgetDailyMessageLimiter` use a **Redis-backed store** (`rate-limit-redis`, prefix `rl:`) when Redis is available, and their `max` is a function that reads `rateLimitPerMinute` / `sessionLimitPerDay` from the Redis widget-config cache (`widget:config:{widgetId}`) — falling back to the global defaults (30/5 prod, 200/50 dev) on cache miss or Redis unavailability. The limiters run **before** `sessionMiddleware`, so they read Redis directly rather than `req.widgetConfig`. The other limiters remain in-memory (`express-rate-limit` default store).
 

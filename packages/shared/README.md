@@ -40,17 +40,17 @@ Domain interfaces for entities used across the monorepo. Defined in `src/types/i
 
 ### Schemas (`src/schemas/`)
 
-Zod schemas for request/response validation. Each schema file exports both the `z.object()` schema and an inferred `*Input` type. 30 schema files total:
+Zod schemas for request/response validation. Many schema files export both the `z.object()` schema and an inferred `*Input` type (some define their inferred types privately without exporting them). 30 schema files total:
 
 - `auth.schema.ts` — `loginSchema`, `registerSchema`, `adminRegisterSchema`, `changePasswordSchema`, `setInitialPasswordSchema`, `updateUserSchema`
 - `archive.schema.ts` — `createArchiveSchema`, `updateArchiveSchema`, `createPageSchema`, `updatePageSchema`, `archiveSearchQuerySchema`, `archiveConfigSchema`, `archiveSchemaTemplateSchema`, `updateArchiveConfigSchema`, `copyToArchiveRequestSchema`, `copyToArchiveBatchRequestSchema`, `archiveLocalLLMConfigSchema`
-- `backup.schema.ts` — `createBackupDestinationSchema`, `updateBackupDestinationSchema`, `backupDestinationIdParamSchema`, `restoreSelectiveSchema`, `restoreRequestSchema`, `restoreDryRunResponseSchema`, `restoreResponseSchema`, `backupLogIdParamSchema`, `backupLogStatusSchema`, `backupLogListQuerySchema`, `backupLogsResponseSchema`, plus per-destination config schemas (local, s3, s3_compatible, google_drive, dropbox, sftp, ftp, email)
-- `backupJob.schema.ts` — `createBackupJobSchema`, `updateBackupJobSchema`, `toggleBackupJobSchema`, `backupJobIdParamSchema`, `frequencySchema`
+- `backup.schema.ts` — `createBackupDestinationSchema`, `updateBackupDestinationSchema`, `backupDestinationIdParamSchema`, `restoreSelectiveSchema`, `restoreRequestSchema`, `restoreDryRunResponseSchema`, `restoreResponseSchema`, `backupLogIdParamSchema`, `backupLogStatusSchema`, `backupLogListQuerySchema`, `backupLogsResponseSchema`, plus per-destination config schemas (local, s3, s3_compatible, google_drive, dropbox, sftp, ftp, email) and backup-job schemas
 - `chat.schema.ts` — `sendMessageSchema`, `createChatSchema`, `updateChatSchema`, `renameChatSchema`, `updateChatModelSchema`, `linkArchiveSchema`, `updateWorkspaceAgentConfigSchema`, `agentPlanStepSchema`, `agentPlanSchema`, `createFolderSchema`, `updateFolderSchema`, `moveChatSchema`, `chatExportQuerySchema`, `chatImportPreviewSchema`, `editMessageSchema`, `chatRequestSchema`
 - `chatRetention.schema.ts` — `chatRetentionSchema` (requires `confirmDataLoss: true` for the chat retention write contract)
 - `config.schema.ts` — `setConfigSchema`, `bulkSetConfigSchema`, `configKeySchema`
 - `document.schema.ts` — `uploadDocumentSchema`, `processDocumentSchema`, `youtubeTranscriptSchema`, `documentTypeSchema`
-- `entity.schema.ts` — Response-shaped schemas: `userResponseSchema`, `projectResponseSchema`, `workspaceResponseSchema`, `chatResponseSchema`, `chatMessageResponseSchema`, `documentResponseSchema`, `apiKeyResponseSchema`, `apiKeyCreateResponseSchema`, `eventLogResponseSchema`
+- `dlp.schema.ts` — DLP pattern configuration: `createDlpPatternSchema`, `updateDlpPatternSchema`, `testPatternSchema`, `dlpPatternIdParamSchema`
+- `env.schema.ts` — Shared env-config surface (server + collector): `embeddingProviderSchema`, `vectorDbProviderSchema`, `ollamaKeepAliveSchema`, plus `EMBEDDING_PROVIDERS` / `VECTOR_DB_PROVIDERS` constant lists
 - `filter.schema.ts` — `updateFilterSchema` (filter plugin admin API, Phase 100)
 - `graphWiki.schema.ts` — `graphWikiTriggerSchema` (POST /api/synthesis/trigger-graph-wiki request shape)
 - `ingest.schema.ts` — Collector↔server ingestion contract: `IngestChunkSchema`, `IngestResponseSchema`, `IngestStatusCallbackSchema`, `ReembedChunkSchema`, `ReembedRequestSchema`, `WikiPagesIngestSchema`, `IngestQueryRequestSchema`, `IngestDeleteRequestSchema`, `IngestUploadBodySchema`, `RerankRequestSchema`, `archivePageParseRequestSchema`, `archivePageParseCallbackSchema`, `safeIdSchema`
@@ -69,7 +69,7 @@ Zod schemas for request/response validation. Each schema file exports both the `
 - `system.schema.ts` — `initializeSchema`
 - `toolCall.schema.ts` — `nativeToolCallSchema` (normalized ollama-js `tool_calls[]` dispatch shape)
 - `uploadDraft.schema.ts` — Upload draft pipeline (Phase 68): `createUploadDraftSchema`, `createUploadDraftUrlSchema`, `assignDraftSchema`, `renameUploadSchema`, `draftDestinationSchema`, `draftMimeTypeSchema`, `UPLOAD_DRAFT_STATUSES`, `uploadDraftStatusSchema`
-- `widget.schema.ts` — `createWidgetSchema`, `updateWidgetSchema`, `widgetChatRequestSchema`, `widgetSessionCreateSchema`, `widgetConfigResponseSchema`, `widgetSessionResponseSchema`, `widgetSessionIncrementSchema`, `widgetSearchRequestSchema`, `widgetTriggerConfigSchema`, `widgetLeadCaptureSchema`, `widgetLeadSubmitSchema`, `widgetLeadExportQuerySchema`, `widgetAnalyticsQuerySchema`; also `WIDGET_LOCALES` / `widgetLocaleSchema` (8 locales: en, de, es, fr, it, ru, zh, pt — mirroring the frontend `ALL_LANGUAGES`) and the pure read-side helpers `resolveWidgetTexts()` / `resolveSuggestedQuestions()` (exact locale → fallbackLocale → legacy → en resolution chain)
+- `widget.schema.ts` — `createWidgetSchema`, `updateWidgetSchema`, `widgetChatRequestSchema`, `widgetSessionCreateSchema`, `widgetConfigResponseSchema`, `widgetSessionResponseSchema`, `widgetSessionIncrementSchema`, `widgetSearchRequestSchema`, `widgetTriggerConfigSchema`, `widgetLeadCaptureSchema`, `widgetLeadSubmitSchema`, `widgetLeadExportQuerySchema`, `widgetAnalyticsQuerySchema`; also `WIDGET_LOCALES` / `widgetLocaleSchema` (8 locales: en, de, es, fr, it, ru, zh, pt — mirroring the frontend `ALL_LANGUAGES`) and the pure read-side helpers `resolveWidgetTexts()` / `resolveSuggestedQuestions()` (merge order is `{ ...texts.en, ...texts[fallbackLocale], ...texts[locale] }`, then legacy scalar defaults are applied after the blob — so exact locale > fallbackLocale > en > legacy scalars)
 - `wiki.schema.ts` — `wikiQueryParamsSchema`, `wikiWritePreviewSchema`, `wikiWriteApproveRejectSchema`, `wikilinkResolveSchema`, `wikiDistillSchema`, `mergePagesSchema`
 - `workspace.schema.ts` — `createWorkspaceSchema`, `updateWorkspaceSchema`, `permanentDeleteWorkspacesSchema`
 
@@ -85,12 +85,13 @@ Zod schemas for request/response validation. Each schema file exports both the `
 
 ## Usage
 
-Import from the package barrel — types, schemas, and constants are all re-exported from `src/index.ts`:
+Import from the package barrel — types, schemas, and most constants are re-exported from `src/index.ts` (note: `FEATURE_FLAGS` and `LICENSE_TIERS` are NOT re-exported through `constants/index.ts`; import them from `@simmetric-chat/shared/constants/license` directly):
 
 ```ts
 import { z } from "zod";
 import { loginSchema, type LoginInput } from "@simmetric-chat/shared";
-import { PERMISSION_NAMES, FEATURE_FLAGS } from "@simmetric-chat/shared";
+import { PERMISSION_NAMES } from "@simmetric-chat/shared";
+import { FEATURE_FLAGS } from "@simmetric-chat/shared/constants/license";
 import { sanitizeFileName } from "@simmetric-chat/shared";
 
 // Validate with safeParse (never parse) so bad input returns 400, not 500
@@ -104,7 +105,7 @@ if (result.success) {
 
 - **No business logic** — This package contains only types, schemas, and constants. It must never import runtime dependencies other than `zod`.
 - **No circular dependencies** — `shared` is the leaf node in the monorepo dependency graph. It must not import from `server`, `collector`, `frontend`, or `widget`.
-- **Barrel exports** — `src/index.ts` re-exports from `types`, `schemas`, `constants`, and `utils`. Subdirectories also maintain `index.ts` barrel files.
+- **Barrel exports** — `src/index.ts` re-exports from `types`, `schemas`, `constants`, and `utils`. The `types/`, `schemas/`, and `constants/` subdirectories maintain their own `index.ts` barrel files (`src/utils/` has none — the top-level barrel exports `./utils/fileName` directly).
 - **Schema naming** — Files use `camelCase.schema.ts` (e.g., `auth.schema.ts`). Inferred types use the schema name without "Schema" plus an `Input` suffix (e.g., `loginSchema` -> `LoginInput`).
 
 ## How to Add New Shared Types or Schemas
@@ -129,7 +130,7 @@ shared <- frontend
 shared <- widget
 ```
 
-The Turborepo build pipeline enforces this: `shared` must build before any consuming package. Server, collector, and widget map `@simmetric-chat/shared` to `shared/dist/index.js` (tsconfig + jest), so **`pnpm --filter @simmetric-chat/shared build` is required** before their build/lint/typecheck/test runs. The frontend aliases shared **source** (`../shared/src/index.ts` in vite + jest) and does not need the build. Turbo caches downstream tasks on `^build` — after editing `src/`, rebuild shared or run via turbo, or server tests hit a stale `dist/`.
+The Turborepo build pipeline enforces this: `shared` must build before any consuming package. Server and collector jest configs map `@simmetric-chat/shared` to `shared/dist/index.js`, while the widget's jest config maps to shared **source** (`../shared/src/index.ts`); at runtime, dist resolution happens via `node_modules` (no tsconfig `paths` mapping). **`pnpm --filter @simmetric-chat/shared build` is required** before server/collector build/lint/typecheck/test runs. The frontend aliases shared **source** (`../shared/src/index.ts` in vite + jest) and does not need the build. Turbo caches downstream tasks on `^build` — after editing `src/`, rebuild shared or run via turbo, or server tests hit a stale `dist/`.
 
 ## Testing
 

@@ -78,7 +78,7 @@ src/
 | PDF | `pdf-parse` | Text extraction. Vision OCR is **server-side**; the collector receives an `ocrMode` signal (`auto` \| `vision` \| `skip`) and routes accordingly. Image-only PDFs return empty text + `ocrSkipped` metadata (graceful degradation) |
 | DOCX | `officeparser`, `mammoth` | officeparser first, mammoth as fallback |
 | PPTX | `officeparser` | Slide content concatenated in presentation order |
-| XLSX | `xlsx` (`node-xlsx`) | Sheet names preserved as `=== Sheet: <name> ===` headers |
+| XLSX | `xlsx` | Sheet names preserved as `=== Sheet: <name> ===` headers |
 | TXT / MD / CSV | Native `Buffer` | Read as UTF-8 plain text |
 | YouTube URL | `youtube-transcript-plus` | Extracts transcript from the 11-char video ID |
 
@@ -101,7 +101,6 @@ The collector also hosts a CrossEncoder reranker (`src/services/reranker.ts`) th
 
 - Model: `Xenova/bge-reranker-base` (default `RERANKER_MODEL`), loaded via `@xenova/transformers` with `quantized: true`. The `seed:reranker` script pre-populates the on-disk cache for `onnx-community/bge-reranker-v2-m3-ONNX` (~544MB int8 ONNX) — set `RERANKER_MODEL` to match whichever model you seed.
 - Scores are sigmoid-mapped logits → 0..1 probabilities; the route sorts candidates DESC by score.
-- `checkRerankerAvailability()` is an O(1) 4-file on-disk cache pre-flight (`config.json`, `tokenizer_config.json`, `tokenizer.json`, `onnx/model_quantized.onnx`) that surfaces a missing model as a structured `available: false` instead of a silent 500.
 - Cache dir resolution: `RERANKER_CACHE_DIR` → `HF_CACHE_DIR` → HF default. For air-gapped deployments, seed the cache on a networked host with `pnpm --filter collector seed:reranker` (optionally pinning `--revision <sha>` for supply-chain safety) and point `RERANKER_CACHE_DIR` outside `node_modules`.
 
 ## API summary
@@ -134,7 +133,6 @@ The collector exposes the following HTTP endpoints (all mounted under `/api`):
 | `getEmbeddingProvider()` | `src/services/embeddings.ts` | Async; resolves an `EmbeddingProvider` by model name (server config first, falls back to env) |
 | `checkEmbeddingModelAvailability()` | `src/services/embeddings.ts` | Async; O(1) file-presence pre-flight for local Xenova/HF v4 caches (returns 503-ready `EmbeddingModelAvailability`) |
 | `getReranker()` | `src/services/reranker.ts` | Async lazy singleton `CrossEncoderReranker` for the configured `RERANKER_MODEL` (cached per model name) |
-| `checkRerankerAvailability()` | `src/services/reranker.ts` | Sync O(1) 4-file cache pre-flight; returns `{ available, model, error? }` |
 | `getOllamaClient()` | `src/services/ollamaClient.ts` | Map-keyed lazy singleton factory for the official `ollama` client (cache key: `host\|timeoutMs\|auth`) |
 | `getVectorStore()` | `src/services/vectorStore.ts` | Async singleton `VectorStoreProvider` instance |
 | `getEnv()` / `clearEnvCache()` | `src/config/env.ts` | Get validated, cached environment config; `process.exit(1)` on invalid env |
@@ -185,7 +183,7 @@ Strategy pattern with the `VectorStoreProvider` interface (`addDocuments`, `sear
 | pgvector | `PgVectorProvider` | `VECTOR_DB_PROVIDER=pgvector`, runtime config URL | Wired in `getVectorStore()`: `case "pgvector"` constructs `new PgVectorProvider(url)` and lazy-provisions (`initialize()` CREATE EXTENSION/TABLE/INDEX IF NOT EXISTS). URL arrives via runtime config from server `/api/system/settings/vector-db-config`, never from collector `DATABASE_URL`. Dim-mismatch policy: BLOCK + re-embed. Reuses `toPgVector`/`parseVectorDim` from `src/utils/pgvectorHelper.ts` |
 | Chroma | `ChromaProvider` | `VECTOR_DB_PROVIDER=chroma`, `VECTOR_DB_URL` | Uses the official `chromadb` npm SDK. Intended for mid-scale deployments. Requires `VECTOR_DB_URL` at construction (same as Qdrant) |
 
-`getVectorStore()` returns a module-level singleton; switching providers requires a process restart. Mutable REST/Arrow calls are wrapped in `withRetry` (exponential backoff, 3 attempts); non-retryable errors (e.g. Qdrant 404 on a missing collection) are caught inside the retry fn so it does not loop forever.
+`getVectorStore()` returns a module-level singleton; switching providers requires a process restart. `withRetry` (exponential backoff, 3 attempts) wraps **only** the Qdrant REST calls in `vectorStore.ts` and the pgvector SQL/DDL in `pgVectorProvider.ts` — LanceDB and Chroma calls are not retried. Non-retryable errors (e.g. Qdrant 404 on a missing collection) are caught inside the retry fn so it does not loop forever.
 
 ## Environment variables
 
@@ -226,14 +224,14 @@ The collector has a dedicated Jest test suite under `src/__tests__/`:
 | `envExampleParity.test.ts` | Collector `envSchema` ↔ root `.env.example` parity tripwire (shape-only introspection; one-way schema ⊆ file enforcement) |
 | `rawEnvReads.test.ts` | Raw `process.env` channel behavioral guard — `HF_ALLOW_REMOTE_MODELS`, `XENOVA_CACHE_DIR`, `HF_CACHE_DIR`, reranker cache chain, `OPENAI_API_KEY` dual-path, `LOG_LEVEL`; turns RED if any raw read is absorbed into Zod |
 | `hfLocalEmbedding.airgap.test.ts` | HF v4 provider air-gap stance (`allowRemoteModels=false`, cache miss = hard error, dtype `q8`) |
-| `parser.test.ts` | Document parser per-format (PDF/DOCX/PPTX/XLSX/TXT/CSV/YouTube) |
+| `parser.test.ts` | `parseOffice` PPTX fallback behavior (degraded `parserFallback` result on officeparser rejection, normal passthrough, fallback warning log) |
 | `parserOcrRouting.test.ts` | `ocrMode` (`auto`/`vision`/`skip`) routing and `ocrSkipped` graceful degradation |
-| `ingest.test.ts` | Route-level behavior (auth boundary, query `dimension` exposure, reembed idempotency + shared chunk-id, status callback) |
+| `ingest.test.ts` | Route-level behavior (auth boundary, query `dimension` exposure, reembed idempotency + shared chunk-id; `notifyServerStatus` is axios-mocked, not asserted) |
 | `ingest.rerank.test.ts` | `POST /api/ingest/rerank` — no-secret 200 (NOT 401), Zod 400, DESC sort with sigmoid scores, 500 on reranker failure |
-| `reranker.airgap.test.ts` | `CrossEncoderReranker` air-gap stance — no network on score, cache miss = hard error, sigmoid arithmetic, 4-file pre-flight |
+| `reranker.airgap.test.ts` | `CrossEncoderReranker` air-gap stance — no network on score, cache miss = hard error, sigmoid arithmetic, env stance, `quantized: true` API, DESC sort (6 tests) |
 | `ollamaClient.test.ts` | `getOllamaClient()` Map-keyed lazy singleton (host\|timeoutMs\|auth cache key) |
 | `ollamaKeepAliveEnv.test.ts` | `OLLAMA_KEEP_ALIVE` Zod default (`10m`) and operator override passthrough |
-| `vectorStore.test.ts` | LanceDB/Qdrant/Chroma provider behavior (UUIDv5 point-id, 409/404 idempotency) |
+| `vectorStore.test.ts` | LanceDB/Qdrant/Chroma provider behavior (409/404 idempotency) |
 | `chromaProvider.test.ts` | `ChromaProvider` unit tests with mocked chromadb SDK |
 | `pgvectorHelper.test.ts` | `toPgVector` serializer + `parseVectorDim` dim-mismatch guard |
 | `pgVectorProvider.test.ts` | `PgVectorProvider` unit tests — mocked `pg.Pool`: table-name derivation, dim-mismatch BLOCK, upsert/search/delete SQL shape, batch cap, `close()`, optional `registerTypes` |
@@ -254,16 +252,14 @@ docker run -d -p 5433:5432 -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test \
 pnpm --filter collector test:integration
 
 # Chroma integration (gated behind CHROMA_AVAILABLE):
-docker compose -f docker/docker-compose.yml up -d chroma
+# NOTE: the `chroma` service is commented out in docker/docker-compose.yml —
+# uncomment it (and the chroma-data volume) first:
+# docker compose -f docker/docker-compose.yml up -d chroma
 CHROMA_AVAILABLE=true VECTOR_DB_URL=http://localhost:8000 \
   pnpm --filter collector test -- --config jest.config.integration.cjs --testPathPattern="chromaProvider"
 ```
 
-End-to-end document ingestion coverage is provided by the server's integration tests (`packages/server/src/__tests__/`), which exercise the full upload → parse → chunk → embed → store → callback flow against a running PostgreSQL instance:
-
-```bash
-pnpm --filter server test:integration
-```
+No end-to-end ingestion coverage exists: the server's integration tests do not exercise the full upload → parse → chunk → embed → store → callback flow — `documentCascade.integration.test.ts` notes "the collector is not available in the test environment" and skips collector-dependent steps. Collector integration tests (`test:integration`) cover only the pgvector/Chroma providers against real services.
 
 ## How it fits into the monorepo
 
