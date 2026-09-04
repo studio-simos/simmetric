@@ -2,8 +2,9 @@
 # Coolify 4.x deployment — Simmetric Chat + Enterprise plugin
 #
 # WHAT THIS FILE AUTOMATES (vs the plain docker-compose.yml):
-#   - builds all 4 app images from the repo (build.context: .. works:
-#     Coolify clones the WHOLE repository before running compose)
+#   - builds all 4 app images from the repo (build.context: . works:
+#     Coolify runs compose with --project-directory set to the CLONE ROOT,
+#     so relative paths resolve from the repo root, not from docker/
 #   - enterprise plugin mounted at /simmetric-enterprise:ro via an
 #     ABSOLUTE host path (ENTERPRISE_PLUGIN_PATH) — Coolify's clone has
 #     no sibling repo, so the relative ../../simmetric-enterprise mount
@@ -41,12 +42,12 @@ services:
   # ─── Frontend (Nginx, HTTP only — Coolify proxy terminates TLS) ───
   frontend:
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile.frontend
     # http-only nginx.conf: Coolify's Traefik terminates TLS in front, so the
     # stock 80→443 redirect would bounce users into a dead port.
     volumes:
-      - ./nginx.coolify.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/nginx.coolify.conf:/etc/nginx/conf.d/default.conf:ro
     expose:
       - "80"
     depends_on:
@@ -57,7 +58,7 @@ services:
   # ─── Server (Express API) ──────────────────────────
   server:
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile.server
     expose:
       - "3000"
@@ -128,7 +129,7 @@ services:
   # ─── Collector (Document Ingestion) ────────────────
   collector:
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile.collector
     expose:
       - "3210"
@@ -162,7 +163,7 @@ services:
   # ─── Widget Service (Embeddable Chat) ──────────────
   widget:
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile.widget
     expose:
       - "3211"
