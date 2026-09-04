@@ -57,7 +57,7 @@ Coolify mostra come obbligatorie tutte le `:?`. Genera i secret con `openssl ran
 | `APP_URL` | l'origine pubblica, es. `https://chat.example.com` |
 | `ALLOWED_ORIGINS` | stessa origine, es. `https://chat.example.com` |
 | `LICENSE_KEY` | il JWT RS256 (v. `docs/ENTERPRISE_PLUGIN.md` § License JWT shape) — **vuoto = Community** |
-| `ENTERPRISE_PLUGIN_PATH` | solo se diverso da `/opt/simmetric-enterprise` |
+| `ENTERPRISE_PLUGIN_PATH` | **rimossa** — Coolify rifiuta `${...}` nei volumi; il path è hardcoded a `/opt/simmetric-enterprise` nel compose (modifica il file per cambiarlo) |
 
 Consigliate: `LLM_MODEL` (default `gemma4:latest`), `EMBEDDING_MODEL`, `ALLOW_REGISTRATION`, `SEED_BOOTSTRAP_ADMIN`.
 

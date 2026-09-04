@@ -27,8 +27,10 @@
 #
 # MANUAL STEPS (cannot be automated by compose) — see
 # docs/COOLIFY.md for the step-by-step runbook:
-#   1. rsync the built simmetric-enterprise/ tree to the Coolify server
-#      (ENTERPRISE_PLUGIN_PATH, default /opt/simmetric-enterprise)
+#   1. rsync the built simmetric-enterprise/ tree to /opt/simmetric-enterprise
+#      on the Coolify server (hardcoded in the server volumes — edit the file
+#      to change; ENTERPRISE_PLUGIN_PATH env is NOT used here anymore because
+#      Coolify rejects ${...} in volume sources)
 #   2. fill the :? secrets in the Coolify env UI (openssl rand -base64 32)
 #   3. paste LICENSE_KEY (RS256 JWT) — Enterprise vs Community
 #   4. assign the public domain to `frontend` port 80 in the UI
@@ -61,15 +63,13 @@ services:
       - "3000"
     volumes:
       - server-storage:/app/storage
-      - ${LOCAL_BACKUP_PATH:-/var/backups}:${LOCAL_BACKUP_PATH:-/var/backups}:rw
-      # ─── Enterprise plugin (private repo — NEVER in any published image) ───
-      # Whole tree mount (dist + node_modules): a dist-only mount breaks the
-      # plugin's dependency resolution (see docker-compose.yml:41-46).
-      # ENTERPRISE_PLUGIN_PATH defaults to /opt/simmetric-enterprise — set it
-      # in the Coolify env UI if you rsynced the tree elsewhere.
-      # Compose treats an empty env var and an unset one the same for
-      # ${VAR:-default}, so a bare /opt path is the safe default.
-      - ${ENTERPRISE_PLUGIN_PATH:-/opt/simmetric-enterprise}:/simmetric-enterprise:ro
+      # Coolify forbids ${...} in volume sources (anti-injection validation),
+      # so these two host paths are HARDCODED — edit this file to change them:
+      #   /var/backups                  → local backup destination
+      #   /opt/simmetric-enterprise     → enterprise plugin tree (rsync target;
+      #     absent/empty dir = Community mode, server logs it at info level)
+      - /var/backups:/var/backups:rw
+      - /opt/simmetric-enterprise:/simmetric-enterprise:ro
       # ─── OPTIONAL: Ollama Cloud login flow (root-equivalent!) ───
       # Uncomment ONLY if you need `ollama login` cloud auth via the host
       # daemon, and align OLLAMA_CONTAINER_NAME with the real container name
