@@ -62,7 +62,6 @@ node_modules
 # Jest cache
 .jest-cache/
 
-license-tools
 # Root-level scratch dir only — NOT packages/widget (unslashed pattern would
 # match packages/widget/ at any depth and block tracked package files)
 /widget/
@@ -76,7 +75,6 @@ gitleaks-report.json
 public-release/
 .public-release/
 # GSD planning directory (private — stripped from the published copy)
-.planning
 .jest-cache-int/
 
 # Nested working copy of this repo (publication prep) — never commit
@@ -94,6 +92,3 @@ docs/DONE/
 
 # Publication boundary (Phase 181): TLS dev certs now generated at image build (never commit private keys)
 docker/certs/
-
-# Publication boundary: AI-agent process docs (private)
-packages/frontend/CLAUDE.md

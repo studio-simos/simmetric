@@ -1,6 +1,6 @@
 # License Audit (SPDX Report)
 
-**Generated:** 2026-09-01T19:01:38+02:00
+**Generated:** 2026-09-01T09:55:48+02:00
 **Command:** `pnpm licenses list --json --prod`
 **Total packages:** 765
 

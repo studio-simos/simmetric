@@ -83,8 +83,10 @@ const ENV_KEEP = [
 // attribution per PUB-03-04 — the grep gate's `:!LICENSE` analog; THIS SCRIPT
 // itself carries the token list as its configuration, so it must also be
 // excluded from the output-tree gate — the source-tree gate uses `:!.planning`
-// `:!LICENSE` `:!scripts/prepare-public-release.cjs`).
-const PERSONAL_GREP_EXCLUDE = ['LICENSE', 'scripts/prepare-public-release.cjs'];
+// `:!LICENSE` `:!scripts/prepare-public-release.cjs`. CLA.md names the
+// maintainer by design (contribution-rights attribution) and ships in the
+// public repo today — verified `public/main:CLA.md`).
+const PERSONAL_GREP_EXCLUDE = ['LICENSE', 'CLA.md', 'scripts/prepare-public-release.cjs'];
 
 // Personal-data tokens — the real safety net (D-02). Any hit on the output
 // tree exits 1.
