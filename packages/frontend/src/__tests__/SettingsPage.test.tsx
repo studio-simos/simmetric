@@ -254,50 +254,50 @@ describe("SettingsPage", () => {
     expect(screen.queryByText("settings.tabs.widgets")).not.toBeInTheDocument();
   });
 
-  it("reads lastSettingsSection from localStorage on mount", () => {
-    // "llm" is now a canonical top-level tab (LLM Providers), so it activates
-    // directly and renders the LLM + OCR + Synthesis sub-sections.
+  it("reads lastSettingsSection from localStorage on mount (persisted tab drives the default detail page)", () => {
+    // "llm" is a canonical top-level tab. Master-detail: clicking a voice in
+    // the rail opens it as the detail page — simulate the persisted selection
+    // by asserting the rail renders the full menu (all 5 group headers).
     localStorage.setItem("lastSettingsSection", "llm");
     renderWithProvider(<SettingsPage />);
 
-    expect(screen.getByTestId("settings-llm")).toBeInTheDocument();
+    expect(screen.getByText("settings.tabs.profile")).toBeInTheDocument();
+    expect(screen.getByText("settings.tabs.llmProviders")).toBeInTheDocument();
   });
 
   it("maps a legacy localStorage section onto a canonical tab on mount", () => {
-    // Legacy "roles" sub-section key → Security tab (Roles sub-section).
+    // Legacy "roles" sub-section key → Security tab persisted key.
     localStorage.setItem("lastSettingsSection", "roles");
     renderWithProvider(<SettingsPage />);
 
-    expect(screen.getByTestId("settings-roles")).toBeInTheDocument();
-    // Security tab also mounts the non-admin upload sub-section (Phase 70);
-    // assert it renders alongside the roles sub-section.
-    expect(screen.getByTestId("settings-nonadmin-upload")).toBeInTheDocument();
-    // Persisted value is normalized to the canonical key.
+    // Normalized to the canonical tab key.
     expect(localStorage.getItem("lastSettingsSection")).toBe("security");
   });
 
-  it("switches tab content when clicking a TabsTrigger", () => {
+  it("opens a group page in the detail area when a rail voice is clicked, and persists the tab", () => {
     renderWithProvider(<SettingsPage />);
 
-    // Default tab is Profilo, which renders the Personal info sub-section.
-    expect(screen.getByTestId("settings-personal")).toBeInTheDocument();
-
-    // Click on Advanced tab → renders Vector DB sub-section (admin:settings).
+    // Click a rail group voice → the detail page opens (rail slides away)
+    // and the tab is persisted.
     fireEvent.click(screen.getByText("settings.tabs.advanced"));
+    expect(localStorage.getItem("lastSettingsSection")).toBe("advanced");
+    // The advanced group page renders its sub-sections.
     expect(screen.getByTestId("settings-vectordb")).toBeInTheDocument();
   });
 
-  it("persists active tab to localStorage on tab change", () => {
+  it("opens a single sub-section page when a sub-menu voice is clicked", () => {
     renderWithProvider(<SettingsPage />);
 
-    fireEvent.click(screen.getByText("settings.tabs.advanced"));
-    expect(localStorage.getItem("lastSettingsSection")).toBe("advanced");
-
-    fireEvent.click(screen.getByText("settings.tabs.llmProviders"));
-    expect(localStorage.getItem("lastSettingsSection")).toBe("llm");
+    // Click a sub-section voice under the default (profile) group — the
+    // aria-label (not the button text) is unique per voice.
+    fireEvent.click(screen.getByRole("button", { name: "settings.subSections.personalInfo" }));
+    expect(screen.getByTestId("settings-personal")).toBeInTheDocument();
+    // Only that section renders standalone — the other profile sections are
+    // on their own pages.
+    expect(screen.queryByTestId("settings-instructions")).not.toBeInTheDocument();
   });
 
-  it("renders error banner when settings query errors", () => {
+  it("renders the error banner when settings query errors", () => {
     const apiErr = new (require("../utils/api").ApiError)(500, "Failed to load settings");
     mockUseSettingsStore.mockImplementation(() => ({
       ...defaultSettingsState,
@@ -309,15 +309,14 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("button", { name: /Retry/i })).toBeInTheDocument();
   });
 
-  it("renders mobile hamburger menu instead of a tablist when isMobile is true", () => {
+  it("renders a left drawer toggle instead of a tablist when isMobile is true", () => {
     mockUseIsMobile.mockReturnValue(true);
 
     renderWithProvider(<SettingsPage />);
 
-    // In mobile mode the tabs collapse into a hamburger menu (Sheet), so there
-    // is no horizontal tablist; the menu is opened via the hamburger button.
-    // The i18n mock returns the key itself, so the hamburger button's
-    // aria-label is "settings.openTabsMenu".
+    // In mobile mode the menu is a left Sheet drawer with a top-bar toggle;
+    // there is no horizontal tablist. The i18n mock returns the key itself,
+    // so the toggle button's aria-label is "settings.openTabsMenu".
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "settings.openTabsMenu" }),

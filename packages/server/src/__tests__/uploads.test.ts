@@ -38,6 +38,12 @@ import "./helpers/setupEnv";
 jest.mock("../utils/prisma", () => ({
   __esModule: true,
   default: {
+    // Phase 185 (185-02): tenantContextMiddleware (D-09) resolves the org via
+    // organizationMember.findFirst — live default-org membership keeps the
+    // single-org suite responses byte-identical.
+    organizationMember: {
+      findFirst: jest.fn().mockResolvedValue({ organizationId: "org-default" }),
+    },
     uploadDraft: {
       create: jest.fn(),
       findUnique: jest.fn(),
@@ -157,6 +163,13 @@ jest.mock("../services/uploadDraftService", () => {
   };
 });
 
+// Phase 184 (SAAS-03): provider mock surface lives in the shared helper so
+// the hoisted jest.mock factory and the per-test handles reference the same
+// fns (documentUpload.test.ts precedent).
+jest.mock("../services/storageProvider", () =>
+  require("./helpers/mockStorageProvider").mockStorageProviderModule,
+);
+
 import request from "supertest";
 import express from "express";
 import fs from "fs";
@@ -166,6 +179,13 @@ import { dispatchUploadDraft, dispatchKbLeg, dispatchRagLeg, enrichDraftWithLegS
 import { dispatchUploadToArchive } from "../services/archiveImportService";
 import { getSetting } from "../services/systemConfigService";
 import { logger } from "../utils/logger";
+import {
+  mockGetStorageProvider,
+  mockProviderPut,
+  mockProviderDelete,
+  mockProviderExists,
+  mockProviderGet,
+} from "./helpers/mockStorageProvider";
 
 const app = express();
 app.use(express.json());
@@ -201,6 +221,11 @@ const draftFixture = (overrides: Partial<Record<string, unknown>> = {}) => ({
   id: "draft-1",
   uploadedBy: "user-a",
   workspaceId: WS_ID,
+  // Phase 185 (T-185-10): the route's org assertion compares this against
+  // req.organizationId. Default = the factory membership mock's org
+  // ("org-default"); describes that override the draft's org MUST also
+  // re-point the membership mock (their beforeEach does).
+  organizationId: "org-default",
   filePath: "storage/uploads/drafts/draft-1",
   originalName: "test.md",
   fileSize: 5,
@@ -223,6 +248,12 @@ beforeEach(() => {
   // 260814-wxr: default "file present on disk" for the route-level guard.
   fs.existsSync = REAL_FS_EXISTS_SYNC;
   jest.spyOn(fs, "existsSync").mockReturnValue(true);
+  // Phase 184: default provider mock — exists resolves TRUE so legacy-shaped
+  // assign flows and new provider-guard tests that don't override get a
+  // "bytes present" verdict; put/delete are resolved no-ops.
+  mockProviderExists.mockResolvedValue(true);
+  mockProviderPut.mockResolvedValue({ key: "k", size: 0 });
+  mockProviderDelete.mockResolvedValue(undefined);
   // Phase 70: reset the auth holder to the default non-admin user before each test
   (global as any).__AUTH_USER_ID__ = undefined;
   (global as any).__AUTH_USER__ = undefined;
@@ -346,6 +377,287 @@ describe("POST /api/uploads", () => {
 });
 
 // =========================================================================
+// Phase 184 (SAAS-03) — draft staging writes storageKey + provider put seam
+// (Task 1, seam 2). The file branch derives the key from the WORKSPACE ROW's
+// organizationId (row's-org rule, T-184-10 — never client input), puts the
+// bytes through the provider AFTER the row lands (seam-1 precedent,
+// T-184-06), and unlinks the multer tmp post-put. The URL branch carries the
+// URL as its storageKey (path-as-key doctrine) — never provider-deleted.
+// =========================================================================
+describe("POST /api/uploads — Phase 184 storageKey staging (seam 2)", () => {
+  // 36-hex org id — the isDraftStorageKey new-layout arm's uuid shape.
+  const WS_ORG = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+  it("file branch: storageKey = {workspaceOrg}/uploads/drafts/{uuid}-{safeName} from the workspace row + provider.put after the row", async () => {
+    (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue({
+      ...accessibleWorkspace(WS_ID),
+      organizationId: WS_ORG,
+    });
+
+    const unlinkSpy = jest.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    try {
+      const res = await request(app)
+        .post("/api/uploads")
+        .field("workspaceId", WS_ID)
+        .field("originalName", "test.md")
+        .attach("file", Buffer.from("hello"), { filename: "test.md", contentType: "text/markdown" });
+
+      expect(res.status).toBe(201);
+
+      // Key shape: org prefix from the WORKSPACE ROW, uuid-safeName, drafts subpath
+      const createArgs = (mockPrisma.uploadDraft.create as jest.Mock).mock.calls[0][0];
+      expect(createArgs.data.storageKey).toMatch(
+        /^aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\/uploads\/drafts\/[0-9a-f-]{36}-test\.md$/,
+      );
+      // T-184-10: the prefix comes from the row, not any client-shaped value
+      expect(createArgs.data.filePath).toContain("storage/uploads/drafts");
+      // Provider resolution uses the row's org (row's-org rule)
+      expect(mockGetStorageProvider).toHaveBeenCalledWith(WS_ORG);
+      // put happens AFTER the row create (row → put ordering)
+      expect(mockPrisma.uploadDraft.create.mock.invocationCallOrder[0]!).toBeLessThan(
+        mockProviderPut.mock.invocationCallOrder[0]!,
+      );
+      expect(mockProviderPut).toHaveBeenCalledTimes(1);
+      const [localPath, putKey] = mockProviderPut.mock.calls[0];
+      expect(putKey).toBe(createArgs.data.storageKey);
+      expect(localPath).toBe(createArgs.data.filePath);
+      // Post-put ingress tmp cleanup (WR-01 semantics extended past put):
+      // the multer tmp is unlinked after the bytes land in the provider.
+      expect(unlinkSpy).toHaveBeenCalledWith(createArgs.data.filePath);
+      expect(mockProviderPut.mock.invocationCallOrder[0]!).toBeLessThan(
+        unlinkSpy.mock.invocationCallOrder.find((o) => o > (mockProviderPut.mock.invocationCallOrder[0] ?? 0))!,
+      );
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
+
+  it("URL branch: storageKey = url (path-as-key doctrine) — no provider.put", async () => {
+    (mockPrisma.uploadDraft.create as jest.Mock).mockResolvedValue({
+      id: "draft-url-1",
+      parseStatus: "assigned",
+      expiresAt: new Date(),
+      originalName: "https://example.com/article",
+      fileSize: 0,
+      mimeType: "text/url",
+    });
+
+    const res = await request(app)
+      .post("/api/uploads")
+      .send({
+        sourceType: "url",
+        workspaceId: WS_ID,
+        url: "https://example.com/article",
+        archiveId: ARCHIVE_ID,
+      });
+
+    expect(res.status).toBe(201);
+    const createArgs = (mockPrisma.uploadDraft.create as jest.Mock).mock.calls[0][0];
+    expect(createArgs.data.storageKey).toBe("https://example.com/article");
+    expect(createArgs.data.filePath).toBe("https://example.com/article");
+    // No bytes staged for URL drafts — the provider must never be touched
+    expect(mockProviderPut).not.toHaveBeenCalled();
+    expect(mockGetStorageProvider).not.toHaveBeenCalled();
+  });
+
+  it("interrupted put (provider.put throws after the row) → 500 with the draft row created exactly once + tmp unlinked", async () => {
+    (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue({
+      ...accessibleWorkspace(WS_ID),
+      organizationId: WS_ORG,
+    });
+    mockProviderPut.mockRejectedValueOnce(new Error("provider unreachable"));
+    const unlinkSpy = jest.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    try {
+      const res = await request(app)
+        .post("/api/uploads")
+        .field("workspaceId", WS_ID)
+        .field("originalName", "test.md")
+        .attach("file", Buffer.from("hello"), { filename: "test.md", contentType: "text/markdown" });
+
+      expect(res.status).toBe(500);
+      // Row stays recoverable pre-put (row → put ordering preserved)
+      expect(mockPrisma.uploadDraft.create).toHaveBeenCalledTimes(1);
+      // Ingress tmp unlinked by the 500 catch (unlinkUploadIfPresent)
+      const createArgs = (mockPrisma.uploadDraft.create as jest.Mock).mock.calls[0][0];
+      expect(unlinkSpy).toHaveBeenCalledWith(createArgs.data.filePath);
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
+});
+
+// =========================================================================
+// Phase 184 (SAAS-03) — assign/retry source-file guards provider-branched
+// (D-06, Pitfall 1): new-layout rows probe provider.exists (fs.existsSync on
+// an S3-backed row would silently return false); legacy "storage/" rows keep
+// the exact fs.existsSync shape; URL drafts stay out of the guard.
+// =========================================================================
+describe("POST /api/uploads/:id/assign + /:id/retry — Phase 184 provider-branched guards (D-06)", () => {
+  // 36-hex org id — the isDraftStorageKey new-layout arm's uuid shape.
+  const ORG = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+  const newLayoutDraft = (mime: string) =>
+    draftFixture({
+      mimeType: mime,
+      organizationId: ORG,
+      storageKey: `${ORG}/uploads/drafts/uuid-1234-file.${mime === "application/pdf" ? "pdf" : "md"}`,
+      uploadedBy: "user-a",
+    });
+
+  const legacyDraft = (mime: string) =>
+    draftFixture({
+      mimeType: mime,
+      // Phase 185 (T-185-10): match the describe's re-pointed membership org.
+      organizationId: ORG,
+      uploadedBy: "user-a",
+      storageKey: "storage/uploads/drafts/legacy.md",
+    });
+
+  beforeEach(() => {
+    // Phase 185 (T-185-10): re-point the tenant membership mock at this
+    // describe's ORG so the route's draft org-assertion matches fixtures.
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: ORG,
+    });
+
+    (dispatchUploadDraft as jest.Mock).mockResolvedValue({
+      ragResult: null,
+      kbResult: { status: "fulfilled", value: { kbJobId: "aij-1" } },
+      parseStatus: "assigned",
+    });
+  });
+
+  it("assign kb=true new-layout row: provider.exists=false → 400 byte-identical, fs.existsSync NOT consulted", async () => {
+    (mockPrisma.uploadDraft.findUnique as jest.Mock).mockResolvedValue(newLayoutDraft("text/markdown"));
+    mockProviderExists.mockResolvedValue(false);
+    const existsSpy = jest.spyOn(fs, "existsSync").mockReturnValue(true); // would false-pass the legacy arm
+
+    try {
+      const res = await request(app)
+        .post("/api/uploads/draft-1/assign")
+        .send({ rag: false, kb: true, archiveId: ARCHIVE_ID });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(
+        "Draft source file no longer exists on disk — re-upload the file to assign it",
+      );
+      expect(res.body.details).toEqual({ draftId: "draft-1" });
+      // D-06: the probe went through the provider with the row's key + org
+      expect(mockProviderExists).toHaveBeenCalledWith(
+        `${ORG}/uploads/drafts/uuid-1234-file.md`,
+      );
+      expect(mockGetStorageProvider).toHaveBeenCalledWith(ORG);
+      // The STAGED physical path was NOT probed (only the D-07 restore arm's
+      // ocr-sources copy check may consult fs.existsSync)
+      expect(existsSpy.mock.calls.some((c) => String(c[0]).includes("uploads/drafts"))).toBe(false);
+      expect(dispatchUploadDraft).not.toHaveBeenCalled();
+    } finally {
+      existsSpy.mockRestore();
+    }
+  });
+
+  it("assign kb=true new-layout row: provider.exists=true → 200 dispatch proceeds (no 400)", async () => {
+    (mockPrisma.uploadDraft.findUnique as jest.Mock).mockResolvedValue(newLayoutDraft("text/markdown"));
+    mockProviderExists.mockResolvedValue(true);
+
+    const res = await request(app)
+      .post("/api/uploads/draft-1/assign")
+      .send({ rag: false, kb: true, archiveId: ARCHIVE_ID });
+
+    expect(res.status).toBe(200);
+    expect(dispatchUploadDraft).toHaveBeenCalledTimes(1);
+    expect(mockProviderExists).toHaveBeenCalledWith(
+      `${ORG}/uploads/drafts/uuid-1234-file.md`,
+    );
+  });
+
+  it("assign kb=true legacy row (storageKey contains storage/): fs.existsSync arm preserved, provider NOT consulted", async () => {
+    (mockPrisma.uploadDraft.findUnique as jest.Mock).mockResolvedValue(legacyDraft("text/markdown"));
+    const existsSpy = jest.spyOn(fs, "existsSync").mockReturnValue(true);
+
+    try {
+      const res = await request(app)
+        .post("/api/uploads/draft-1/assign")
+        .send({ rag: false, kb: true, archiveId: ARCHIVE_ID });
+
+      expect(res.status).toBe(200);
+      expect(dispatchUploadDraft).toHaveBeenCalledTimes(1);
+      expect(existsSpy).toHaveBeenCalled();
+      expect(mockProviderExists).not.toHaveBeenCalled();
+      expect(mockGetStorageProvider).not.toHaveBeenCalled();
+    } finally {
+      existsSpy.mockRestore();
+    }
+  });
+
+  it("retry rag=true new-layout row: provider.exists=false → 400, document.update soft-delete NOT reached", async () => {
+    (mockPrisma.uploadDraft.findUnique as jest.Mock).mockResolvedValue(
+      newLayoutDraft("text/markdown"),
+    );
+    mockProviderExists.mockResolvedValue(false);
+    jest.spyOn(fs, "existsSync").mockReturnValue(true);
+
+    const res = await request(app)
+      .post("/api/uploads/draft-1/retry")
+      .send({ rag: true, kb: false });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe(
+      "Draft source file no longer exists on disk — re-upload the file to assign it",
+    );
+    expect(mockProviderExists).toHaveBeenCalled();
+    expect(dispatchUploadDraft).not.toHaveBeenCalled();
+    expect(mockPrisma.document.update).not.toHaveBeenCalled();
+  });
+
+  it("retry rag=true legacy row: fs.existsSync arm preserved (existsSync=false → 400, provider untouched)", async () => {
+    (mockPrisma.uploadDraft.findUnique as jest.Mock).mockResolvedValue(legacyDraft("text/markdown"));
+    const existsSpy = jest.spyOn(fs, "existsSync").mockReturnValue(false);
+
+    try {
+      const res = await request(app)
+        .post("/api/uploads/draft-1/retry")
+        .send({ rag: true, kb: false });
+
+      expect(res.status).toBe(400);
+      expect(dispatchUploadDraft).not.toHaveBeenCalled();
+      expect(existsSpy).toHaveBeenCalled();
+      expect(mockProviderExists).not.toHaveBeenCalled();
+    } finally {
+      existsSpy.mockRestore();
+    }
+  });
+
+  it("URL draft (text/url): guard skipped entirely on assign + retry — provider/existsSync untouched", async () => {
+    (mockPrisma.uploadDraft.findUnique as jest.Mock).mockResolvedValue(
+      draftFixture({
+        mimeType: "text/url",
+        // Phase 185 (T-185-10): match the describe's re-pointed membership org.
+        organizationId: ORG,
+        filePath: "https://example.com/article",
+        originalName: "https://example.com/article",
+        uploadedBy: "user-a",
+      }),
+    );
+    jest.spyOn(fs, "existsSync").mockReturnValue(false);
+    mockProviderExists.mockResolvedValue(false);
+
+    const resAssign = await request(app)
+      .post("/api/uploads/draft-1/assign")
+      .send({ rag: false, kb: true, archiveId: ARCHIVE_ID });
+    const resRetry = await request(app)
+      .post("/api/uploads/draft-1/retry")
+      .send({ rag: true, kb: false });
+
+    expect(resAssign.status).toBe(200);
+    expect(resRetry.status).toBe(200);
+    expect(mockProviderExists).not.toHaveBeenCalled();
+  });
+});
+
+// =========================================================================
 // Phase 70 — SC-1a toggle OR on POST /api/uploads (stage route)
 // D-02: assertNonAdminUploadAllowed = global || workspace.allowMemberUploads
 // D-03: fail-closed parse (value === "true")
@@ -465,6 +777,13 @@ describe("POST /api/uploads — SC-1a toggle OR (Phase 70 D-02/D-03)", () => {
 // POST /api/uploads/:id/assign
 // =========================================================================
 describe("POST /api/uploads/:id/assign", () => {
+  beforeEach(() => {
+    // Phase 185 (T-185-10): tenant membership mock re-pointed (org assertion).
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-default",
+    });
+  });
+
   it("POST /api/uploads assign fan-out uses Promise.allSettled via dispatchUploadDraft", async () => {
     (mockPrisma.uploadDraft.findUnique as jest.Mock).mockResolvedValue(
       draftFixture({ mimeType: "text/markdown" }),
@@ -597,6 +916,16 @@ describe("POST /api/uploads/:id/assign — SC-2a admin non-bypass IDOR (D-07)", 
   } as any;
 
   beforeEach(() => {
+    // Phase 185 (T-185-10): tenant membership mock re-pointed (org assertion).
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-default",
+    });
+
+    // Phase 185 (T-185-10): tenant membership mock re-pointed (org assertion).
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-default",
+    });
+
     (global as any).__AUTH_USER_ID__ = "admin-1";
     (global as any).__AUTH_USER__ = adminUser;
   });
@@ -639,6 +968,11 @@ describe("POST /api/uploads/:id/assign — SC-2b archive ownership (D-06)", () =
   } as any;
 
   beforeEach(() => {
+    // Phase 185 (T-185-10): tenant membership mock re-pointed (org assertion).
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-default",
+    });
+
     (global as any).__AUTH_USER_ID__ = "user-a";
     (global as any).__AUTH_USER__ = nonAdminUser;
   });
@@ -905,7 +1239,13 @@ describe("dispatchRagLeg → forwardToCollector keep-file contract (260829-fty)"
       "Xenova/all-MiniLM-L6-v2", // embeddingModel (beforeEach getSetting default)
       "md",             // docType (deriveDocType("test.md"))
       "glm-ocr:latest", // ocrModel (beforeEach getSetting default)
-      { deleteSourceOnFailure: false }, // 260829-fty keep-file opt-out
+      // Phase 185: the contract now carries the draft's org + storageKey
+      // (row's-org rule — forwardToCollector→getStorageProvider(orgId)).
+      {
+        deleteSourceOnFailure: false, // 260829-fty keep-file opt-out
+        organizationId: "org-default",
+        storageKey: undefined,
+      },
     );
   });
 });
@@ -983,6 +1323,244 @@ describe("enrichDraftWithLegStatus (CR-02 unassigned-done regression)", () => {
 
     expect(result.parseStatus).toBe("assigned");
     expect(mockPrisma.uploadDraft.update).not.toHaveBeenCalled();
+  });
+});
+
+// =========================================================================
+// Phase 184 (SAAS-03, Task 2) — dispatch reads provider-branched (seam 3):
+//   - RAG leg Document create carries the draft's storageKey; forwardToCollector
+//     gets { deleteSourceOnFailure: false, storageKey, organizationId } (the
+//     comment block's deleteSourceOnFailure: false preserved verbatim)
+//   - OCR persistent copy + KB non-OCR dispatch read via provider.get for
+//     new-layout rows (OCR_SOURCES_DIR stays LocalFS per D-07); legacy rows
+//     keep fs.readFileSync (byte-identical arms)
+// =========================================================================
+describe("Phase 184 — dispatch reads provider-branched (seam 3, D-06)", () => {
+  const ORG = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+  it("dispatchRagLeg: Document.create carries draft.storageKey + forwardToCollector gets the seam-1 options", async () => {
+    const { forwardToCollector: mockedForward } = require("../routes/documents");
+    (mockPrisma.workspace.findUnique as jest.Mock).mockResolvedValue({ id: WS_ID, name: "WS" });
+    (mockPrisma.document.create as jest.Mock).mockResolvedValue({ id: "doc-key" });
+    (mockPrisma.uploadDraft.update as jest.Mock).mockResolvedValue({});
+
+    const draft = draftFixture({
+      organizationId: ORG,
+      storageKey: `${ORG}/uploads/drafts/uuid-1234-doc.pdf`,
+      mimeType: "application/pdf",
+      originalName: "doc.pdf",
+    });
+    await dispatchRagLeg(draft as any);
+
+    // The Document SHARES the draft's staged file — key carried on the row
+    const createArgs = (mockPrisma.document.create as jest.Mock).mock.calls[0][0];
+    expect(createArgs.data.storageKey).toBe(`${ORG}/uploads/drafts/uuid-1234-doc.pdf`);
+    expect(createArgs.data.filePath).toBe(draftFixture().filePath);
+
+    // 9 args + options: deleteSourceOnFailure: false preserved VERBATIM,
+    // key + org ride the seam-1 signature
+    expect(mockedForward).toHaveBeenCalledWith(
+      "doc-key",
+      draftFixture({ organizationId: ORG }).filePath,
+      "doc.pdf",
+      WS_ID,
+      "WS",
+      "Xenova/all-MiniLM-L6-v2",
+      "pdf",
+      "glm-ocr:latest",
+      {
+        deleteSourceOnFailure: false,
+        storageKey: `${ORG}/uploads/drafts/uuid-1234-doc.pdf`,
+        organizationId: ORG,
+      },
+    );
+  });
+
+  it("dispatchKbLeg OCR branch new-layout: provider.get feeds the persistent copy (OCR_SOURCES_DIR stays LocalFS), legacy fs.readFileSync NOT used", async () => {
+    const { createOcrJob } = require("../services/ocrJobService");
+    (createOcrJob as jest.Mock).mockResolvedValue({ id: "ocr-job-1" });
+    (mockPrisma.archiveImportJob.create as jest.Mock).mockResolvedValue({
+      id: "aij-1",
+      archiveId: ARCHIVE_ID,
+      status: "PROCESSING",
+      sourceFileName: "scan.pdf",
+      createdBy: "user-a",
+      result: { ocrJobId: null },
+    });
+    (mockPrisma.archiveImportJob.update as jest.Mock).mockResolvedValue({});
+    (mockPrisma.uploadDraft.update as jest.Mock).mockResolvedValue({});
+
+    const draft = draftFixture({
+      organizationId: ORG,
+      storageKey: `${ORG}/uploads/drafts/uuid-1234-scan.pdf`,
+      mimeType: "application/pdf",
+      originalName: "scan.pdf",
+      filePath: "storage/uploads/drafts/scan.pdf",
+    });
+
+    const readSpy = jest.spyOn(fs, "readFileSync");
+    const writeSpy = jest.spyOn(fs, "writeFileSync").mockImplementation(() => {});
+    mockProviderGet.mockResolvedValueOnce(Buffer.from("provider-pdf-bytes"));
+
+    try {
+      const result = await dispatchKbLeg(draft as any, ARCHIVE_ID);
+
+      expect(result).toEqual({ kbJobId: "aij-1" });
+      // D-06: the bytes came from the provider (row's key + org)
+      expect(mockProviderGet).toHaveBeenCalledWith(`${ORG}/uploads/drafts/uuid-1234-scan.pdf`);
+      expect(mockGetStorageProvider).toHaveBeenCalledWith(ORG);
+      // fs.readFileSync never fed the copy for a new-layout row
+      expect(readSpy).not.toHaveBeenCalled();
+      // The persistent copy write still targets the LocalFS OCR_SOURCES_DIR (D-07)
+      expect(writeSpy).toHaveBeenCalledWith(
+        path.resolve(process.cwd(), "storage", "ocr-sources", "draft-1_scan.pdf"),
+        Buffer.from("provider-pdf-bytes"),
+      );
+    } finally {
+      readSpy.mockRestore();
+      writeSpy.mockRestore();
+    }
+  });
+
+  it("dispatchKbLeg OCR branch legacy: fs.readFileSync arm preserved byte-identically, provider NOT consulted", async () => {
+    const { createOcrJob } = require("../services/ocrJobService");
+    (createOcrJob as jest.Mock).mockResolvedValue({ id: "ocr-job-1" });
+    (mockPrisma.archiveImportJob.create as jest.Mock).mockResolvedValue({
+      id: "aij-1",
+      archiveId: ARCHIVE_ID,
+      status: "PROCESSING",
+      sourceFileName: "doc.pdf",
+      createdBy: "user-a",
+      result: { ocrJobId: null },
+    });
+    (mockPrisma.archiveImportJob.update as jest.Mock).mockResolvedValue({});
+    (mockPrisma.uploadDraft.update as jest.Mock).mockResolvedValue({});
+
+    const draft = draftFixture({
+      mimeType: "application/pdf",
+      originalName: "doc.pdf",
+      filePath: "storage/uploads/drafts/doc.pdf",
+      storageKey: "storage/uploads/drafts/doc.pdf", // legacy backfill
+    });
+
+    const readSpy = jest.spyOn(fs, "readFileSync").mockReturnValue(Buffer.from("legacy-pdf"));
+    const writeSpy = jest.spyOn(fs, "writeFileSync").mockImplementation(() => {});
+
+    try {
+      await dispatchKbLeg(draft as any, ARCHIVE_ID);
+
+      expect(readSpy).toHaveBeenCalledWith("storage/uploads/drafts/doc.pdf");
+      expect(mockProviderGet).not.toHaveBeenCalled();
+      expect(mockGetStorageProvider).not.toHaveBeenCalled();
+      expect(createOcrJob).toHaveBeenCalledWith(
+        ARCHIVE_ID,
+        "OCR",
+        "user-a",
+        "doc.pdf",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        path.resolve(process.cwd(), "storage", "ocr-sources", "draft-1_doc.pdf"),
+      );
+    } finally {
+      readSpy.mockRestore();
+      writeSpy.mockRestore();
+    }
+  });
+
+  it("dispatchKbLeg non-OCR new-layout: provider.get Buffer feeds dispatchUploadToArchive", async () => {
+    const draft = draftFixture({
+      mimeType: "text/markdown",
+      originalName: "notes.md",
+      filePath: "storage/uploads/drafts/notes.md",
+      organizationId: ORG,
+      storageKey: `${ORG}/uploads/drafts/uuid-1234-notes.md`,
+    });
+
+    const readSpy = jest.spyOn(fs, "readFileSync");
+    mockProviderGet.mockResolvedValueOnce(Buffer.from("provider-md-bytes"));
+
+    try {
+      const result = await dispatchKbLeg(draft as any, ARCHIVE_ID);
+
+      expect(result).toEqual({ kbJobId: "aij-default" });
+      expect(mockProviderGet).toHaveBeenCalledWith(`${ORG}/uploads/drafts/uuid-1234-notes.md`);
+      expect(readSpy).not.toHaveBeenCalled();
+      const dispatchArgs = (dispatchUploadToArchive as jest.Mock).mock.calls[0][0];
+      expect(dispatchArgs.fileBuffer).toEqual(Buffer.from("provider-md-bytes"));
+      expect(dispatchArgs.preExistingJobId).toBe("aij-default");
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it("dispatchKbLeg non-OCR new-layout: provider.get throwing flips the AIJ FAILED (fail-fast shape unchanged)", async () => {
+    const draft = draftFixture({
+      mimeType: "text/markdown",
+      originalName: "notes.md",
+      filePath: "storage/uploads/drafts/notes.md",
+      organizationId: ORG,
+      storageKey: `${ORG}/uploads/drafts/uuid-1234-notes.md`,
+    });
+
+    (mockPrisma.archiveImportJob.create as jest.Mock).mockResolvedValue({
+      id: "aij-pfail",
+      archiveId: ARCHIVE_ID,
+      status: "PROCESSING",
+      sourceFileName: "notes.md",
+      createdBy: "user-a",
+      result: undefined,
+    });
+    mockProviderGet.mockRejectedValueOnce(new Error("NoSuchKey"));
+
+    await expect(dispatchKbLeg(draft as any, ARCHIVE_ID)).rejects.toThrow(
+      /Draft source file not found for draft draft-1/,
+    );
+
+    // The AIJ fail-fast shape is unchanged for provider failures
+    expect(mockPrisma.archiveImportJob.update).toHaveBeenCalledWith({
+      where: { id: "aij-pfail" },
+      data: { status: "FAILED", error: expect.stringContaining("Draft source file not found") },
+    });
+    expect(dispatchUploadToArchive).not.toHaveBeenCalled();
+  });
+
+  it("dispatchKbLeg OCR branch new-layout: provider.get throwing flips the AIJ FAILED + createOcrJob NOT called", async () => {
+    const draft = draftFixture({
+      mimeType: "application/pdf",
+      originalName: "scan.pdf",
+      filePath: "storage/uploads/drafts/scan.pdf",
+      organizationId: ORG,
+      storageKey: `${ORG}/uploads/drafts/uuid-1234-scan.pdf`,
+    });
+
+    const { createOcrJob: mockCreateOcrJob } = require("../services/ocrJobService");
+    (mockPrisma.archiveImportJob.create as jest.Mock).mockResolvedValue({
+      id: "aij-ofail",
+      archiveId: ARCHIVE_ID,
+      status: "PROCESSING",
+      sourceFileName: "scan.pdf",
+      createdBy: "user-a",
+      result: { ocrJobId: null },
+    });
+    mockProviderGet.mockRejectedValueOnce(new Error("NoSuchKey"));
+    const writeSpy = jest.spyOn(fs, "writeFileSync").mockImplementation(() => {});
+
+    try {
+      await expect(dispatchKbLeg(draft as any, ARCHIVE_ID)).rejects.toThrow(
+        /Draft source file not found for draft draft-1/,
+      );
+
+      expect(mockPrisma.archiveImportJob.update).toHaveBeenCalledWith({
+        where: { id: "aij-ofail" },
+        data: { status: "FAILED", error: expect.stringContaining("Draft source file not found") },
+      });
+      expect(mockCreateOcrJob).not.toHaveBeenCalled();
+      expect(writeSpy).not.toHaveBeenCalled();
+    } finally {
+      writeSpy.mockRestore();
+    }
   });
 });
 
@@ -1253,6 +1831,11 @@ describe("dispatchKbLeg missing source file (260814-wxr)", () => {
 // =========================================================================
 describe("71-02 Task2 assign route + URL stage", () => {
   beforeEach(() => {
+    // Phase 185 (T-185-10): tenant membership mock re-pointed (org assertion).
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-default",
+    });
+
     // Default: dispatchUploadDraft resolves successfully
     (dispatchUploadDraft as jest.Mock).mockResolvedValue({
       ragResult: null,
@@ -1470,6 +2053,11 @@ describe("SC-5 contract assertion (INT-01 byte-identical)", () => {
 // idempotency gate.
 describe("71-02 Task3 assign idempotency D-07", () => {
   beforeEach(() => {
+    // Phase 185 (T-185-10): tenant membership mock re-pointed (org assertion).
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-default",
+    });
+
     // Standard accessible workspace + archive owned by user-a.
     (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessibleWorkspace(WS_ID));
     (mockPrisma.archive.findUnique as jest.Mock).mockResolvedValue({
@@ -1742,6 +2330,11 @@ describe("71-06 Task — pending endpoint lifecycle (CR-01/CR-02 closure)", () =
 // =========================================================================
 describe("POST /api/uploads/:id/assign — stale draft source file guard (260814-wxr)", () => {
   beforeEach(() => {
+    // Phase 185 (T-185-10): tenant membership mock re-pointed (org assertion).
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-default",
+    });
+
     (dispatchUploadDraft as jest.Mock).mockResolvedValue({
       ragResult: null,
       kbResult: { status: "fulfilled", value: { kbJobId: "aij-1" } },
@@ -1837,6 +2430,12 @@ describe("POST /api/uploads/:id/assign — stale draft source file guard (260814
 // =========================================================================
 describe("DELETE /api/uploads/:id", () => {
   beforeEach(() => {
+    // Phase 185 (T-185-10): re-point the tenant membership mock at this
+    // describe's ORG so the route's draft org-assertion matches fixtures.
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-default",
+    });
+
     // Default: accessible workspace + archive owned by user-a.
     (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessibleWorkspace(WS_ID));
     (mockPrisma.archive.findUnique as jest.Mock).mockResolvedValue({
@@ -2118,8 +2717,168 @@ describe("DELETE /api/uploads/:id", () => {
   });
 });
 
+// =========================================================================
+// Phase 184 (SAAS-03 D-08) — DELETE cleanup contract goes key-based:
+// new-layout storageKeys (isDraftStorageKey true) delete through the
+// provider (row's-org rule); legacy rows keep the exact A5 resolve+unlink;
+// URL sentinels (storageKey = url → isDraftStorageKey false) are never
+// provider-deleted; soft-delete-FIRST ordering preserved on every path.
+// =========================================================================
+describe("DELETE /api/uploads/:id — Phase 184 key-based cleanup (D-08)", () => {
+  // 36-hex org id — the isDraftStorageKey new-layout arm's uuid shape.
+  const ORG = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+  beforeEach(() => {
+    // Phase 185 (T-185-10): re-point the tenant membership mock at this
+    // describe's ORG so the route's draft org-assertion matches fixtures.
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: ORG,
+    });
+
+    (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessibleWorkspace(WS_ID));
+    (mockPrisma.uploadDraft.update as jest.Mock).mockResolvedValue({});
+    (enrichDraftWithLegStatus as jest.Mock).mockResolvedValue({
+      ...draftFixture(),
+      parseStatus: "done",
+      ragStatus: "completed",
+      kbStatus: null,
+    });
+    mockProviderDelete.mockResolvedValue(undefined);
+  });
+
+  it("new-layout draft key → provider.delete with the row's org; soft-delete BEFORE provider.delete", async () => {
+    const draft = draftFixture({
+      organizationId: ORG,
+      storageKey: `${ORG}/uploads/drafts/uuid-1234-file.pdf`,
+      filePath: "storage/uploads/drafts/draft-1.pdf",
+      parseStatus: "done",
+    });
+    (mockPrisma.uploadDraft.findUnique as jest.Mock).mockResolvedValue(draft);
+    const unlinkSpy = jest.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    try {
+      const res = await request(app).delete("/api/uploads/draft-1");
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toBe("Draft deleted");
+      expect(mockProviderDelete).toHaveBeenCalledTimes(1);
+      expect(mockProviderDelete).toHaveBeenCalledWith(`${ORG}/uploads/drafts/uuid-1234-file.pdf`);
+      expect(mockGetStorageProvider).toHaveBeenCalledWith(ORG);
+      // Soft-delete FIRST (D-01 ordering — now ahead of the provider delete)
+      expect(mockPrisma.uploadDraft.update.mock.invocationCallOrder[0]!).toBeLessThan(
+        mockProviderDelete.mock.invocationCallOrder[0]!,
+      );
+      // The legacy fs arm did NOT run for the new-layout row
+      expect(unlinkSpy).not.toHaveBeenCalled();
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
+
+  it("URL sentinel (storageKey = url) → provider NOT consulted, legacy arm rejects naturally (never deleted)", async () => {
+    const draft = draftFixture({
+      organizationId: ORG,
+      storageKey: "https://example.com/article",
+      filePath: "https://example.com/article",
+      parseStatus: "done",
+      mimeType: "text/url",
+    });
+    (mockPrisma.uploadDraft.findUnique as jest.Mock).mockResolvedValue(draft);
+    const unlinkSpy = jest.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    try {
+      const res = await request(app).delete("/api/uploads/draft-1");
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toBe("Draft deleted");
+      expect(mockPrisma.uploadDraft.update).toHaveBeenCalledTimes(1);
+      expect(mockProviderDelete).not.toHaveBeenCalled();
+      expect(mockGetStorageProvider).not.toHaveBeenCalled();
+      expect(unlinkSpy).not.toHaveBeenCalled();
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
+
+  it("legacy draft (storageKey contains storage/) → fs.unlinkSync with the A5-resolved path, provider NOT consulted", async () => {
+    const draft = draftFixture({
+      organizationId: ORG, // Phase 185 (T-185-10): match the re-pointed membership org
+      storageKey: "storage/uploads/drafts/legacy.pdf",
+      filePath: "storage/uploads/drafts/legacy.pdf",
+      parseStatus: "done",
+    });
+    (mockPrisma.uploadDraft.findUnique as jest.Mock).mockResolvedValue(draft);
+    const unlinkSpy = jest.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    try {
+      const res = await request(app).delete("/api/uploads/draft-1");
+
+      expect(res.status).toBe(200);
+      // Legacy arm byte-identical: exact A5 resolve
+      expect(unlinkSpy).toHaveBeenCalledWith(path.resolve("storage/uploads/drafts/legacy.pdf"));
+      expect(mockProviderDelete).not.toHaveBeenCalled();
+      expect(mockGetStorageProvider).not.toHaveBeenCalled();
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
+
+  it("null storageKey row → legacy arm (belt-and-braces for pre-backfill rows)", async () => {
+    const draft = draftFixture({
+      organizationId: ORG, // Phase 185 (T-185-10): match the re-pointed membership org
+      storageKey: null,
+      filePath: "storage/uploads/drafts/draft-1",
+      parseStatus: "done",
+    });
+    (mockPrisma.uploadDraft.findUnique as jest.Mock).mockResolvedValue(draft);
+    const unlinkSpy = jest.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    try {
+      const res = await request(app).delete("/api/uploads/draft-1");
+
+      expect(res.status).toBe(200);
+      expect(unlinkSpy).toHaveBeenCalledWith(path.resolve("storage/uploads/drafts/draft-1"));
+      expect(mockProviderDelete).not.toHaveBeenCalled();
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
+
+  it("provider.delete throwing is best-effort: 200 + soft-delete persisted (same logging shape)", async () => {
+    const draft = draftFixture({
+      organizationId: ORG,
+      storageKey: `${ORG}/uploads/drafts/uuid-1234-file.pdf`,
+      filePath: "storage/uploads/drafts/draft-1.pdf",
+      parseStatus: "done",
+    });
+    (mockPrisma.uploadDraft.findUnique as jest.Mock).mockResolvedValue(draft);
+    const warnSpy = jest.spyOn(logger, "warn").mockImplementation(() => logger as never);
+
+    try {
+      mockProviderDelete.mockRejectedValueOnce(new Error("bucket unavailable"));
+      const res = await request(app).delete("/api/uploads/draft-1");
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toBe("Draft deleted");
+      expect(mockPrisma.uploadDraft.update).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("delete provider cleanup failed"),
+        expect.objectContaining({ draftId: "draft-1" }),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
 describe("PATCH /api/uploads/:id", () => {
   beforeEach(() => {
+    // Phase 185 (T-185-10): re-point the tenant membership mock at this
+    // describe's ORG so the route's draft org-assertion matches fixtures.
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-default",
+    });
+
     (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessibleWorkspace(WS_ID));
     (mockPrisma.archive.findUnique as jest.Mock).mockResolvedValue({
       id: ARCHIVE_ID,
@@ -2239,6 +2998,11 @@ describe("POST /api/uploads/:id/retry + /:id/assign — OCR-copy restore path (2
     }) as typeof fs.existsSync);
 
   beforeEach(() => {
+    // Phase 185 (T-185-10): tenant membership mock re-pointed (org assertion).
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-default",
+    });
+
     (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessibleWorkspace(WS_ID));
     (mockPrisma.archive.findUnique as jest.Mock).mockResolvedValue({
       id: ARCHIVE_ID,
@@ -2587,6 +3351,11 @@ describe("finalizeAutoApproveOnComplete — empty pageResults guard (260814-wxr)
 // =========================================================================
 describe("POST /api/uploads/:id/retry", () => {
   beforeEach(() => {
+    // Phase 185 (T-185-10): tenant membership mock re-pointed (org assertion).
+    (mockPrisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-default",
+    });
+
     (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessibleWorkspace(WS_ID));
     (mockPrisma.archive.findUnique as jest.Mock).mockResolvedValue({
       id: ARCHIVE_ID,

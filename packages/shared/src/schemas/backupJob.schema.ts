@@ -10,11 +10,21 @@ import { z } from "zod";
 
 // --- Enum Schemas ---
 
+/**
+ * @enterpriseConsumed — re-exported through the shared barrel for the
+ * private enterprise repo (backup-job routes); knip cannot see the
+ * private repo. Pairs with the Frequency inferred type below.
+ */
 export const frequencySchema = z.enum(["daily", "weekly", "monthly", "manual"]);
+/** @enterpriseConsumed — paired inferred type of frequencySchema. */
 export type Frequency = z.infer<typeof frequencySchema>;
 
 // --- CRUD Schemas ---
 
+/**
+ * @enterpriseConsumed — RUNTIME-imported by the private enterprise repo
+ * (routes/backupJobs.ts safeParse). knip cannot see the private repo.
+ */
 export const createBackupJobSchema = z
   .object({
     name: z.string().min(1).max(200),
@@ -44,6 +54,7 @@ export const createBackupJobSchema = z
         'Frequency "weekly" requires dayOfWeek (0-6), "monthly" requires dayOfMonth (1-31)',
     },
   );
+/** @enterpriseConsumed — paired inferred type of createBackupJobSchema. */
 export type CreateBackupJobInput = z.infer<typeof createBackupJobSchema>;
 
 /**
@@ -51,6 +62,9 @@ export type CreateBackupJobInput = z.infer<typeof createBackupJobSchema>;
  * perché .partial() eredita i .refine() cross-field (e.g. "weekly requires dayOfWeek"),
  * che sono troppo restrittivi per update parziali dove i valori mancanti provengono
  * dal record esistente. Stesso pattern usato per updateMcpConnectionSchema.
+ *
+ * @enterpriseConsumed — RUNTIME-imported by the private enterprise repo
+ * (routes/backupJobs.ts safeParse). knip cannot see the private repo.
  */
 export const updateBackupJobSchema = z
   .object({
@@ -68,14 +82,20 @@ export const updateBackupJobSchema = z
   .refine((data) => Object.keys(data).length > 0, {
     message: "At least one field must be provided for update",
   });
+/** @enterpriseConsumed — paired inferred type of updateBackupJobSchema. */
 export type UpdateBackupJobInput = z.infer<typeof updateBackupJobSchema>;
 
+/** @enterpriseConsumed — paired inferred type of toggleBackupJobSchema. */
 export const toggleBackupJobSchema = z.object({
   enabled: z.boolean(),
 });
+/** @enterpriseConsumed — paired inferred type of toggleBackupJobSchema. */
 export type ToggleBackupJobInput = z.infer<typeof toggleBackupJobSchema>;
 
+/** @enterpriseConsumed — RUNTIME-imported by the private enterprise repo
+ * (routes/backupJobs.ts safeParse). knip cannot see the private repo. */
 export const backupJobIdParamSchema = z.object({
   id: z.string().uuid("Invalid backup job ID"),
 });
+/** @enterpriseConsumed — paired inferred type of backupJobIdParamSchema. */
 export type BackupJobIdParam = z.infer<typeof backupJobIdParamSchema>;

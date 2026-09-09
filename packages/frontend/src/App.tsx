@@ -33,7 +33,6 @@ import WorkspacesPage from "./components/WorkspacesPage";
 import ProjectsPanel from "./components/ProjectsPanel";
 import WidgetsPage from "./components/WidgetsPage";
 import WidgetDetailPage from "./components/WidgetDetailPage";
-import SettingsPage from "./components/SettingsPage";
 import DocumentsPage from "./components/DocumentsPage";
 import LoginPage from "./components/LoginPage";
 import ForcePasswordChange from "./components/ForcePasswordChange";
@@ -55,6 +54,9 @@ import SynthesisDashboard from "./components/SynthesisDashboard";
 import SynthesisRunDetail from "./components/SynthesisRunDetail";
 import UnifiedUploadPage from "./components/UnifiedUploadPage";
 import AppSidebar from "./components/AppSidebar";
+import AppNavOverlay from "./components/AppNavOverlay";
+import UserMenuDialog from "./components/ui/UserMenuDialog";
+import ChatSidebar from "./components/ChatSidebar";
 import UpgradePrompt from "./components/UpgradePrompt";
 import { useTranslation } from "react-i18next";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
@@ -65,6 +67,8 @@ import { MENU_SECTIONS } from "@simmetric-chat/shared";
 import { getOnSelectModel } from "./hooks/usePaletteCallbacks";
 import { cn } from "@/lib/utils";
 import TopBar from "./components/TopBar";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import SettingsPage from "./components/SettingsPage";
 import RightPanel from "./components/RightPanel";
 
 // Phase 147 (EPA-11 — D-07): React.lazy at MODULE TOP (NOT inside App —
@@ -138,6 +142,13 @@ function App() {
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteFilter, setPaletteFilter] = useState("");
+  // UI revision R-5: nav dialog (project/workspace selectors + nav groups)
+  // and user menu dialog, both opened from the sidebar footer.
+  const [navOverlayOpen, setNavOverlayOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  // UI revision R-5: settings is a dialog, not a routed page — opened from the
+  // nav dialog's Settings entry (and kept reachable via /settings deep links).
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // Projects + workspaces for the sidebar selectors. useProjects invalidates on
   // rename (useRenameProject) and on create (useCreateProject, Feature 7.3), so
   // the SidebarDropdown reflects changes without a manual refetch.
@@ -378,7 +389,22 @@ function App() {
   useKeyboardShortcuts({
     onOpenPalette: handleOpenPalette,
     onOpenComparison: handleOpenComparison,
+    onOpenNavOverlay: () => setNavOverlayOpen((v) => !v),
   });
+
+  // UI revision R-5: open the settings dialog on a /settings deep link
+  // (nav items + legacy bookmarks still land here), then normalize the URL.
+  useEffect(() => {
+    if (location.pathname.startsWith("/settings") && !settingsOpen) {
+      setSettingsOpen(true);
+      navigate("/", { replace: true });
+    }
+  }, [location.pathname, settingsOpen, navigate]);
+
+  // Close the settings dialog when a logout clears the session.
+  useEffect(() => {
+    if (!user) setSettingsOpen(false);
+  }, [user]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -478,21 +504,66 @@ function App() {
           primaryColor={primaryColor}
           appSubtitle={appSubtitle}
           appIconUrl={appIconUrl}
+          user={user}
+          onOpenNavOverlay={() => setNavOverlayOpen(true)}
+          onOpenUserMenu={() => setUserMenuOpen(true)}
+          t={t}
+          sidebarOpen={sidebarOpen}
+          setSidebarOpen={setSidebarOpen}
+        >
+          <ChatSidebar
+            workspaceId={currentWorkspaceId ?? ""}
+            currentChatId={currentChatId}
+            onSelectChat={(chatId) => {
+              navigate("/");
+              setChatId(chatId);
+            }}
+            onNewChat={() => {
+              navigate("/");
+              setChatId(null);
+            }}
+          />
+        </AppSidebar>
+        {/* UI revision R-5 — nav dialog. Project/workspace selectors +
+            grouped nav entries; RBAC filtering unchanged (same
+            effectiveMenuSections + isAdmin + locks). */}
+        <AppNavOverlay
+          open={navOverlayOpen}
+          onClose={() => setNavOverlayOpen(false)}
           isEnterprise={isEnterprise}
           isAdmin={isAdmin}
           menuSections={effectiveMenuSections}
-          currentWorkspaceId={currentWorkspaceId}
+          t={t}
           selectedProjectId={selectedProjectId}
           setSelectedProjectId={setSelectedProjectId}
           selectedWorkspaceId={selectedWorkspaceId}
           setSelectedWorkspaceId={setSelectedWorkspaceId}
           setWorkspaceId={setWorkspaceId}
-          t={t}
-          sidebarOpen={sidebarOpen}
-          setSidebarOpen={setSidebarOpen}
           projects={sidebarProjects}
           workspaces={sidebarWorkspaces}
         />
+        {/* UI revision R-5 — the user menu dialog (language/theme/settings/
+            sign-out), opened from the sidebar footer user block. */}
+        <UserMenuDialog
+          open={userMenuOpen}
+          onOpenChange={setUserMenuOpen}
+          user={user}
+          onLogout={handleLogout}
+        />
+        {/* UI revision R-5 — settings as a dialog with a left menu (the same
+            SettingsPage console rail, now inside a full-viewport dialog).
+            The /settings route below redirects here. */}
+        <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <DialogContent
+            className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] p-0 overflow-hidden gap-0 sm:w-[min(1200px,calc(100vw-4rem))] sm:max-w-[min(1200px,calc(100vw-4rem))] sm:h-[min(90dvh,960px)] sm:max-h-[calc(100dvh-4rem)]"
+            showCloseButton
+          >
+            <DialogTitle className="sr-only">{t("sidebar.settings")}</DialogTitle>
+            <div className="h-full min-h-0 min-w-0">
+              <SettingsPage embedded />
+            </div>
+          </DialogContent>
+        </Dialog>
         {/* Main content */}
         <div className="flex-1 flex flex-col overflow-hidden">
           <TopBar
@@ -505,6 +576,7 @@ function App() {
             <div className="flex-1 overflow-hidden min-w-0">
               <Routes>
             <Route path="/" element={<ChatPanel />} />
+            <Route path="/chat" element={<Navigate to="/" replace />} />
             <Route
               path="/dashboard"
               element={
@@ -705,16 +777,9 @@ function App() {
                 )
               }
             />
-            <Route
-              path="/settings"
-              element={
-                effectiveMenuSections.includes("settings") ? (
-                  <SettingsPage />
-                ) : (
-                  <Navigate to="/" />
-                )
-              }
-            />
+            {/* Settings is a dialog now (R-5); the deep link opens it and
+                normalizes the URL to / (see the settingsOpen effect). */}
+            <Route path="/settings" element={<Navigate to="/" replace />} />
             <Route
               path="/sso"
               element={

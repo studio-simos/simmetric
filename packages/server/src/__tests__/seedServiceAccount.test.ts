@@ -83,4 +83,22 @@ describe("seedServiceAccount", () => {
     expect(prisma.user.create).not.toHaveBeenCalled();
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
+
+  it("self-heals membership on the exists path (WR-01/G-182-01)", async () => {
+    const strongHash = await bcrypt.hash("a-very-strong-unique-secret", await bcrypt.genSalt(12));
+    (prisma.user.findFirst as jest.Mock).mockResolvedValue({
+      id: "svc-9",
+      email: "widget-service@system",
+      passwordHash: strongHash,
+    });
+
+    await seedServiceAccount();
+
+    // The idempotent membership helper ran for the existing user (repairs the
+    // crashed create→membership window) and no user was re-created.
+    expect(prisma.organizationMember.findFirst).toHaveBeenCalledWith({
+      where: expect.objectContaining({ userId: "svc-9" }),
+    });
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
 });

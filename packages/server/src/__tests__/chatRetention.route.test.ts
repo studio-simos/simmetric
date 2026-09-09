@@ -7,7 +7,7 @@
  * Phase 84 — Plan 84-01 Task 4.
  *
  * Unit tests (supertest) for `PUT /api/system/chat-retention` covering D-08:
- *   - Test 1: confirmDataLoss=false → 400, no upsert, no logEvent.
+ *   - Test 1: confirmDataLoss=false → 400, no write, no logEvent.
  *   - Test 2: confirmDataLoss=true → 200, persists value, emits audit.
  *   - Test 3: retentionDays=null → 200, persists "" (OFF), audit with null.
  *   - Test 4: no JWT → 401 (authMiddleware rejects).
@@ -24,11 +24,21 @@ import request from "supertest";
 
 // --- Prisma mock ----------------------------------------------------------
 // NOTE: mock object/fn live INSIDE factories to avoid TDZ under @swc/jest.
+// Phase 183 (SAAS-02): upsertSystemConfigRow's find-first surface — the route
+// no longer issues keyed writes.
 jest.mock("../utils/prisma", () => ({
   __esModule: true,
   default: {
+    // Phase 185 (185-02): tenantContextMiddleware (D-09) resolves the org via
+    // organizationMember.findFirst — live default-org membership keeps the
+    // single-org suite responses byte-identical.
+    organizationMember: {
+      findFirst: jest.fn().mockResolvedValue({ organizationId: "org-default" }),
+    },
     systemConfig: {
-      upsert: jest.fn().mockResolvedValue({}),
+      findFirst: jest.fn().mockResolvedValue(null),
+      update: jest.fn().mockResolvedValue({}),
+      create: jest.fn().mockResolvedValue({}),
     },
   },
   withSoftDelete: (where: unknown) => where,
@@ -38,6 +48,7 @@ const mockPrisma = require("../utils/prisma").default;
 // --- systemConfigService mock ---------------------------------------------
 jest.mock("../services/systemConfigService", () => ({
   getSetting: jest.fn().mockResolvedValue({ key: "chat_message_retention_days", value: "", readOnly: false }),
+  upsertSystemConfigRow: jest.fn(),
   updateSettings: jest.fn(),
   seedConfigDefaults: jest.fn(),
 }));
@@ -104,7 +115,10 @@ jest.mock("../middleware/rbac", () => {
 const mockState: { authMode: AuthMode; userId: string | null } = require("../middleware/auth").__mockState;
 
 import chatRetentionRoutes from "../routes/chatRetention";
-import { getSetting } from "../services/systemConfigService";
+import { getSetting, upsertSystemConfigRow } from "../services/systemConfigService";
+// TS: the import binds the real function type; the jest.mock factory above
+// replaces it at runtime — cast through unknown for the mock surface.
+const mockUpsertHelper = upsertSystemConfigRow as unknown as jest.Mock;
 
 function buildApp() {
   const app = express();
@@ -122,19 +136,23 @@ beforeEach(() => {
     value: "",
     readOnly: false,
   });
-  mockPrisma.systemConfig.upsert.mockResolvedValue({});
+  mockPrisma.systemConfig.findFirst.mockResolvedValue(null);
+  mockPrisma.systemConfig.update.mockResolvedValue({});
+  mockPrisma.systemConfig.create.mockResolvedValue({});
   mockLogEvent.mockResolvedValue(undefined);
 });
 
 describe("PUT /api/system/chat-retention — D-08 route contract", () => {
-  it("Test 1: confirmDataLoss=false → 400, no upsert, no logEvent", async () => {
+  it("Test 1: confirmDataLoss=false → 400, no write, no logEvent", async () => {
     const app = buildApp();
     const res = await request(app)
       .put("/api/system/chat-retention")
       .send({ retentionDays: 30, confirmDataLoss: false });
 
     expect(res.status).toBe(400);
-    expect(mockPrisma.systemConfig.upsert).not.toHaveBeenCalled();
+    expect(mockPrisma.systemConfig.findFirst).not.toHaveBeenCalled();
+    expect(mockPrisma.systemConfig.update).not.toHaveBeenCalled();
+    expect(mockPrisma.systemConfig.create).not.toHaveBeenCalled();
     expect(mockLogEvent).not.toHaveBeenCalled();
   });
 
@@ -144,15 +162,16 @@ describe("PUT /api/system/chat-retention — D-08 route contract", () => {
       .put("/api/system/chat-retention")
       .send({ retentionDays: 30, confirmDataLoss: true });
 
+    // Helper-mediated write (bypasses updateSettings per D-09): assert the
+    // helper's call surface — the mocked upsertSystemConfigRow receives the
+    // mock prisma as its db param and the global-row write args.
+    expect(mockUpsertHelper).toHaveBeenCalledTimes(1);
+    const [dbArg, writeArg] = mockUpsertHelper.mock.calls[0];
+    expect(writeArg).toEqual({ key: "chat_message_retention_days", value: "30" });
+    expect(dbArg).toBe(mockPrisma);
+
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ message: "Chat retention updated", retentionDays: 30 });
-
-    // Direct upsert (bypasses updateSettings per D-09).
-    expect(mockPrisma.systemConfig.upsert).toHaveBeenCalledTimes(1);
-    const upsertArg = mockPrisma.systemConfig.upsert.mock.calls[0][0];
-    expect(upsertArg.where).toEqual({ key: "chat_message_retention_days" });
-    expect(upsertArg.create).toEqual({ key: "chat_message_retention_days", value: "30" });
-    expect(upsertArg.update).toEqual({ value: "30" });
 
     // Audit emission with previousRetentionDays (prior value was "" → null).
     expect(mockLogEvent).toHaveBeenCalledTimes(1);
@@ -173,10 +192,10 @@ describe("PUT /api/system/chat-retention — D-08 route contract", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ message: "Chat retention updated", retentionDays: null });
 
-    expect(mockPrisma.systemConfig.upsert).toHaveBeenCalledTimes(1);
-    const upsertArg = mockPrisma.systemConfig.upsert.mock.calls[0][0];
-    expect(upsertArg.create).toEqual({ key: "chat_message_retention_days", value: "" });
-    expect(upsertArg.update).toEqual({ value: "" });
+    // Helper-mediated write: the OFF value rides the same helper surface.
+    expect(mockUpsertHelper).toHaveBeenCalledTimes(1);
+    const [, offWriteArg] = mockUpsertHelper.mock.calls[0];
+    expect(offWriteArg).toEqual({ key: "chat_message_retention_days", value: "" });
 
     expect(mockLogEvent).toHaveBeenCalledTimes(1);
     const metadata = mockLogEvent.mock.calls[0][4];
@@ -191,7 +210,9 @@ describe("PUT /api/system/chat-retention — D-08 route contract", () => {
       .send({ retentionDays: 30, confirmDataLoss: true });
 
     expect(res.status).toBe(401);
-    expect(mockPrisma.systemConfig.upsert).not.toHaveBeenCalled();
+    expect(mockPrisma.systemConfig.findFirst).not.toHaveBeenCalled();
+    expect(mockPrisma.systemConfig.update).not.toHaveBeenCalled();
+    expect(mockPrisma.systemConfig.create).not.toHaveBeenCalled();
     expect(mockLogEvent).not.toHaveBeenCalled();
   });
 
@@ -203,7 +224,9 @@ describe("PUT /api/system/chat-retention — D-08 route contract", () => {
       .send({ retentionDays: 30, confirmDataLoss: true });
 
     expect(res.status).toBe(403);
-    expect(mockPrisma.systemConfig.upsert).not.toHaveBeenCalled();
+    expect(mockPrisma.systemConfig.findFirst).not.toHaveBeenCalled();
+    expect(mockPrisma.systemConfig.update).not.toHaveBeenCalled();
+    expect(mockPrisma.systemConfig.create).not.toHaveBeenCalled();
     expect(mockLogEvent).not.toHaveBeenCalled();
   });
 
@@ -216,7 +239,9 @@ describe("PUT /api/system/chat-retention — D-08 route contract", () => {
     expect(res.status).toBe(400);
     expect(res.body).toHaveProperty("error", "Invalid request body");
     expect(res.body).toHaveProperty("details");
-    expect(mockPrisma.systemConfig.upsert).not.toHaveBeenCalled();
+    expect(mockPrisma.systemConfig.findFirst).not.toHaveBeenCalled();
+    expect(mockPrisma.systemConfig.update).not.toHaveBeenCalled();
+    expect(mockPrisma.systemConfig.create).not.toHaveBeenCalled();
     expect(mockLogEvent).not.toHaveBeenCalled();
   });
 

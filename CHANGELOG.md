@@ -22,22 +22,40 @@ for release tags (`vMAJOR.MINOR.PATCH`).
 
 ## [Unreleased]
 
+## [v0.25.0] — 2026-09-09
+
 ### Added
-- Tooling: a dead-code gate now runs in CI (knip) and fails on unused files,
- dependencies, or exports outside the documented allowlists; a repo-wide
- sweep removed ~3,400 lines of dead code, the widget API key generation now
- lives behind the standard admin flow, and both i18n scripts report
- defined-but-never-used translation keys as a non-blocking cleanup hint.
-- Widgets: per-widget response model pin — each widget's admin configuration
- can now select the LLM provider + model that serves that widget's chat
- responses (`responseProviderId`/`responseModel`, additive migration
- `add_widget_response_model`). The pin is resolved server-side from the
- widget DB row on every chat request (never client-supplied — the widget
- proxy and visitor UI are untouched), takes priority over the workspace
- default, and unset widgets keep the existing workspace/global resolution
- chain. Widget chats now record the model that actually serves them.
+- UI: complete shell revision (R-2 → R-5). The chat empty state shows an
+  elegant monochrome wordmark (the glitch cyan/magenta animation is now
+  confined to the hacker theme); the sidebar becomes a minimal Claude-style
+  rail (new chat + chat list + footer menu) with the full navigation living
+  in a keyboard-friendly cmdk overlay (Cmd/Ctrl+/) that keeps the exact RBAC
+  filtering; the user menu moved from the top bar into a dedicated dialog
+  (account, language, theme, settings, sign out) with a left drawer on
+  mobile; Settings opens as a large master-detail dialog (left menu + full-
+  area detail with rail toggle and breadcrumb) instead of a routed page —
+  the main area is now the chat alone on every page. Themes (light "Pearl",
+  dark, hacker, system) received a coherence pass with WCAG-AA contrast
+  fixes for muted text and chat accents, `prefers-reduced-motion` guards for
+  all overlays, and white-label-aware branding on the wordmark.
+- Docker: optional searXNG metasearch service added to the compose stack
+  (pure infrastructure — nothing depends on it yet; pinned release tag,
+  wget-based healthcheck, settings auto-provisioned by the image entrypoint).
+- Docker: the private `@simmetric-chat/saas` plugin now mounts into the
+  compose server like the enterprise plugin (whole-sibling-repo bind mount;
+  the saasLoader no-ops on `MODULE_NOT_FOUND` in community mode).
 
 ### Fixed
+- Seed: a boot crash during user seeding could wipe user roles and lock out
+  the admin; seeds now self-heal — the idempotent grant re-applies the admin
+  role to the surviving `admin` user on every boot (ledgered in STATE.md
+  deferred items).
+- Tenancy: `POST /api/auth/register` now commits user creation, default-role
+  grant, and default-org membership in a single transaction, and every
+  seed/boot path re-runs the idempotent membership helper on its "user already
+  exists" branch — a mid-boot/mid-request crash can no longer leave a
+  membership-less user (Phase 182 review WR-01); tombstone-resurrect now
+  applies the caller's `roleInOrg` so removal downgrades privileges (WR-02).
 - Enterprise builds: the Settings → Advanced → Backup section (and the `/sso`
  and `/logs` routes) no longer stay locked behind the "requires Enterprise"
  card after an in-app login or SSO sign-in. The enterprise-modules manifest
@@ -93,13 +111,28 @@ for release tags (`vMAJOR.MINOR.PATCH`).
   fail-open `expected &&` shape — the widget's key check now matches the
   timing-safe discipline used by the server and collector secret gates.
 - Release pipeline: all five Docker images are now built **amd64-only**. The
-  QEMU-emulated `linux/arm64` builds hung up to ~5h (widget first, then the
-  all-in-one pgvector source compile) and exhausted the runner disk on a
-  private repo's paid minutes; `setup-qemu` is removed, every matrix entry
-  publishes `linux/amd64`, and the build matrix is un-serialized to
-  `max-parallel: 2`. arm64 users can self-build locally (the Dockerfiles are
-  cross-build-safe) or attach a self-hosted arm64 runner — see
-  `docs/DEPLOYMENT.md`'s arm64 note.
+ QEMU-emulated `linux/arm64` builds hung up to ~5h (widget first, then the
+ all-in-one pgvector source compile) and exhausted the runner disk on a
+ private repo's paid minutes; `setup-qemu` is removed, every matrix entry
+ publishes `linux/amd64`, and the build matrix is un-serialized to
+ `max-parallel: 2`. arm64 users can self-build locally (the Dockerfiles are
+ cross-build-safe) or attach a self-hosted arm64 runner — see
+ `docs/DEPLOYMENT.md`'s arm64 note.
+
+### Changed
+- Tooling: a dead-code gate now runs in CI (knip) and fails on unused files,
+ dependencies, or exports outside the documented allowlists; a repo-wide
+ sweep removed ~3,400 lines of dead code, the widget API key generation now
+ lives behind the standard admin flow, and both i18n scripts report
+ defined-but-never-used translation keys as a non-blocking cleanup hint.
+- Widgets: per-widget response model pin — each widget's admin configuration
+ can now select the LLM provider + model that serves that widget's chat
+ responses (`responseProviderId`/`responseModel`, additive migration
+ `add_widget_response_model`). The pin is resolved server-side from the
+ widget DB row on every chat request (never client-supplied — the widget
+ proxy and visitor UI are untouched), takes priority over the workspace
+ default, and unset widgets keep the existing workspace/global resolution
+ chain. Widget chats now record the model that actually serves them.
 
 ## [v0.22.0] — 2026-08-30
 

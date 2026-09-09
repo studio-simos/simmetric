@@ -3,6 +3,14 @@
     "name": "Simmetric Chat",
     "subtitle": "Chatbot IA d'entreprise"
   },
+  "nav": {
+    "openMenu": "Ouvrir le menu de navigation",
+    "menu": "Menu",
+    "overlayTitle": "Navigation",
+    "overlayDescription": "Accéder aux pages, changer de projet et d'espace de travail",
+    "searchPlaceholder": "Rechercher des pages...",
+    "noResults": "Aucun résultat"
+  },
   "breadcrumb": {
     "widgets": "Widgets",
     "home": "Accueil",
@@ -1567,7 +1575,8 @@
       "active": "Actives",
       "blocked": "Les notifications sont bloquées par le navigateur. Modifiez les paramètres du site pour les réactiver.",
       "permissionHint": "En cliquant sur \"Activer les notifications\", le navigateur demandera l'autorisation."
-    }
+    },
+    "back": "Retour"
   },
   "upgrade": {
     "title": "Fonctionnalité d'entreprise",
@@ -1779,7 +1788,8 @@
     "errorBoundaryDescription": "Une erreur inattendue s'est produite lors du rendu de la page. Veuillez essayer de recharger.",
     "errorDetails": "Détails de l'erreur",
     "reloadPage": "Recharger la page",
-    "unexpectedError": "Quelque chose s'est mal passé"
+    "unexpectedError": "Quelque chose s'est mal passé",
+    "back": "Retour"
   },
   "export": {
     "buttonLabel": "Exporter",
@@ -2523,6 +2533,8 @@
   "user-dropdown": {
     "language": "Langue",
     "theme": "Thème",
+    "openMenu": "Ouvrir le menu utilisateur",
+    "closeMenu": "Fermer le menu",
     "signOut": "Se déconnecter",
     "version": "Version",
     "license": "Licence",

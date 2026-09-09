@@ -6,16 +6,18 @@
 import { Router, type Request, type Response } from "express";
 import { Prisma } from "@prisma/client";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { archiveSearchQuerySchema } from "@simmetric-chat/shared";
 import type { ArchiveSearchQuery } from "@simmetric-chat/shared";
 import prisma from "../utils/prisma";
+import { scopeToOrg } from "../utils/tenantContext";
 import { logger } from "../utils/logger";
 import { MULTI_CONFIG_TSQUERY } from "../services/ftsService";
 
 const router = Router();
 
 // GET /:archiveId/search — Full-text search across archive pages via PostgreSQL tsvector
-router.get("/:archiveId/search", authMiddleware, async (req: Request, res: Response) => {
+router.get("/:archiveId/search", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const archiveId = req.params.archiveId as string;
 
@@ -38,6 +40,25 @@ router.get("/:archiveId/search", authMiddleware, async (req: Request, res: Respo
 
     const validatedData: ArchiveSearchQuery = result.data;
     const { query, limit, category } = validatedData;
+
+    // CR-04 (185-05, T-185-20): the $queryRaw below is INVISIBLE to the
+    // tenantScope $extends (it only rewrites Prisma delegate args) and
+    // ArchivePage carries no org filter — without this assertion any
+    // authenticated member of ANY org could FTS-search the full page text of
+    // ANY archive by ID. Resolve the archive org-side FIRST and fail-closed:
+    // cross-org (or missing/tombstoned) archive → 404 cross-tenant shape,
+    // NEVER content. Only a proven same-org archiveId reaches the raw SQL.
+    const archive = await prisma.archive.findFirst({
+      where: scopeToOrg(req.organizationId!, {
+        id: archiveId,
+        deletedAt: null,
+      }),
+      select: { id: true },
+    });
+    if (!archive) {
+      res.status(404).json({ error: "Archive not found" });
+      return;
+    }
 
     // Sanitize query for tsquery: replace special chars with space, join terms with &
     // Phase 151 (RAG-01): extended to the WR-08 set (adds <, >, -) — the query
@@ -67,6 +88,12 @@ router.get("/:archiveId/search", authMiddleware, async (req: Request, res: Respo
     // `Prisma.sql` / `Prisma.empty`. The previous form was broken and every
     // search request returned 500 — pre-existing bug surfaced by the new
     // integration test.
+    //
+    // $queryRaw-site disposition (T-185-10 register, 185-05 CR-04): raw SQL
+    // bypasses the tenantScope extension by construction — the org gate is
+    // the scoped findFirst ABOVE (cross-org archiveId → 404 before this
+    // statement runs; archiveId is proven same-org here). document.ts's
+    // chunk-write site carries the matching disposition.
     const categoryClause = category
       ? Prisma.sql`AND ap."category" = ${category}`
       : Prisma.empty;

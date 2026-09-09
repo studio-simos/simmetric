@@ -214,14 +214,33 @@ describe("enterpriseLoader — community no-op (SC-1, D-06)", () => {
 describe("enterpriseLoader — apiVersion mismatch (D-03)", () => {
   it("logs error and calls process.exit(1) when plugin.apiVersion !== 1", async () => {
     const exitSpy = mockProcessExit();
-    mockResolveAndLoad({ apiVersion: 2, register: jest.fn() });
+    mockResolveAndLoad({ apiVersion: 3, register: jest.fn() });
 
     await expect(loadEnterprisePlugin(fakeApp)).rejects.toThrow("__PROCESS_EXIT__");
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining("version"),
-      expect.objectContaining({ expected: 1, got: 2 }),
+      // Phase 186 (D-03): the payload's `expected` field is now the
+      // acceptedApiVersions join string ("1") — the per-loader acceptance
+      // list joined with "|". Was the bare number 1 pre-extraction.
+      expect.objectContaining({ expected: "1", got: 3 }),
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  // Phase 186 (SAAS-05, Pitfall-1 pin): API_VERSION is now 2 in shared —
+  // the enterprise loader MUST STILL accept a plugin declaring apiVersion 1
+  // (per-loader acceptance [1], hardcoded, NOT the const). This test pins
+  // the downgrade-side acceptance that keeps every real enterprise install
+  // booting after the contract bump.
+  it("accepts a plugin with apiVersion 1 AFTER API_VERSION became 2 (per-loader acceptance, D-03)", async () => {
+    const register = jest.fn();
+    mockResolveAndLoad({ apiVersion: 1, register });
+
+    await loadEnterprisePlugin(fakeApp);
+
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith("[enterprise] Plugin registered successfully");
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });
 
@@ -357,8 +376,19 @@ describe("enterpriseLoader — success path", () => {
     const ctx = register.mock.calls[0]![0] as { mountProtected: (r: unknown) => void };
     const router = { name: "protectedRouter" };
     ctx.mountProtected(router);
-    // D-07: 3-arg form — authMiddleware applied before the plugin's router.
-    expect(use).toHaveBeenCalledWith("/api/enterprise", expect.any(Function), router);
+    // CR-05 (185-05): the mounted chain is authMiddleware → tenantContextMiddleware →
+    // router (4-arg — the tenant slot sits BETWEEN auth and the router, D-09).
+    // The pre-185-05 shape (3-arg, no tenant slot) left every enterprise
+    // requireFeatureLimit route 404ing (req.organizationId undefined) and
+    // tenant-model reads unscoped.
+    expect(use).toHaveBeenCalledWith("/api/enterprise", expect.any(Function), expect.any(Function), router);
+    // Order probe: arg 1 is authMiddleware, arg 2 is tenantContextMiddleware.
+    const { tenantContextMiddleware } = require("../middleware/tenantContext");
+    const { authMiddleware: realAuthMiddleware } = require("../middleware/auth");
+    const args = use.mock.calls[0]!;
+    expect(args[1]).toBe(realAuthMiddleware);
+    expect(args[2]).toBe(tenantContextMiddleware);
+    expect(args[3]).toBe(router);
   });
 
   it("mountPublic calls app.use('/api/enterprise', router) (default — Phase 143 standardized)", async () => {
@@ -402,8 +432,8 @@ describe("enterpriseLoader — success path", () => {
     const ctx = register.mock.calls[0]![0] as { mountProtected: (p: string, r: unknown) => void };
     const router = { name: "ssoRoutes" };
     ctx.mountProtected("/api/sso", router);
-    // 3-arg form with explicit path — preserves D-07 auth (authMiddleware).
-    expect(use).toHaveBeenCalledWith("/api/sso", expect.any(Function), router);
+    // CR-05 (185-05): path-arg form carries the SAME chain — auth → tenant → router.
+    expect(use).toHaveBeenCalledWith("/api/sso", expect.any(Function), expect.any(Function), router);
   });
 
   // ─── Phase 143 capability delegation tests (generateToken/decrypt/encrypt) ──

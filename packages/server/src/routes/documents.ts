@@ -11,6 +11,7 @@ import fs from "fs";
 import crypto from "crypto";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import { assertNonAdminUploadAllowed } from "../middleware/uploadGate";
 import prisma, { withSoftDelete } from "../utils/prisma";
@@ -19,7 +20,8 @@ import { logEvent } from "../services/eventLogService";
 import { getSetting } from "../services/systemConfigService";
 import { extractTextFromPdf, cleanupOcrTextFile } from "../services/ragOcrService";
 import { logger } from "../utils/logger";
-import { getUniqueFilePath, isDraftsPath } from "../utils/fileUtils";
+import { getUniqueFilePath, isDraftsPath, isDraftStorageKey } from "../utils/fileUtils";
+import { getStorageProvider } from "../services/storageProvider";
 import { IngestStatusCallbackSchema, sanitizeFileName, bulkDeleteDocumentsSchema } from "@simmetric-chat/shared";
 import { z } from "zod";
 import { isAdmin } from "../utils/auth";
@@ -112,6 +114,16 @@ function secretEquals(a: string, b: string): boolean {
 
 // PUT /api/documents/:documentId/status — internal callback for collector to update status
 // This route is NOT protected by authMiddleware; it uses a shared secret instead.
+//
+// Phase 185 (D-05/D-08, T-185-08 — BYPASS SURFACE, citeable in the org-b
+// suite): the collector is a service-to-service caller with NO principal —
+// the request never passes a tenant slot, so no ALS store exists. Setting
+// req.tenantBypass = true inside the secret-pass branch makes the bypass
+// intent EXPLICIT and citeable: any downstream route slot added later runs
+// the bypass arm of tenantContextMiddleware, and the absent-store +
+// extension-skip semantics (185-01 spike probe 9) keep the collector-driven
+// updateMany flow unscoped. Contract byte-identical: no new status codes,
+// no new response fields.
 router.put("/:documentId/status", async (req: Request, res: Response) => {
   try {
     const secret = String(req.headers["x-collector-secret"] ?? "");
@@ -119,6 +131,10 @@ router.put("/:documentId/status", async (req: Request, res: Response) => {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
+
+    // D-05 bypass sentinel (see block comment above) — set ONLY after the
+    // constant-time secret compare passes (never on open routes, T-185-08).
+    req.tenantBypass = true;
 
     // Consumer-side contract validation (T-60-06). Zod failure is a hard
     // contract bug, not a transient error — no retry. Existing ad-hoc enum
@@ -162,8 +178,28 @@ router.put("/:documentId/status", async (req: Request, res: Response) => {
     //      terminal callback here would erase the file under all others
     //      (incident d6ef3403) and make retry permanently unworkable.
     //      Suppression is logged at info level (observability).
+    //
+    //   Phase 184 (SAAS-03 D-08): the guard branches on the row's storageKey
+    //   via isDraftStorageKey (trailing-sep new-layout arm + isDraftsPath
+    //   legacy delegation) and the cleanup arm deletes through the provider
+    //   (provider.delete(storageKey) — LocalFS legacy keys resolve
+    //   byte-identically to today's unlink). Rows with a null storageKey
+    //   (belt-and-braces for any pre-backfill row) keep the exact
+    //   fs.existsSync+unlinkSync shape. The d6ef3403 invariant is preserved:
+    //   draft-owned keys are NEVER deleted here.
     if (status === "completed" || status === "failed") {
-      if (document.filePath && isDraftsPath(document.filePath)) {
+      if (document.storageKey && isDraftStorageKey(document.storageKey)) {
+        logger.info(
+          "[documents] terminal status callback suppressed unlink of draft-owned storage key (draft-file lifecycle invariant, 260829-jv7 D-01)",
+          { documentId: document.id, storageKey: document.storageKey },
+        );
+      } else if (document.storageKey) {
+        try {
+          await (await getStorageProvider(document.organizationId ?? undefined)).delete(document.storageKey);
+        } catch {
+          // File cleanup is best-effort
+        }
+      } else if (document.filePath && isDraftsPath(document.filePath)) {
         logger.info(
           "[documents] terminal status callback suppressed unlink of draft-owned staged file (draft-file lifecycle invariant, 260829-jv7 D-01)",
           { documentId: document.id, filePath: document.filePath },
@@ -187,6 +223,10 @@ router.put("/:documentId/status", async (req: Request, res: Response) => {
 });
 
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 /**
  * @openapi
@@ -364,12 +404,19 @@ router.post("/upload", uploadSingle("file"), requirePermission("document:write")
 
     // Create document record with pending status
     const cacheKey = `${req.file.filename}-${Date.now()}`;
+    // Phase 184 (SAAS-03, D-05): provider key — prefix derived ONLY from the
+    // row's workspace.organizationId (row's-org rule, T-184-01: never client
+    // input; TenantContext does not exist until Phase 185). filePath stays
+    // (additive policy); new-layout key lands in the same create (no @default
+    // on the column — write sites set it explicitly).
+    const storageKey = `${workspace.organizationId}/uploads/${crypto.randomUUID()}-${safeName}`;
     const document = await prisma.document.create({
       data: {
         workspaceId,
         name: safeName,
         type: docType,
         filePath: req.file.path,
+        storageKey,
         cacheKey,
         chunkCount: 0,
         embeddingModel,
@@ -377,6 +424,20 @@ router.post("/upload", uploadSingle("file"), requirePermission("document:write")
         fileSize: req.file.size,
       },
     });
+
+    // Phase 184 (SAAS-03, T-184-06): put AFTER the row lands — an interrupted
+    // put leaves a recoverable pending/failed row (never corrupt), and a
+    // retry writing the SAME key overwrites idempotently (LocalFSProvider
+    // copyFileSync semantics). The multer tmp is an ingress buffer, not
+    // storage: it is unlinked best-effort once the bytes are in the provider
+    // (WR-01/WR-02 keep guarding the pre-row rejection paths — D-08).
+    const provider = await getStorageProvider(workspace.organizationId);
+    await provider.put(req.file.path, storageKey);
+    try {
+      fs.unlinkSync(req.file.path);
+    } catch {
+      // Best-effort ingress cleanup — the tmp is a buffer, never storage.
+    }
 
     // Read OCR model from system config (global default)
     const ocrModelSetting = await getSetting("OCR_DEFAULT_MODEL");
@@ -389,7 +450,10 @@ router.post("/upload", uploadSingle("file"), requirePermission("document:write")
     // fs.existsSync throws synchronously inside the catch, the rejection
     // becomes an unhandled promise rejection that under Node ≥24's default
     // `--unhandled-rejections=throw` can crash the server process.
-    void forwardToCollector(document.id, req.file.path, safeName, workspaceId, workspace.name, embeddingModel, docType, ocrModel)
+    void forwardToCollector(document.id, req.file.path, safeName, workspaceId, workspace.name, embeddingModel, docType, ocrModel, {
+      storageKey,
+      organizationId: workspace.organizationId,
+    })
       .catch((e: unknown) => {
         const msg = e instanceof Error ? e.message : String(e);
         logger.error("[documents] forwardToCollector unhandled", { error: msg });
@@ -399,7 +463,12 @@ router.post("/upload", uploadSingle("file"), requirePermission("document:write")
 
     res.status(201).json(document);
   } catch (err: unknown) {
-  const message = err instanceof Error ? err.message : String(err);
+    // Phase 184 (T-184-06): an interrupted upload (provider.put throw after
+    // the DB row) must not leave a dangling multer tmp — the ingress buffer
+    // is cleaned here so the only durable residue is the recoverable
+    // pending row. WR-01 semantics: best-effort, never masks the 500.
+    unlinkUploadIfPresent(req);
+    const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });
   }
 });
@@ -786,7 +855,28 @@ async function extractPdfTextFirstPass(pdfPath: string): Promise<string> {
       disableStream: true,
     })
     .promise;
+  return runPdfPrecheck(pdfDoc);
+}
 
+/**
+ * Phase 184 (SAAS-03, D-06): provider-key variant of the pre-check — reads
+ * the pdf bytes via provider.get(storageKey) instead of fs.readFileSync.
+ * pdfjs already consumes { data: Uint8Array } (the shape used above), so the
+ * Buffer arrives unchanged; only the byte source branches (Pitfall 2 — the
+ * multer tmp is gone after put).
+ */
+async function extractPdfTextFirstPassFromBuffer(pdfBuffer: Buffer): Promise<string> {
+  const pdfDoc = await pdfjsLib
+    .getDocument({
+      data: new Uint8Array(pdfBuffer),
+      disableAutoFetch: true,
+      disableStream: true,
+    })
+    .promise;
+  return runPdfPrecheck(pdfDoc);
+}
+
+async function runPdfPrecheck(pdfDoc: Awaited<ReturnType<typeof pdfjsLib.getDocument>["promise"]>): Promise<string> {
   const totalPages = Math.min(pdfDoc.numPages, MAX_PRECHECK_PAGES);
   const pageTexts: string[] = [];
 
@@ -813,6 +903,18 @@ async function extractPdfTextFirstPass(pdfPath: string): Promise<string> {
 function writeTempTextFile(text: string): string {
   const tmpPath = path.join(os.tmpdir(), `ocr-text-${Date.now()}.txt`);
   fs.writeFileSync(tmpPath, text, "utf-8");
+  return tmpPath;
+}
+
+/**
+ * Phase 184 (D-06): materialize a provider-read Buffer into an os.tmpdir()
+ * file for consumers whose contract is an fs path (extractTextFromPdf /
+ * ragOcrService — unchanged this phase). The caller owns the unlink.
+ */
+function writeSourceBufferToTemp(buffer: Buffer, originalName: string): string {
+  const ext = path.extname(originalName) || ".bin";
+  const tmpPath = path.join(os.tmpdir(), `storage-src-${Date.now()}-${crypto.randomUUID()}${ext}`);
+  fs.writeFileSync(tmpPath, buffer);
   return tmpPath;
 }
 
@@ -850,12 +952,25 @@ export async function forwardToCollector(
   embeddingModel: string,
   docType: string,
   ocrModel: string,
-  options?: { deleteSourceOnFailure?: boolean },
+  options?: {
+    deleteSourceOnFailure?: boolean;
+    /** Phase 184 (SAAS-03 D-06): row-carried provider key — reads branch to provider.get when present. */
+    storageKey?: string | null;
+    /** Row's org for provider resolution (row's-org rule — never client input). */
+    organizationId?: string;
+  },
 ) {
   // delete flag defaults to TRUE — the direct-upload caller (documents.ts
   // upload route, no options) keeps the exact WR-02 cleanup behavior; only
   // an explicit { deleteSourceOnFailure: false } opts out (draft call path).
   const deleteSourceOnFailure = options?.deleteSourceOnFailure !== false;
+  // Phase 184 (D-06): when the row carries a storageKey, every source read
+  // (pdf pre-check, vision OCR, FormData blob) branches to provider.get —
+  // the multer tmp was unlinked after put, so reading the old path would
+  // ENOENT on new-layout rows (Pitfall 2). When absent (legacy rows /
+  // pre-backfill), the fs.readFileSync arms stay byte-identical.
+  const sourceKey = options?.storageKey ?? null;
+  const sourceOrgId = options?.organizationId;
   const env = getEnv();
   // Hoisted so the catch block can clean up a temp OCR text file (WR-02) even
   // when the failure occurs after the OCR routing chose a text-only / skip /
@@ -873,6 +988,15 @@ export async function forwardToCollector(
     let uploadDocType = docType;
     let ocrSkipped: string | undefined;
     let collectorOcrMode: string | undefined;
+    // Phase 184 (D-06): the source bytes when a storageKey is present — read
+    // ONCE via the provider and reused by the pdf pre-check, the vision OCR
+    // materialization, and the FormData blob (memory profile unchanged — the
+    // code already buffers whole files).
+    let sourceBuffer: Buffer | null = null;
+    if (sourceKey) {
+      const provider = await getStorageProvider(sourceOrgId);
+      sourceBuffer = await provider.get(sourceKey);
+    }
 
     // OCR routing decision tree (D-03/D-04/D-07/D-08) — replaces "eng" sentinel
     if (docType === "pdf") {
@@ -883,7 +1007,13 @@ export async function forwardToCollector(
       let pdfTextLength = 0;
       let pdfText = "";
       try {
-        pdfText = await extractPdfTextFirstPass(filePath);
+        // D-06 branch: provider-read Buffer when the row is key-carrying;
+        // legacy fs.readFileSync arm byte-identical when absent.
+        if (sourceBuffer) {
+          pdfText = await extractPdfTextFirstPassFromBuffer(sourceBuffer);
+        } else {
+          pdfText = await extractPdfTextFirstPass(filePath);
+        }
         pdfTextLength = pdfText.length;
       } catch (precheckErr: unknown) {
         const msg = precheckErr instanceof Error ? precheckErr.message : String(precheckErr);
@@ -913,12 +1043,30 @@ export async function forwardToCollector(
           // Vision OCR path (existing) — server-side ragOcrService
           try {
             logger.info(`[documents] Running vision OCR for ${originalName} with model ${ocrModel}`);
-            const ocrResult = await extractTextFromPdf(filePath, ocrModel);
-            uploadFilePath = ocrResult.textFilePath;
-            uploadOriginalName = originalName.replace(/\.pdf$/i, ".txt");
-            uploadDocType = "txt";
-            collectorOcrMode = "skip"; // vision OCR done server-side, collector skips OCR
-            logger.info(`[documents] Vision OCR complete: ${ocrResult.pageCount} pages, ${ocrResult.totalTokens} tokens`);
+            // D-06 branch: when the source is a provider key, materialize the
+            // provider-read Buffer into an os.tmpdir() file so
+            // extractTextFromPdf keeps its fs-path contract unchanged
+            // (ragOcrService untouched); the temp is unlinked in a finally.
+            if (sourceBuffer) {
+              const ocrInputPath = writeSourceBufferToTemp(sourceBuffer, originalName);
+              try {
+                const ocrResult = await extractTextFromPdf(ocrInputPath, ocrModel);
+                uploadFilePath = ocrResult.textFilePath;
+                uploadOriginalName = originalName.replace(/\.pdf$/i, ".txt");
+                uploadDocType = "txt";
+                collectorOcrMode = "skip"; // vision OCR done server-side, collector skips OCR
+                logger.info(`[documents] Vision OCR complete: ${ocrResult.pageCount} pages, ${ocrResult.totalTokens} tokens`);
+              } finally {
+                try { fs.unlinkSync(ocrInputPath); } catch { /* best-effort */ }
+              }
+            } else {
+              const ocrResult = await extractTextFromPdf(filePath, ocrModel);
+              uploadFilePath = ocrResult.textFilePath;
+              uploadOriginalName = originalName.replace(/\.pdf$/i, ".txt");
+              uploadDocType = "txt";
+              collectorOcrMode = "skip"; // vision OCR done server-side, collector skips OCR
+              logger.info(`[documents] Vision OCR complete: ${ocrResult.pageCount} pages, ${ocrResult.totalTokens} tokens`);
+            }
           } catch (ocrErr: unknown) {
             const message = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
             logger.error(`[documents] Vision OCR failed, falling back to PDF ingestion`, {
@@ -953,8 +1101,12 @@ export async function forwardToCollector(
       }
     }
 
-    const fileBuffer = fs.readFileSync(uploadFilePath);
-    const blob = new Blob([fileBuffer]);
+    // D-06 branch: provider-read Buffer → Blob when the row is key-carrying
+    // (the collector multipart + X-Collector-Secret contract is untouched —
+    // the bytes arrive the same way they always have); legacy
+    // fs.readFileSync arm byte-identical when absent.
+    const fileBuffer = sourceBuffer ?? fs.readFileSync(uploadFilePath);
+    const blob = new Blob([fileBuffer as unknown as BlobPart]);
     const formData = new FormData();
     formData.append("file", blob, uploadOriginalName);
     formData.append("documentId", documentId);
@@ -1016,6 +1168,14 @@ export async function forwardToCollector(
         // `createdAt = NOW()` evaluates once per statement (sub-ms difference
         // from the prior per-row NOW(), accepted per D-07).
         // Bug A alignment preserved: embeddingId === chunkId (`${documentId}-${chunkIndex}`).
+        //
+        // $queryRaw-site disposition (T-185-10 register, 185-05 CR-04): raw
+        // SQL bypasses the tenantScope extension by construction. This write
+        // path is reachable only AFTER the route's document org assertion /
+        // scoped findFirst resolved the document (the chunk write targets
+        // `${documentId}` proven same-org upstream; the DELETE above is
+        // keyed by the same documentId). archiveSearch.ts's read site
+        // carries the matching disposition.
         const FTS_BATCH_SIZE = 500;
         for (let i = 0; i < result.chunks.length; i += FTS_BATCH_SIZE) {
           const batch = result.chunks.slice(i, i + FTS_BATCH_SIZE);
@@ -1076,8 +1236,20 @@ export async function forwardToCollector(
     // DELETE route, per the draft-file lifecycle invariant. The temp OCR
     // text-file cleanup below stays UNCONDITIONAL — that file is
     // server-created in os.tmpdir() and always safe to delete.
+    //
+    // Phase 184 (D-06, Pitfall 1): when the row carries a storageKey, the
+    // failure cleanup deletes through the PROVIDER (provider.delete) — a
+    // plain existsSync(filePath) would silently be false on S3-backed rows
+    // (tmp unlinked post-put) and the object would leak in the tenant
+    // bucket. Draft legs pass deleteSourceOnFailure: false and stay
+    // untouched; legacy rows (null storageKey) keep the exact
+    // existsSync+unlink shape.
     try {
-      if (deleteSourceOnFailure && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      if (sourceKey && deleteSourceOnFailure) {
+        await (await getStorageProvider(sourceOrgId)).delete(sourceKey);
+      } else if (!sourceKey && deleteSourceOnFailure && fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
     } catch { /* ignore */ }
     if (uploadFilePath && uploadFilePath !== filePath) {
       try { await cleanupOcrTextFile(uploadFilePath); } catch { /* ignore */ }

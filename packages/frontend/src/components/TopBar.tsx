@@ -12,7 +12,6 @@ import { useChatNav } from "../contexts/ChatContext";
 import { useProjects } from "../queries/useProjects";
 import TokenCounterWidget from "./TokenCounterWidget";
 import ProjectRenameModal from "./ProjectRenameModal";
-import UserDropdown from "./ui/UserDropdown";
 
 interface TopBarUser {
   username: string;
@@ -26,42 +25,33 @@ export interface TopBarProps {
   currentSection: string;
   /** Currently selected project id (drives the project name label + rename target). */
   selectedProjectId: string;
-  /** Authenticated user, for the avatar dropdown. */
-  user: TopBarUser | null;
-  /** Logout handler. */
-  onLogout: () => void;
+  /**
+   * Authenticated user — kept in the props shape for the App.tsx call site
+   * (UI revision R-5 moved the user menu into the sidebar's UserMenuDialog),
+   * but the bar itself no longer renders a user menu.
+   */
+  user?: TopBarUser | null;
+  /** Logout handler (passed through to App wiring; unused inside the bar). */
+  onLogout?: () => void;
   className?: string;
 }
 
 /**
- * TopBar — desktop top bar (Feature 3.2 / 3.5 / 7.4 / UI_DESIGN.md).
+ * TopBar — slim desktop top bar (UI revision R-5).
  *
- * 48px-tall, sits above the main content area. Left: active
- * project name with an inline rename trigger (opens ProjectRenameModal →
- * PUT /api/projects/:id, invalidates the projects cache and dispatches
- * `projects-changed`), and the active section label in monospace. Right:
- * default-model chip was removed (Feature 8 follow-up): model switching is
- * consolidated into the ChatInputArea `ChatModelBadge` ("md"), which is the
- * single model selector for the chat, and the global Cmd+K palette remains
- * available from anywhere. Right side: compact session token widget, and the
- * consolidated UserDropdown (language + theme + links + license +
- * version + sign-out). The standalone ThemeToggle was removed in Feature 7.4
- * — theme switching now lives inside UserDropdown.
+ * 48px-tall, sits above the main content area. Left: active project name with
+ * an inline rename trigger (opens ProjectRenameModal → PUT /api/projects/:id)
+ * and the active section label in monospace. Right: compact session token
+ * widget. The consolidated UserDropdown was removed in R-5 — the user menu
+ * (language/theme/settings/sign-out) now lives in the sidebar footer's
+ * UserMenuDialog; sign-out is wired by App.tsx directly.
  *
- * Visible at all breakpoints (the same bar serves mobile and desktop — the
- * mobile-specific MobileTopBar/Sheet pattern was removed). The PROGETTO
- * block (project label + name + inline rename) is always visible: on tablet
- * and desktop (≥425px) the "Progetto:" label is shown too; on mobile (<425px)
- * only the label is hidden — the project name + inline rename button remain
- * alongside the active section label + token widget + user menu.
- * Intentionally theme-aware (`bg-card/80` + `border-input`) rather than using
- * the fixed-dark `glass-panel`, so it stays correct in light / dark / hacker.
+ * Visible at all breakpoints. Intentionally theme-aware (`bg-card/80` +
+ * `border-input`) so it stays correct in light / dark / hacker.
  */
 export default function TopBar({
   currentSection,
   selectedProjectId,
-  user,
-  onLogout,
   className,
 }: TopBarProps) {
   const { t } = useTranslation();
@@ -120,9 +110,6 @@ export default function TopBar({
 
       <div className="flex items-center gap-1.5">
         <TokenCounterWidget workspaceId={currentWorkspaceId} />
-
-        {/* Consolidated user menu (Feature 7.4) — language + theme + links + license + sign-out */}
-        <UserDropdown user={user} onLogout={onLogout} />
       </div>
 
       <ProjectRenameModal

@@ -148,6 +148,12 @@ function seedPrismaForStream() {
   (prisma.chat.create as jest.Mock).mockResolvedValue({ id: CHAT_ID, workspaceId: WORKSPACE_ID, providerId: null, model: null });
   (prisma.chatMessage.create as jest.Mock).mockResolvedValue({ id: "assistant-msg-1" });
   (prisma.chatMessage.findMany as jest.Mock).mockResolvedValue([]);
+  // Phase 185 (185-01 tracer): workspaceRoutes mounts tenantContextMiddleware
+  // for the whole /api/workspaces prefix — seed a live membership so the
+  // JWT arm resolves and the chain proceeds.
+  (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+    organizationId: "00000000-0000-0000-0000-000000000000",
+  });
 }
 
 describe("chat/stream — assistant message persistence (truncation regression)", () => {

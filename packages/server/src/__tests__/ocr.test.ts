@@ -111,6 +111,8 @@ jest.mock("../middleware/auth", () => ({
   },
 }));
 
+import fs from "fs";
+import path from "path";
 import request from "supertest";
 import jwt from "jsonwebtoken";
 import { createApp } from "../index";
@@ -395,6 +397,127 @@ describe("OCR Routes", () => {
           `/api/archives/${validArchiveId}/jobs/${validJobId}/pages/1/image?token=${token}`
         )
         .set("Authorization", "Bearer test-token")
+        .expect(404);
+
+      expect(res.body.error).toBe("Job not found");
+    });
+  });
+
+  // ─── CR-06 (185-05): the OCR image route asserts job org vs requester org ───
+  // The ?token= auth tier resolves WHO the requester is; the handler must
+  // additionally assert WHICH org the job belongs to (pre-fix IDOR: any valid
+  // JWT could enumerate any org's OCR page images — potential PHI).
+  describe("CR-06 — OCR image route org assertion (job.organizationId vs requester membership)", () => {
+    const ORG_A = "aaaaaaaa-0000-4000-8000-00000000000a";
+    const ORG_B = "bbbbbbbb-0000-4000-8000-00000000000b";
+
+    // Materialize a REAL page image so the serve arm resolves through
+    // sendFile (process.cwd() in jest = packages/server).
+    const probeDir = path.resolve(process.cwd(), "storage/archives", validArchiveId);
+    const probeFile = path.join(probeDir, "p1.png");
+
+    beforeAll(() => {
+      fs.mkdirSync(probeDir, { recursive: true });
+      fs.writeFileSync(probeFile, "probe-image-bytes");
+    });
+    afterAll(() => {
+      try { fs.unlinkSync(probeFile); } catch { /* best-effort */ }
+      try { fs.rmdirSync(probeDir); } catch { /* best-effort */ }
+      try { fs.rmdirSync(path.resolve(process.cwd(), "storage/archives")); } catch { /* best-effort */ }
+      try { fs.rmdirSync(path.resolve(process.cwd(), "storage")); } catch { /* best-effort */ }
+    });
+
+    beforeEach(() => {
+      mockGetRedis.mockReturnValue(null);
+    });
+
+    function seedUser(id: string, roles: unknown[] = []) {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+        id,
+        username: id,
+        roles,
+      });
+    }
+
+    it("cross-org member → 404 'Job not found' (existence hidden, never the image)", async () => {
+      seedUser("orgb-user");
+      // D-01 membership shape: the requester's org resolves via
+      // organizationMember.findFirst (joinedAt asc).
+      (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+        organizationId: ORG_B,
+      });
+      (mockOcrJobService.getOcrJob as jest.Mock).mockResolvedValue({
+        id: validJobId,
+        archiveId: validArchiveId,
+        organizationId: ORG_A, // job belongs to org-a
+        result: { pageResults: [{ pageNumber: 1, imagePath: "p1.png" }] },
+      });
+
+      const token = jwt.sign({ userId: "orgb-user" }, "test-jwt-secret-for-unit-tests-32ch");
+      const res = await request(app)
+        .get(`/api/archives/${validArchiveId}/jobs/${validJobId}/pages/1/image?token=${token}`)
+        .expect(404);
+
+      expect(res.body.error).toBe("Job not found");
+    });
+
+    it("same-org member passes the org gate (200 — image bytes served)", async () => {
+      seedUser("orga-user");
+      (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+        organizationId: ORG_A,
+      });
+      (mockOcrJobService.getOcrJob as jest.Mock).mockResolvedValue({
+        id: validJobId,
+        archiveId: validArchiveId,
+        organizationId: ORG_A,
+        result: { pageResults: [{ pageNumber: 1, imagePath: "p1.png" }] },
+      });
+
+      const token = jwt.sign({ userId: "orga-user" }, "test-jwt-secret-for-unit-tests-32ch");
+      const res = await request(app)
+        .get(`/api/archives/${validArchiveId}/jobs/${validJobId}/pages/1/image?token=${token}`)
+        .responseType("blob")
+        .expect(200);
+      // The org gate passed → the REAL image bytes reached the wire
+      // (binary body — res.text is undefined for image/png; assert the buffer).
+      expect((res.body as Buffer).toString("utf8")).toContain("probe-image-bytes");
+    });
+
+    it("platform admin keeps global visibility (any org served — isAdmin bypass)", async () => {
+      seedUser("admin-001", [
+        { role: { name: "admin", permissions: [{ permissionName: "admin:settings" }] } },
+      ]);
+      (mockOcrJobService.getOcrJob as jest.Mock).mockResolvedValue({
+        id: validJobId,
+        archiveId: validArchiveId,
+        organizationId: ORG_B, // admin is NOT a member of ORG_B — still served
+        result: { pageResults: [{ pageNumber: 1, imagePath: "p1.png" }] },
+      });
+
+      const token = jwt.sign({ userId: "admin-001" }, "test-jwt-secret-for-unit-tests-32ch");
+      const res = await request(app)
+        .get(`/api/archives/${validArchiveId}/jobs/${validJobId}/pages/1/image?token=${token}`)
+        .responseType("blob")
+        .expect(200);
+      // Admin bypasses the org gate → the image bytes are served cross-org.
+      expect((res.body as Buffer).toString("utf8")).toContain("probe-image-bytes");
+      // The membership read never ran for the admin arm.
+      expect(prisma.organizationMember.findFirst).not.toHaveBeenCalled();
+    });
+
+    it("membershipless non-admin requester → 404 (fail-closed, D-02)", async () => {
+      seedUser("lonely-user");
+      (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue(null);
+      (mockOcrJobService.getOcrJob as jest.Mock).mockResolvedValue({
+        id: validJobId,
+        archiveId: validArchiveId,
+        organizationId: ORG_A,
+        result: { pageResults: [{ pageNumber: 1, imagePath: "p1.png" }] },
+      });
+
+      const token = jwt.sign({ userId: "orga-user" }, "test-jwt-secret-for-unit-tests-32ch");
+      const res = await request(app)
+        .get(`/api/archives/${validArchiveId}/jobs/${validJobId}/pages/1/image?token=${token}`)
         .expect(404);
 
       expect(res.body.error).toBe("Job not found");

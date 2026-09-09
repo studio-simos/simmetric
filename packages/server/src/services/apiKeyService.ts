@@ -78,7 +78,16 @@ export function hmacSha256(rawKey: string): string {
 // clear error. The "sk-" display convention is unchanged.
 const MAX_RETRY_ATTEMPTS = 3;
 
-export async function createApiKey(name: string, createdBy: string, expiresAt?: Date) {
+export async function createApiKey(
+  name: string,
+  createdBy: string,
+  expiresAt?: Date,
+  // CR-03 (185-05, D-08 mint-time pin): the creator's resolved org is written
+  // on the row so every new key stops validating as default-org regardless
+  // of creator (apiKeyMiddleware's D-08 arm consumes ApiKey.organizationId).
+  // Omitted/undefined keeps the schema @default (legacy callers byte-identical).
+  organizationId?: string,
+) {
   let rawKey = "";
   for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
     // Generate a raw key — fresh per attempt so prefix AND key_hash differ
@@ -94,6 +103,7 @@ export async function createApiKey(name: string, createdBy: string, expiresAt?: 
           key_hash: keyHash,
           createdBy,
           expiresAt: expiresAt || null,
+          ...(organizationId ? { organizationId } : {}),
         },
       });
 
@@ -122,8 +132,20 @@ export async function createApiKey(name: string, createdBy: string, expiresAt?: 
 // Validate an API key via a single O(1) indexed lookup (used by apiKeyMiddleware).
 // Constant-time at the DB index layer — no application-side string compare,
 // no bcrypt loop, no findMany, no take cap (CSW-05 backstop removed).
-export async function validateApiKey(rawKey: string): Promise<string | null> {
+//
+// Phase 185 (SAAS-04a/D-08): the return shape is extended to surface the
+// key's MINT-TIME-PINNED organizationId (ApiKey.organizationId column since
+// Phase 182) alongside createdBy. The tenant middleware consumes the org
+// WITHOUT a membership lookup — key→org IS the resolution step. This
+// apiKey.findUnique is the documented PLATFORM-LEVEL EXCEPTION to the
+// Pitfall-2 findUnique grep-gate: the key row IS the principal's identity
+// source, there is no org to assert against before it resolves.
+export async function validateApiKey(
+  rawKey: string,
+): Promise<{ createdBy: string; organizationId: string } | null> {
   const keyHash = hmacSha256(rawKey);
+  // Pitfall-2 disposition: platform-level exception (documented above) —
+  // the ApiKey row lookup IS the org resolution, no cross-org leak possible.
   const row = await prisma.apiKey.findUnique({
     where: { key_hash: keyHash },
   });
@@ -141,7 +163,7 @@ export async function validateApiKey(rawKey: string): Promise<string | null> {
     data: { lastUsed: new Date() },
   });
 
-  return row.createdBy;
+  return { createdBy: row.createdBy, organizationId: row.organizationId };
 }
 
 // List API keys for a user (never expose digests)

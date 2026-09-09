@@ -3,6 +3,14 @@
     "name": "Simmetric Chat",
     "subtitle": "Chatbot AI Enterprise"
   },
+  "nav": {
+    "openMenu": "Apri menu di navigazione",
+    "menu": "Menu",
+    "overlayTitle": "Navigazione",
+    "overlayDescription": "Vai alle pagine, cambia progetto e workspace",
+    "searchPlaceholder": "Cerca pagine...",
+    "noResults": "Nessun risultato"
+  },
   "breadcrumb": {
     "widgets": "Widget",
     "home": "Home",
@@ -1455,7 +1463,8 @@
       "active": "Attive",
       "blocked": "Le notifiche sono state bloccate dal browser. Modifica le impostazioni del sito per riattivarle.",
       "permissionHint": "Cliccando \"Abilita notifiche\" il browser ti chiederà il permesso."
-    }
+    },
+    "back": "Indietro"
   },
   "upgrade": {
     "title": "Funzionalita Enterprise",
@@ -1667,7 +1676,8 @@
     "unexpectedError": "Qualcosa è andato storto",
     "errorBoundaryDescription": "Si è verificato un errore imprevisto durante il rendering della pagina. Prova a ricaricare.",
     "errorDetails": "Dettagli dell'errore",
-    "reloadPage": "Ricarica pagina"
+    "reloadPage": "Ricarica pagina",
+    "back": "Indietro"
   },
   "export": {
     "buttonLabel": "Esporta",
@@ -2523,6 +2533,8 @@
   "user-dropdown": {
     "language": "Lingua",
     "theme": "Tema",
+    "openMenu": "Apri menu utente",
+    "closeMenu": "Chiudi menu",
     "signOut": "Esci",
     "version": "Versione",
     "license": "Licenza",

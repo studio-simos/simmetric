@@ -6,6 +6,7 @@
 import { Router, type Request, type Response } from "express";
 import crypto from "node:crypto";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
@@ -98,7 +99,7 @@ async function userCanAccessWorkspace(userId: string, workspaceId: string): Prom
  *       200: { description: All the user's memories (excludes the embedding column) }
  *       401: { description: Authentication required }
  */
-router.get("/export", authMiddleware, async (req: Request, res: Response) => {
+router.get("/export", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const parsed = memoryExportQuerySchema.safeParse(req.query);
     if (!parsed.success) {
@@ -149,7 +150,7 @@ router.get("/export", authMiddleware, async (req: Request, res: Response) => {
  *       200: { description: All memories erased, returns count }
  *       401: { description: Authentication required }
  */
-router.delete("/", authMiddleware, async (req: Request, res: Response) => {
+router.delete("/", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const userId = req.userId!;
     const result = await prisma.memory.deleteMany({ where: { userId } });
@@ -189,7 +190,7 @@ router.delete("/", authMiddleware, async (req: Request, res: Response) => {
  *       401: { description: Authentication required }
  *       403: { description: Insufficient permissions }
  */
-router.get("/", authMiddleware, requirePermission("memory:read"), async (req: Request, res: Response) => {
+router.get("/", authMiddleware, tenantContextMiddleware, requirePermission("memory:read"), async (req: Request, res: Response) => {
   try {
     const parsed = memoryListQuerySchema.safeParse(req.query);
     if (!parsed.success) {
@@ -244,7 +245,7 @@ router.get("/", authMiddleware, requirePermission("memory:read"), async (req: Re
  *       403: { description: Insufficient permissions or workspace access denied }
  *       409: { description: A memory with this path already exists for this user in this workspace }
  */
-router.post("/", authMiddleware, requirePermission("memory:write"), async (req: Request, res: Response) => {
+router.post("/", authMiddleware, tenantContextMiddleware, requirePermission("memory:write"), async (req: Request, res: Response) => {
   try {
     const parsed = createMemorySchema.safeParse(req.body);
     if (!parsed.success) {
@@ -279,6 +280,11 @@ router.post("/", authMiddleware, requirePermission("memory:write"), async (req: 
         VALUES
           (${id}, ${userId}, ${workspaceId}, ${type}::"MemoryType", ${path}, ${content}, NULL, ${sensitivity}::"MemorySensitivity", NOW(), NOW())
       `;
+      // T-185-10 disposition (Pitfall-2 grep-gate): exempt model — Memory is
+      // NOT in TENANT_READ_MODELS (Tier-B transitive scoping via workspace;
+      // scopedPrisma.ts doc-comment). The row was created 2 lines above by
+      // THIS caller (userId/workspaceId from the JWT context) — no cross-org
+      // resolution possible.
       const memory = await prisma.memory.findUnique({ where: { id }, select: MEMORY_SELECT });
       // `memory` is non-null — we just created it. Defensive fallback for TS.
       if (!memory) {
@@ -322,7 +328,7 @@ router.post("/", authMiddleware, requirePermission("memory:write"), async (req: 
  *       403: { description: Insufficient permissions }
  *       404: { description: Memory not found (or belongs to another user) }
  */
-router.get("/:id", authMiddleware, requirePermission("memory:read"), async (req: Request, res: Response) => {
+router.get("/:id", authMiddleware, tenantContextMiddleware, requirePermission("memory:read"), async (req: Request, res: Response) => {
   try {
     const parsed = memoryIdParamSchema.safeParse(req.params);
     if (!parsed.success) {
@@ -378,7 +384,7 @@ router.get("/:id", authMiddleware, requirePermission("memory:read"), async (req:
  *       404: { description: Memory not found (or belongs to another user) }
  *       409: { description: Path conflict with an existing memory for this user/workspace }
  */
-router.patch("/:id", authMiddleware, requirePermission("memory:write"), async (req: Request, res: Response) => {
+router.patch("/:id", authMiddleware, tenantContextMiddleware, requirePermission("memory:write"), async (req: Request, res: Response) => {
   try {
     const parsedParams = memoryIdParamSchema.safeParse(req.params);
     if (!parsedParams.success) {
@@ -441,7 +447,7 @@ router.patch("/:id", authMiddleware, requirePermission("memory:write"), async (r
  *       403: { description: Insufficient permissions }
  *       404: { description: Memory not found (or belongs to another user) }
  */
-router.delete("/:id", authMiddleware, requirePermission("memory:write"), async (req: Request, res: Response) => {
+router.delete("/:id", authMiddleware, tenantContextMiddleware, requirePermission("memory:write"), async (req: Request, res: Response) => {
   try {
     const parsed = memoryIdParamSchema.safeParse(req.params);
     if (!parsed.success) {

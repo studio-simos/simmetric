@@ -105,6 +105,9 @@ const mockConnection = {
   lastSyncAt: null,
   createdAt: new Date("2026-01-01T00:00:00.000Z"),
   updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+  // Phase 185 (T-185-10): matches the membership mock's org — the route's
+  // org assertion hides cross-org connections as 404.
+  organizationId: "org-default",
 };
 
 // ─── GET /api/mcp-connections ────────────────────────────────────────
@@ -599,7 +602,9 @@ describe("POST /api/chats/:chatId/pins (D-14 global + workspace scope)", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (prisma.chat.findUnique as jest.Mock).mockResolvedValue({ id: CHAT_ID, workspaceId: WS_ID });
+    // Phase 185 (T-185-10): the route's chat org assertion reads
+    // organizationId off the select — match the membership mock's org.
+    (prisma.chat.findUnique as jest.Mock).mockResolvedValue({ id: CHAT_ID, workspaceId: WS_ID, organizationId: "org-default" });
     (prisma.workspace.findFirst as jest.Mock).mockResolvedValue({
       id: WS_ID,
       projectId: "550e8400-e29b-41d4-a716-446655440002",

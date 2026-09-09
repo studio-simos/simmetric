@@ -204,6 +204,9 @@ beforeEach(() => {
     status: "PROCESSING",
     sourceFileName: "source.md",
     createdBy: USER_ID,
+    // Phase 185 (T-185-10): matches the membership mock's org — the route's
+    // org assertion hides cross-org jobs as 404.
+    organizationId: "org-default",
   });
   (prisma.archiveImportJob.update as jest.Mock).mockResolvedValue({});
 });
@@ -451,6 +454,8 @@ describe("KB-05/06 callback PUT /import/:jobId/callback", () => {
   test("4b. callback completed with job.documentId null → Fonti: [[raw_sources/<sourceFileName>]] (upload)", async () => {
     // Upload job: documentId null, sourceFileName set.
     (prisma.archiveImportJob.findUnique as jest.Mock).mockResolvedValue({
+      // Phase 185 (T-185-10): matches the membership mock's org.
+      organizationId: "org-default",
       id: JOB_ID,
       archiveId: ARCHIVE_ID,
       documentId: null,
@@ -579,6 +584,8 @@ describe("GET /import/:jobId status", () => {
 
   test("2. COMPLETED with result → 200, result.title preserved", async () => {
     (prisma.archiveImportJob.findUnique as jest.Mock).mockResolvedValue({
+      // Phase 185 (T-185-10): matches the membership mock's org.
+      organizationId: "org-default",
       id: JOB_ID,
       archiveId: ARCHIVE_ID,
       status: "COMPLETED",
@@ -599,6 +606,8 @@ describe("GET /import/:jobId status", () => {
 
   test("3. FAILED with error → 200, error preserved", async () => {
     (prisma.archiveImportJob.findUnique as jest.Mock).mockResolvedValue({
+      // Phase 185 (T-185-10): matches the membership mock's org.
+      organizationId: "org-default",
       id: JOB_ID,
       archiveId: ARCHIVE_ID,
       status: "FAILED",
@@ -621,6 +630,8 @@ describe("GET /import/:jobId status", () => {
     // Job belongs to USER_ID (admin-001); requester is OTHER_USER_ID without
     // admin:settings permission → ownership + admin checks both fail.
     (prisma.archiveImportJob.findUnique as jest.Mock).mockResolvedValue({
+      // Phase 185 (T-185-10): matches the membership mock's org.
+      organizationId: "org-default",
       id: JOB_ID,
       archiveId: ARCHIVE_ID,
       status: "PROCESSING",
@@ -672,6 +683,8 @@ describe("GET /import/:jobId status", () => {
     // Job belongs to USER_ID; requester is a DIFFERENT admin (admin-002)
     // with admin:settings permission → isAdmin(req.user) returns true.
     (prisma.archiveImportJob.findUnique as jest.Mock).mockResolvedValue({
+      // Phase 185 (T-185-10): matches the membership mock's org.
+      organizationId: "org-default",
       id: JOB_ID,
       archiveId: ARCHIVE_ID,
       status: "PROCESSING",

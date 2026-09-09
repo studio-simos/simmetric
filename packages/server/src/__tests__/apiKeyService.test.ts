@@ -137,6 +137,41 @@ describe("createApiKey", () => {
     expect(createArgs.data.key_hash).toHaveLength(64);
   });
 
+  // ─── CR-03 (185-05, D-08 mint-time pin): createApiKey carries the org ───
+  it("CR-03 RED→GREEN: org argument WRITES organizationId on the ApiKey row (D-08 mint-time pin)", async () => {
+    mockPrisma.apiKey.create.mockResolvedValue({
+      id: "key-org",
+      name: "Org Key",
+      createdBy: "user-1",
+      organizationId: "org-b-185",
+      expiresAt: null,
+      createdAt: new Date(),
+    });
+
+    await createApiKey("Org Key", "user-1", undefined, "org-b-185");
+
+    const args = mockPrisma.apiKey.create.mock.calls[0][0];
+    // The mint-time pin is written — D-08's apiKeyMiddleware arm consumes it.
+    expect(args.data.organizationId).toBe("org-b-185");
+  });
+
+  it("CR-03: omitted/undefined org argument keeps the schema default (legacy callers byte-identical)", async () => {
+    mockPrisma.apiKey.create.mockResolvedValue({
+      id: "key-legacy",
+      name: "Legacy",
+      createdBy: "user-1",
+      expiresAt: null,
+      createdAt: new Date(),
+    });
+
+    await createApiKey("Legacy", "user-1");
+
+    const args = mockPrisma.apiKey.create.mock.calls[0][0];
+    // No organizationId key at all when the argument is omitted (the schema
+    // @default fills it at the DB layer — byte-identical legacy behavior).
+    expect(args.data.organizationId).toBeUndefined();
+  });
+
   it("P2002 on first create → retries with a FRESH uuid; plainKey comes from the second attempt (T-OG8-03)", async () => {
     // First uuid → colliding key; second uuid → the successful retry key.
     mockUuidV4.mockReturnValueOnce("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").mockReturnValueOnce("11111111-2222-3333-4444-555555555555");
@@ -179,14 +214,21 @@ describe("createApiKey", () => {
 });
 
 describe("validateApiKey", () => {
-  it("valid key: findUnique returns row, not expired → updates lastUsed, returns createdBy; NO findMany, NO bcrypt", async () => {
-    const row = { id: "k1", createdBy: "user-1", key_hash: expectedDigest(RAW_KEY), expiresAt: null };
+  it("valid key: findUnique returns row, not expired → updates lastUsed, returns { createdBy, organizationId }; NO findMany, NO bcrypt", async () => {
+    const row = {
+      id: "k1",
+      createdBy: "user-1",
+      organizationId: "org-185-01",
+      key_hash: expectedDigest(RAW_KEY),
+      expiresAt: null,
+    };
     mockPrisma.apiKey.findUnique.mockResolvedValue(row);
     mockPrisma.apiKey.update.mockResolvedValue({});
 
     const result = await validateApiKey(RAW_KEY);
 
-    expect(result).toBe("user-1");
+    // Phase 185 (D-08): the org comes from the row's mint-time-pinned column.
+    expect(result).toEqual({ createdBy: "user-1", organizationId: "org-185-01" });
     // ONE findUnique call with where.key_hash (64 chars)
     expect(mockPrisma.apiKey.findUnique).toHaveBeenCalledTimes(1);
     const args = mockPrisma.apiKey.findUnique.mock.calls[0][0];

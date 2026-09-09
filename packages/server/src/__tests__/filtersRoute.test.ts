@@ -11,7 +11,7 @@
  *   - GET list (admin) → 200 with plugin descriptor array
  *   - GET list (non-admin) → 403
  *   - GET list (no auth) → 401
- *   - PATCH enable/disable (admin) → 200, upserts SystemConfig, audit log
+ *   - PATCH enable/disable (admin) → 200, writes SystemConfig (find-first shape), audit log
  *   - PATCH unknown plugin → 404
  *   - PATCH invalid body → 400 with details
  *   - PATCH non-admin → 403
@@ -27,16 +27,33 @@ import express, { type NextFunction, type Request, type Response } from "express
 import request from "supertest";
 
 // --- Prisma mock ----------------------------------------------------------
+// Phase 183 (SAAS-02): upsertSystemConfigRow's find-first surface — the route
+// no longer issues keyed writes.
 jest.mock("../utils/prisma", () => ({
   __esModule: true,
   default: {
+    // Phase 185 (185-02): tenantContextMiddleware (D-09) resolves the org via
+    // organizationMember.findFirst — live default-org membership keeps the
+    // single-org suite responses byte-identical.
+    organizationMember: {
+      findFirst: jest.fn().mockResolvedValue({ organizationId: "org-default" }),
+    },
     systemConfig: {
-      upsert: jest.fn().mockResolvedValue({}),
+      findFirst: jest.fn().mockResolvedValue(null),
+      update: jest.fn().mockResolvedValue({}),
+      create: jest.fn().mockResolvedValue({}),
     },
   },
   withSoftDelete: (where: unknown) => where,
 }));
 const mockPrisma = require("../utils/prisma").default;
+
+// --- systemConfigService mock ---------------------------------------------
+// Phase 183 (SAAS-02): the PATCH write routes through upsertSystemConfigRow —
+// mock it at the module boundary and assert its call surface.
+jest.mock("../services/systemConfigService", () => ({
+  upsertSystemConfigRow: jest.fn().mockResolvedValue({}),
+}));
 
 // --- eventLogService mock -------------------------------------------------
 jest.mock("../services/eventLogService", () => ({
@@ -111,6 +128,10 @@ jest.mock("../middleware/rbac", () => {
 const mockState: { authMode: AuthMode; userId: string | null } = require("../middleware/auth").__mockState;
 
 import filtersRoutes from "../routes/filters";
+import { upsertSystemConfigRow } from "../services/systemConfigService";
+// TS: the import binds the real function type; the jest.mock factory above
+// replaces it at runtime — cast through unknown for the mock surface.
+const mockUpsertHelper = upsertSystemConfigRow as unknown as jest.Mock;
 import { PERMISSION_NAMES } from "@simmetric-chat/shared";
 
 function buildApp() {
@@ -138,7 +159,9 @@ beforeEach(() => {
   mockGetFilter.mockImplementation((name: string) =>
     name === "dlp" ? dlpPlugin : undefined,
   );
-  mockPrisma.systemConfig.upsert.mockResolvedValue({});
+  mockPrisma.systemConfig.findFirst.mockResolvedValue(null);
+  mockPrisma.systemConfig.update.mockResolvedValue({});
+  mockPrisma.systemConfig.create.mockResolvedValue({});
   mockLogEvent.mockResolvedValue(undefined);
 });
 
@@ -201,7 +224,7 @@ describe("GET /api/filters", () => {
 // ─── PATCH /api/filters/:name ───────────────────────────────────────────
 
 describe("PATCH /api/filters/:name", () => {
-  it("disables a plugin (admin) → 200, upserts SystemConfig, audit log", async () => {
+  it("disables a plugin (admin) → 200, writes SystemConfig find-first shape, audit log", async () => {
     const app = buildApp();
     const res = await request(app)
       .patch("/api/filters/dlp")
@@ -210,12 +233,14 @@ describe("PATCH /api/filters/:name", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ message: 'Filter "dlp" disabled' });
 
-    // SystemConfig upsert with key filter_dlp_enabled = "false"
-    expect(mockPrisma.systemConfig.upsert).toHaveBeenCalledWith({
-      where: { key: "filter_dlp_enabled" },
-      update: { value: "false" },
-      create: { key: "filter_dlp_enabled", value: "false" },
-    });
+    // Helper-mediated write: assert upsertSystemConfigRow's call surface —
+    // the mock prisma as db param + the global-row write args (dynamic
+    // filter_* keys stay global-only, Phase-183 P3). The find-first probe
+    // rides through the real helper against the mock prisma.
+    expect(mockUpsertHelper).toHaveBeenCalledTimes(1);
+    const [dbArg, writeArg] = mockUpsertHelper.mock.calls[0];
+    expect(dbArg).toBe(mockPrisma);
+    expect(writeArg).toEqual({ key: "filter_dlp_enabled", value: "false" });
 
     // Registry plugin.enabled mutated in-memory
     expect(dlpPlugin.enabled).toBe(false);
@@ -232,7 +257,7 @@ describe("PATCH /api/filters/:name", () => {
     );
   });
 
-  it("enables a plugin (admin) → 200, upserts SystemConfig=true, audit log enable", async () => {
+  it("enables a plugin (admin) → 200, writes SystemConfig=true via find-first shape, audit log enable", async () => {
     dlpPlugin.enabled = false; // currently disabled
     const app = buildApp();
     const res = await request(app)
@@ -242,11 +267,9 @@ describe("PATCH /api/filters/:name", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ message: 'Filter "dlp" enabled' });
 
-    expect(mockPrisma.systemConfig.upsert).toHaveBeenCalledWith({
-      where: { key: "filter_dlp_enabled" },
-      update: { value: "true" },
-      create: { key: "filter_dlp_enabled", value: "true" },
-    });
+    expect(mockUpsertHelper).toHaveBeenCalledTimes(1);
+    const [, enableWriteArg] = mockUpsertHelper.mock.calls[0];
+    expect(enableWriteArg).toEqual({ key: "filter_dlp_enabled", value: "true" });
 
     expect(dlpPlugin.enabled).toBe(true);
 
@@ -268,7 +291,7 @@ describe("PATCH /api/filters/:name", () => {
 
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "Filter plugin not found" });
-    expect(mockPrisma.systemConfig.upsert).not.toHaveBeenCalled();
+    expect(mockUpsertHelper).not.toHaveBeenCalled();
     expect(mockLogEvent).not.toHaveBeenCalled();
   });
 
@@ -281,7 +304,7 @@ describe("PATCH /api/filters/:name", () => {
     expect(res.status).toBe(400);
     expect(res.body).toHaveProperty("error", "Invalid request body");
     expect(res.body).toHaveProperty("details");
-    expect(mockPrisma.systemConfig.upsert).not.toHaveBeenCalled();
+    expect(mockUpsertHelper).not.toHaveBeenCalled();
     expect(mockLogEvent).not.toHaveBeenCalled();
   });
 
@@ -293,7 +316,7 @@ describe("PATCH /api/filters/:name", () => {
       .send({ enabled: false });
 
     expect(res.status).toBe(403);
-    expect(mockPrisma.systemConfig.upsert).not.toHaveBeenCalled();
+    expect(mockUpsertHelper).not.toHaveBeenCalled();
   });
 });
 

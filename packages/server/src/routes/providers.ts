@@ -6,6 +6,7 @@
 import { Router, type Request, type Response } from "express";
 import { execFile } from "node:child_process";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin, requirePermission } from "../middleware/rbac";
 import { createProviderSchema, updateProviderSchema, updateProviderModelSchema } from "@simmetric-chat/shared";
 import { maskApiKey } from "../services/encryptionService";
@@ -18,6 +19,10 @@ const router = Router();
 
 // All provider routes require authentication
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 // GET /models/available — all enabled providers with their enabled+available models (for chat model selector)
 // Must be before /:id routes to avoid route conflicts

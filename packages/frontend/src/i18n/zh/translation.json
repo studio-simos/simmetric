@@ -3,6 +3,14 @@
     "name": "Simmetric Chat",
     "subtitle": "企业级 AI 聊天机器人"
   },
+  "nav": {
+    "openMenu": "打开导航菜单",
+    "menu": "菜单",
+    "overlayTitle": "导航",
+    "overlayDescription": "前往页面，切换项目与工作区",
+    "searchPlaceholder": "搜索页面...",
+    "noResults": "无结果"
+  },
   "breadcrumb": {
     "widgets": "小部件",
     "home": "首页",
@@ -1567,7 +1575,8 @@
       "active": "已激活",
       "blocked": "通知已被浏览器阻止。更改网站设置以重新启用。",
       "permissionHint": "点击\"启用通知\"将提示浏览器请求权限。"
-    }
+    },
+    "back": "返回"
   },
   "upgrade": {
     "title": "企业版功能",
@@ -1779,7 +1788,8 @@
     "errorBoundaryDescription": "渲染页面时发生意外错误。请尝试重新加载。",
     "errorDetails": "错误详情",
     "reloadPage": "重新加载页面",
-    "unexpectedError": "出了点问题"
+    "unexpectedError": "出了点问题",
+    "back": "返回"
   },
   "export": {
     "buttonLabel": "导出",
@@ -2523,6 +2533,8 @@
   "user-dropdown": {
     "language": "语言",
     "theme": "主题",
+    "openMenu": "打开用户菜单",
+    "closeMenu": "关闭菜单",
     "signOut": "退出登录",
     "version": "版本",
     "license": "许可证",

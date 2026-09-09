@@ -45,8 +45,14 @@ jest.mock("../utils/prisma", () => ({
   default: {
     systemConfig: {
       findMany: jest.fn(),
-      findUnique: jest.fn(),
-      upsert: jest.fn(),
+      // 183-01: updateSettings/seedConfigDefaults write via upsertSystemConfigRow
+      // (find-first → id-anchored update-or-create) and getDbValue reads via
+      // findFirst — the probe surface re-pointed from the keyed upsert pin.
+      // 183-02: keyed delegates (findUnique/upsert) dropped — the full keyed
+      // inventory is gone from the package.
+      findFirst: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
     },
     chatMessage: {
       findMany: jest.fn(),
@@ -123,7 +129,11 @@ beforeEach(() => {
   jest.clearAllMocks();
   // systemConfig defaults for the 84-01 cases
   mockPrisma.systemConfig.findMany.mockResolvedValue([]);
-  mockPrisma.systemConfig.upsert.mockResolvedValue({});
+  // 183-01: the helper probes findFirst first; default = row missing → the
+  // helper takes the create arm (create-only-if-missing seed semantics).
+  mockPrisma.systemConfig.findFirst.mockResolvedValue(null);
+  mockPrisma.systemConfig.create.mockResolvedValue({});
+  mockPrisma.systemConfig.update.mockResolvedValue({});
   // reaper defaults: OFF (empty string), no rows touched
   (getSetting as jest.Mock).mockResolvedValue({
     key: "chat_message_retention_days",
@@ -142,7 +152,7 @@ beforeEach(() => {
 // 84-01 cases — systemConfigService integration (D-09)
 // ---------------------------------------------------------------------------
 describe("systemConfigService integration — D-09 chat_message_retention_days", () => {
-  it("Test 1: updateSettings rejects chat_message_retention_days and never upserts it", async () => {
+  it("Test 1: updateSettings rejects chat_message_retention_days and never writes it", async () => {
     const result = await updateSettings([
       { key: "chat_message_retention_days", value: "30" },
     ]);
@@ -150,14 +160,27 @@ describe("systemConfigService integration — D-09 chat_message_retention_days",
     expect(result.updated).toEqual([]);
     expect(result.rejected).toEqual(["chat_message_retention_days"]);
 
-    const upsertCalls = mockPrisma.systemConfig.upsert.mock.calls as Array<
-      [{ where: { key: string } }]
+    // 183-01: no helper-mediated write for the retention key — no create
+    // (the rejection fires before any write) and no update arm either.
+    const createCalls = mockPrisma.systemConfig.create.mock.calls as Array<
+      [{ data: { key: string } }]
     >;
-    const retentionCalls = upsertCalls.filter((c) => c[0]?.where?.key === "chat_message_retention_days");
-    expect(retentionCalls).toHaveLength(0);
+    const retentionCreates = createCalls.filter(
+      (c) => c[0]?.data?.key === "chat_message_retention_days",
+    );
+    expect(retentionCreates).toHaveLength(0);
+    expect(mockPrisma.systemConfig.update).not.toHaveBeenCalled();
   });
 
   it("Test 2: mixed batch rejects only the retention key; other keys still update", async () => {
+    // Existing global row for the non-retention key → the helper's update arm.
+    mockPrisma.systemConfig.findFirst.mockImplementation(
+      (args: { where: { key: string } }) =>
+        args.where.key === "ALLOW_NON_ADMIN_UPLOAD"
+          ? Promise.resolve({ id: "row-upload", key: "ALLOW_NON_ADMIN_UPLOAD", value: "true" })
+          : Promise.resolve(null),
+    );
+
     const result = await updateSettings([
       { key: "chat_message_retention_days", value: "30" },
       { key: "ALLOW_NON_ADMIN_UPLOAD", value: "false" },
@@ -167,30 +190,47 @@ describe("systemConfigService integration — D-09 chat_message_retention_days",
     expect(result.updated).toHaveLength(1);
     expect(result.updated[0]?.key).toBe("ALLOW_NON_ADMIN_UPLOAD");
 
-    const upsertCalls = mockPrisma.systemConfig.upsert.mock.calls as Array<
+    // 183-01 shape pins: the non-retention key was written via the helper's
+    // find-first probe + id-anchored update; the retention key was NOT.
+    const findFirstCalls = mockPrisma.systemConfig.findFirst.mock.calls as Array<
       [{ where: { key: string } }]
     >;
-    const nonRetention = upsertCalls.filter((c) => c[0]?.where?.key === "ALLOW_NON_ADMIN_UPLOAD");
-    expect(nonRetention).toHaveLength(1);
-    const retentionCalls = upsertCalls.filter((c) => c[0]?.where?.key === "chat_message_retention_days");
-    expect(retentionCalls).toHaveLength(0);
+    const retentionProbes = findFirstCalls.filter((c) => c[0]?.where?.key === "chat_message_retention_days");
+    expect(retentionProbes).toHaveLength(0);
+    const nonRetentionProbes = findFirstCalls.filter((c) => c[0]?.where?.key === "ALLOW_NON_ADMIN_UPLOAD");
+    expect(nonRetentionProbes).toHaveLength(1);
+    expect(mockPrisma.systemConfig.update).toHaveBeenCalledWith({
+      where: { id: "row-upload" },
+      data: { value: "false" },
+    });
+    const createCalls = mockPrisma.systemConfig.create.mock.calls as Array<
+      [{ data: { key: string } }]
+    >;
+    expect(createCalls.filter((c) => c[0]?.data?.key === "chat_message_retention_days")).toHaveLength(0);
   });
 
-  it("Test 3: seedConfigDefaults idempotently seeds chat_message_retention_days = '' (update: {})", async () => {
+  it("Test 3: seedConfigDefaults idempotently seeds chat_message_retention_days = '' (create-only-if-missing)", async () => {
     await seedConfigDefaults();
 
-    const upsertCalls = mockPrisma.systemConfig.upsert.mock.calls as Array<
-      [{ where: { key: string }; create: { key: string; value: string }; update: Record<string, unknown> }]
+    // 183-01: the seed writes via upsertSystemConfigRow(prisma, { ..., overwrite: false })
+    // — the create arm fires when the row is missing (create-only-if-missing,
+    // the semantics the old `update: {}` upsert provided) and NO update arm
+    // fires for an existing row.
+    const createCalls = mockPrisma.systemConfig.create.mock.calls as Array<
+      [{ data: { key: string; value: string } }]
     >;
-    const retentionCalls = upsertCalls.filter((c) => c[0]?.where?.key === "chat_message_retention_days");
-    expect(retentionCalls.length).toBeGreaterThanOrEqual(1);
-    const explicit = retentionCalls.find((c) => c[0]?.create?.value === "");
+    const retentionCreates = createCalls.filter((c) => c[0]?.data?.key === "chat_message_retention_days");
+    expect(retentionCreates.length).toBeGreaterThanOrEqual(1);
+    const explicit = retentionCreates.find((c) => c[0]?.data?.value === "");
     expect(explicit).toBeDefined();
-    expect(explicit![0].create).toEqual({
+    expect(explicit![0].data).toEqual({
       key: "chat_message_retention_days",
       value: "",
+      organizationId: null,
     });
-    expect(explicit![0].update).toEqual({});
+    // The seed must never update: overwrite:false → an existing row is
+    // returned unchanged (and with all-missing rows here, zero updates fire).
+    expect(mockPrisma.systemConfig.update).not.toHaveBeenCalled();
   });
 });
 

@@ -57,6 +57,19 @@ import { getSetting } from "./systemConfigService";
 import { logEvent } from "./eventLogService";
 import { getBoss, createQueue, schedule } from "./jobQueue";
 
+// Phase 185 D-09: jobs run OUTSIDE the request ALS — org is resolved FROM THE
+// ROW (never the ambient tenant-context read); ambient reads in jobs are bugs (Pitfall 8).
+//
+// DOCUMENTED CROSS-ORG EXCEPTION (RESEARCH A4 + D-09 — do NOT scope per-org):
+// the retention purge (updateMany below, findMany/deleteMany in Pass 2,
+// memory.deleteMany cascade) is INTENTIONALLY cross-org — a GLOBAL retention
+// policy applied to every org's chat messages. Per-tenant retention VALUES
+// are a Parte II config surface (Phase 185 CONTEXT deferred list); until
+// then getSetting("chat_message_retention_days") is a single global value.
+// The queries run OUTSIDE ALS so the scoped extension skips them
+// (absent-store semantics, 185-01 spike probe 9) — the purge is NOT silently
+// narrowed to one org.
+
 // D-01 — hardcoded, NOT a config key (prevents misconfiguration from
 // shrinking grace below the soft-delete lead time). Surfaced in audit
 // metadata as `graceDays: 7`.

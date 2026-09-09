@@ -21,14 +21,22 @@ jest.mock("react-i18next", () => ({
 }));
 
 describe("ChatEmptyState", () => {
-  it("renders the terminal status-board header and 4 cards", () => {
+  it("renders the monochrome wordmark header and 4 cards (UI revision R-2)", () => {
     renderWithProviders(<ChatEmptyState />);
-    expect(screen.getByText("SIMMETRIC CHAT // READY")).toBeInTheDocument();
+    // The glitch tri-color title was replaced by ChatWordmark: monochrome
+    // heading (i18n app.name) + "READY" micro status line + subtitle.
+    expect(screen.getByText("app.name")).toBeInTheDocument();
+    expect(screen.getByText("READY")).toBeInTheDocument();
     expect(screen.getByText("Ask anything, or pick a quick start below.")).toBeInTheDocument();
     expect(screen.getByText("Ask about your documents")).toBeInTheDocument();
     expect(screen.getByText("Search knowledge base")).toBeInTheDocument();
     expect(screen.getByText("Available skills")).toBeInTheDocument();
     expect(screen.getByText("Token usage today")).toBeInTheDocument();
+  });
+
+  it("renders the white-label app name when provided", () => {
+    renderWithProviders(<ChatEmptyState appName="Custom Brand" />);
+    expect(screen.getByText("Custom Brand")).toBeInTheDocument();
   });
 
   it("shows '—' for document count when not provided", () => {

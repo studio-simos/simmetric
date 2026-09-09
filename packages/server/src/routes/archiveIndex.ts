@@ -5,6 +5,7 @@
 
 import { Router } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import { indexAllWikiPages } from "../services/wikiEmbeddingService";
 import prisma from "../utils/prisma";
@@ -12,7 +13,7 @@ import { logger } from "../utils/logger";
 
 const router = Router();
 
-router.post("/:archiveId/index", authMiddleware, requirePermission("archive:write"), async (req, res) => {
+router.post("/:archiveId/index", authMiddleware, tenantContextMiddleware, requirePermission("archive:write"), async (req, res) => {
   try {
     const archiveId = req.params.archiveId as string;
 

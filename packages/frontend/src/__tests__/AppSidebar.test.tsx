@@ -4,11 +4,13 @@
 // See LICENSE and NOTICE at the repository root for full terms.
 
 /**
- * AppSidebar — uploads menu section visibility tests (Phase 71-03 Task 1).
- *
- * Verifies the uploads SidebarItem is rendered when "uploads" is in
- * menuSections (user role has document:write, SC-1 visibility) and is NOT
- * rendered when "uploads" is absent.
+ * AppSidebar — uploads menu section visibility tests (Phase 71-03 Task 1),
+ * updated for the UI revision R-4: the uploads item left the permanent
+ * sidebar and now lives in the AppNavOverlay (same RBAC gate — "uploads" in
+ * menuSections, user role has document:write, SC-1 visibility). The
+ * sidebar-side test now asserts the minimal rail renders WITHOUT the nav
+ * item regardless of menuSections; the overlay-side test asserts the
+ * uploads item renders when the section is present.
  */
 
 // ── Mocks (must be BEFORE any imports) ──────────────────────────
@@ -16,70 +18,119 @@
 jest.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string) => key,
-    i18n: { language: "en", changeLanguage: jest.fn() },
+    i18n: { language: "en", changeLanguage: jest.fn(), t: (key: string) => key },
   }),
   initReactI18next: { type: "3rdParty", init: jest.fn() },
 }));
+
+const pushMock = jest.fn();
+jest.mock("react-router-dom", () => ({
+  useNavigate: () => pushMock,
+  useLocation: () => ({ pathname: "/" }),
+  MemoryRouter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+// The desktop nav dialog hosts the real cmdk body — jsdom has no matchMedia,
+// so the mobile branch is forced (bottom Sheet renders the same nav content).
+let mockIsMobile = false;
+jest.mock("../hooks/use-mobile", () => ({
+  useIsMobile: () => mockIsMobile,
+}));
+
+// Mock the Command primitives (same passthrough pattern as AppNavOverlay.test):
+// the real cmdk needs jsdom affordances (selection APIs) this file doesn't test.
+jest.mock("@/components/ui/command", () => {
+  return {
+    CommandDialog: ({ children, open }: { children?: React.ReactNode; open?: boolean }) =>
+      open ? <div data-testid="command-dialog">{children}</div> : null,
+    Command: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+    CommandInput: (props: Record<string, unknown>) => <input {...props} />,
+    CommandList: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+    CommandEmpty: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+    CommandGroup: ({ children, heading }: { children?: React.ReactNode; heading?: string }) => (
+      <div data-heading={heading}>{children}</div>
+    ),
+    CommandItem: ({
+      children,
+      onSelect,
+    }: {
+      children?: React.ReactNode;
+      onSelect?: () => void;
+    }) => (
+      <button type="button" onClick={() => onSelect?.()}>
+        {children}
+      </button>
+    ),
+    CommandSeparator: () => <div data-testid="command-separator" />,
+  };
+});
 
 // ── Imports ──────────────────────────────────────────────────────
 
 import "@testing-library/jest-dom";
 import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
 import AppSidebar from "../components/AppSidebar";
+import AppNavOverlay from "../components/AppNavOverlay";
+import type { AppNavOverlayProps } from "../components/AppNavOverlay";
 
 // ── Helpers ──────────────────────────────────────────────────────
 
 function renderSidebar(menuSections: string[]) {
   return render(
-    <MemoryRouter initialEntries={["/"]}>
-      <AppSidebar
-        appName="Simmetric Chat"
-        primaryColor="#4c6ef5"
-        isEnterprise={false}
-        isAdmin={false}
-        menuSections={menuSections}
-        currentWorkspaceId={null}
-        selectedProjectId=""
-        setSelectedProjectId={jest.fn()}
-        selectedWorkspaceId=""
-        setSelectedWorkspaceId={jest.fn()}
-        setWorkspaceId={jest.fn()}
-        t={(key: string) => key}
-        sidebarOpen
-        setSidebarOpen={jest.fn()}
-        projects={[]}
-        workspaces={[]}
-      />
-    </MemoryRouter>
+    <AppSidebar
+      appName="Simmetric Chat"
+      primaryColor="#4c6ef5"
+      user={null}
+      onOpenNavOverlay={jest.fn()}
+      onOpenUserMenu={jest.fn()}
+      t={(key: string) => key}
+      sidebarOpen
+      setSidebarOpen={jest.fn()}
+    />
   );
 }
 
+function renderOverlay(overrides: Partial<AppNavOverlayProps> = {}) {
+  // Mobile branch (Sheet) — plain Radix Dialog, no cmdk internals needed.
+  mockIsMobile = true;
+  const props: AppNavOverlayProps = {
+    open: true,
+    onClose: jest.fn(),
+    isEnterprise: false,
+    isAdmin: false,
+    menuSections: ["uploads"],
+    t: (key: string) => key,
+    selectedProjectId: "",
+    setSelectedProjectId: jest.fn(),
+    selectedWorkspaceId: "",
+    setSelectedWorkspaceId: jest.fn(),
+    setWorkspaceId: jest.fn(),
+    projects: [],
+    workspaces: [],
+    ...overrides,
+  };
+  return render(<AppNavOverlay {...props} />);
+}
+
+afterEach(() => {
+  mockIsMobile = false;
+});
+
 // ── Tests ────────────────────────────────────────────────────────
 
-describe("AppSidebar uploads menu section", () => {
-  it("renders the uploads item when 'uploads' is in menuSections", () => {
-    renderSidebar([
-      "dashboard",
-      "chat",
-      "documents",
-      "knowledgeBase",
-      "workspaces",
-      "widget",
-      "uploads",
-    ]);
+describe("AppSidebar uploads menu section (UI revision R-5)", () => {
+  it("the minimal rail renders WITHOUT the uploads nav item (moved to overlay)", () => {
+    renderSidebar(["dashboard", "chat", "documents", "knowledgeBase", "workspaces", "widget", "uploads"]);
+    expect(screen.queryByText("sidebar.uploads")).not.toBeInTheDocument();
+  });
+
+  it("the overlay renders the uploads item when 'uploads' is in menuSections", () => {
+    renderOverlay({ menuSections: ["chat", "uploads"] });
     expect(screen.getByText("sidebar.uploads")).toBeInTheDocument();
   });
 
-  it("does NOT render the uploads item when 'uploads' is absent", () => {
-    renderSidebar([
-      "dashboard",
-      "chat",
-      "documents",
-      "knowledgeBase",
-      "workspaces",
-      "widget",
-    ]);
+  it("the overlay does NOT render the uploads item when 'uploads' is absent", () => {
+    renderOverlay({ menuSections: ["chat", "widget"] });
     expect(screen.queryByText("sidebar.uploads")).not.toBeInTheDocument();
   });
 });

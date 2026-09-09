@@ -132,11 +132,18 @@ const mockWidget = {
  */
 async function sendArchivePatch() {
   (prisma.widgetSession.findUnique as jest.Mock).mockResolvedValue(mockSession);
+  // Phase 185: the tenant slot (widgetTenantContext) loads the widget row
+  // FIRST, then the handler re-loads it — same mock, both calls green.
   (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+  (prisma.workspace.findFirst as jest.Mock).mockResolvedValue({
+    organizationId: "org-widget-default",
+  });
   (prisma.chat.findFirst as jest.Mock).mockResolvedValue({ id: CHAT_ID, workspaceId: WS_ID });
   return request(app)
     .patch(`/api/internal/widget/session/${VALID_TOKEN}/chat/archive`)
     .set("X-Api-Key", API_KEY)
+    // Phase 185-05 CR-01: the session-token route's identity comes from the
+    // WidgetSession row (token → session.widgetId) — NO X-Widget-Id header.
     .send({ chatId: CHAT_ID, archiveId: ARCHIVE_ID });
 }
 

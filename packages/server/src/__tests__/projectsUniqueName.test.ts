@@ -19,6 +19,12 @@ import request from "supertest";
 jest.mock("../utils/prisma", () => ({
   __esModule: true,
   default: {
+    // Phase 185 (185-02): tenantContextMiddleware (D-09) resolves the org via
+    // organizationMember.findFirst — live default-org membership keeps the
+    // single-org suite responses byte-identical.
+    organizationMember: {
+      findFirst: jest.fn().mockResolvedValue({ organizationId: "org-default" }),
+    },
     project: {
       create: jest.fn(),
       update: jest.fn(),

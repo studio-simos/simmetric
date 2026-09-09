@@ -11,6 +11,7 @@ import { getEnv } from "../config/env";
 import bcrypt from "bcryptjs";
 import { getSetting } from "./systemConfigService";
 import { hmacSha256 } from "./apiKeyService";
+import { ensureDefaultOrgMembership } from "./organizationService";
 
 /**
  * Legacy hardcoded passwords that older deployments seeded onto the
@@ -344,6 +345,11 @@ export async function seedServiceAccount(): Promise<void> {
   });
 
   if (existing) {
+    // WR-01/G-182-01 self-heal: a previous boot may have committed the user
+    // create but crashed before its membership insert (the two-await window).
+    // The helper is idempotent (live-row fast path) — calling it here repairs
+    // the orphan and is a no-op for healthy rows.
+    await ensureDefaultOrgMembership(prisma, existing.id, "member");
     // Older deployments seeded this account with a hardcoded weak password.
     // Detect those exact legacy hashes and rotate to a fresh random secret so
     // existing installs don't carry the weak credential forever.
@@ -383,6 +389,11 @@ export async function seedServiceAccount(): Promise<void> {
       salt,
     },
   });
+
+  // Phase 182 (Pitfall 4b): service account gets default-org membership at
+  // creation. The helper's internal P2002 tolerance keeps a double-boot from
+  // crashing boot (matching the seedWidgetApiKey tolerance pattern).
+  await ensureDefaultOrgMembership(prisma, user.id, "member");
 
   logger.info(`[seed] Created service account: ${user.email}`);
 }
@@ -546,7 +557,39 @@ export async function seedBootstrapAdmin(): Promise<void> {
   // Skip entirely once any admin user exists — never reset a real admin.
   const adminCount = await prisma.userRole.count({ where: { roleId: adminRole.id } });
   if (adminCount > 0) {
+    // WR-01/G-182-01 self-heal: a prior boot may have committed the admin user
+    // (+ role grant) but crashed before the membership insert. Re-run the
+    // idempotent helper for every admin-role holder — no-op for healthy rows.
+    const admins = await prisma.user.findMany({
+      where: { roles: { some: { roleId: adminRole.id } } },
+      select: { id: true },
+    });
+    for (const admin of admins) {
+      await ensureDefaultOrgMembership(prisma, admin.id, "admin");
+    }
     logger.info(`[seed] Admin user already exists (${adminCount}) — skipping bootstrap admin`);
+    return;
+  }
+
+  // user_roles-wipe self-heal (WATCH from v0.24 UAT — wiped 3×: 2026-09-05,
+  // 09-07, 09-08): when NO admin-role rows exist but the well-known admin
+  // user does, the wipe has eaten the join row while the user survived
+  // (createdBy-style FK cascades never touch user_roles, so this is an
+  // external DELETE — cause still unknown). Re-grant the admin role to the
+  // existing account instead of creating a duplicate bootstrap admin that
+  // locks the operator out of their real account.
+  const existingAdmin = await prisma.user.findFirst({
+    where: { username: "admin", deletedAt: null },
+  });
+  if (existingAdmin) {
+    await prisma.userRole.create({
+      data: { userId: existingAdmin.id, roleId: adminRole.id },
+    });
+    await ensureDefaultOrgMembership(prisma, existingAdmin.id, "admin");
+    logger.warn(
+      `[seed] user_roles was wiped while the 'admin' user survived — re-granted the admin role to the existing account. ` +
+        `Investigate the DELETE source before deploying multi-tenant (see STATE.md Deferred Items).`,
+    );
     return;
   }
 
@@ -555,6 +598,12 @@ export async function seedBootstrapAdmin(): Promise<void> {
     where: { OR: [{ username }, { email }] },
   });
   if (handleTaken) {
+    // WR-01/G-182-01 self-heal (role-grant crash window): the handle holder may
+    // be a half-created bootstrap admin from a crashed prior boot (user.create
+    // committed, userRole.create did not). Heal its membership as a plain
+    // member — the role grant is deliberately NOT re-attempted here (the skip
+    // guard must never reset or promote an unrelated existing account).
+    await ensureDefaultOrgMembership(prisma, handleTaken.id, "member");
     logger.warn(
       `[seed] Username "${username}" / email "${email}" already in use by a non-admin user — skipping bootstrap admin`,
     );
@@ -577,6 +626,10 @@ export async function seedBootstrapAdmin(): Promise<void> {
   await prisma.userRole.create({
     data: { userId: user.id, roleId: adminRole.id },
   });
+
+  // Phase 182 (Pitfall 4b): bootstrap admin gets default-org membership
+  // (role admin — owner assignment is Phase 185 provisioning).
+  await ensureDefaultOrgMembership(prisma, user.id, "admin");
 
   logger.warn(
     `[seed] Bootstrap admin created — username="${username}". ` +

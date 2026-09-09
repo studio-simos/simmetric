@@ -524,3 +524,100 @@ describe("index.ts boot order — scheduler init async (Phase 165, Q-02)", () =>
     expect(src).not.toMatch(/await\s+initSynthesisPipelineScheduler/);
   });
 });
+
+// Phase 186 (SAAS-05, D-10): SaaS plugin boot-order + reverse-teardown
+// invariants. Source-string assertion — reads index.ts and asserts:
+//   - await loadSaaSPlugin(app) appears AFTER loadEnterprisePlugin and
+//     BEFORE mountCatchAlls (plugin routes registered before the catch-alls
+//     — T-186-06: catch-alls stay LAST)
+//   - await shutdownSaaSPlugin() appears BEFORE shutdownEnterprisePlugin()
+//     (D-10 reverse load order) and both BEFORE prisma.$disconnect()
+//   - the SaaS load stays BEFORE the production scheduler block (both
+//     plugin loads precede it)
+//   - probe edge (T-186-08, mechanism (b)): both plugin loads are DIRECT
+//     awaited statements in the boot block (`await\s+` prefix convention) —
+//     a register throw in loadSaaSPlugin exits the process BEFORE control
+//     can continue on to the catch-all mount line (mechanism (a) — the
+//     loader-core-level register-throw → __PROCESS_EXIT__ test — lives in
+//     saasLoader.test.ts; the sequential-await structure here makes
+//     "exit before mount" structural: an exit inside the awaited load can
+//     never continue past it).
+// Reuses the module-level readIndexTsSource() + lineNumberOfFirstMatch()
+// helpers (defined above — do NOT redefine). Fails the build if the boot
+// sequence is reordered and breaks the invariants.
+describe("index.ts boot order — SaaS plugin (Phase 186, SAAS-05 D-10)", () => {
+  const src = readIndexTsSource();
+  const lines = src.split(/\r?\n/);
+
+  const enterpriseLine = lineNumberOfFirstMatch(
+    lines,
+    /await\s+loadEnterprisePlugin\s*\(\s*app\s*\)/,
+  );
+  const saasLine = lineNumberOfFirstMatch(
+    lines,
+    /await\s+loadSaaSPlugin\s*\(\s*app\s*\)/,
+  );
+  const catchAllsLine = lineNumberOfFirstMatch(
+    lines,
+    // Anchor at statement start: the call site is a bare statement (sync),
+    // not awaited — a plain-name regex would first hit the createApp() doc
+    // comment that mentions the call ("mounted by mountCatchAlls(app)").
+    // The ^\s* prefix excludes `//` comment lines (Phase 165 convention).
+    /^\s*mountCatchAlls\s*\(\s*app\s*\)/,
+  );
+  const schedulerBlockLine = lineNumberOfFirstMatch(
+    lines,
+    /if\s*\(\s*env\.NODE_ENV\s*===\s*["']production["']\s*\)/,
+  );
+  const shutdownSaaSLine = lineNumberOfFirstMatch(
+    lines,
+    /await\s+shutdownSaaSPlugin\s*\(\s*\)/,
+  );
+  const shutdownEnterpriseLine = lineNumberOfFirstMatch(
+    lines,
+    /await\s+shutdownEnterprisePlugin\s*\(\s*\)/,
+  );
+  const prismaDisconnectLine = lineNumberOfFirstMatch(
+    lines,
+    /await\s+prisma\.\$disconnect\s*\(\s*\)/,
+  );
+
+  test("loadSaaSPlugin(app) is present as an awaited boot step", () => {
+    expect(saasLine).toBeGreaterThan(0);
+  });
+
+  test("loadSaaSPlugin(app) runs AFTER loadEnterprisePlugin(app) (D-10)", () => {
+    expect(enterpriseLine).toBeGreaterThan(0);
+    expect(saasLine).toBeGreaterThan(enterpriseLine);
+  });
+
+  test("loadSaaSPlugin(app) runs BEFORE mountCatchAlls(app) (T-186-06 — catch-alls stay LAST)", () => {
+    expect(catchAllsLine).toBeGreaterThan(0);
+    expect(saasLine).toBeLessThan(catchAllsLine);
+  });
+
+  test("loadSaaSPlugin(app) runs BEFORE the NODE_ENV===production scheduler block (both plugin loads precede it)", () => {
+    expect(schedulerBlockLine).toBeGreaterThan(0);
+    expect(saasLine).toBeLessThan(schedulerBlockLine);
+  });
+
+  test("loadSaaSPlugin(app) is a direct awaited statement in the boot block (probe-edge mechanism (b) — T-186-08)", () => {
+    // The await\s+ prefix proves the load is a sequential awaited step in
+    // the boot block: an exit (process.exit(1) on register throw, proven at
+    // loader-core level in saasLoader.test.ts) inside it cannot continue on
+    // to the catch-all mount — no half-mounted route surface.
+    expect(lines[saasLine - 1]).toMatch(/^\s*await\s+loadSaaSPlugin\s*\(\s*app\s*\)/);
+  });
+
+  test("shutdownSaaSPlugin is called in gracefulShutdown BEFORE shutdownEnterprisePlugin (D-10 reverse load order)", () => {
+    expect(shutdownSaaSLine).toBeGreaterThan(0);
+    expect(shutdownEnterpriseLine).toBeGreaterThan(0);
+    expect(shutdownSaaSLine).toBeLessThan(shutdownEnterpriseLine);
+  });
+
+  test("both plugin shutdowns run BEFORE prisma.$disconnect (teardown can still hit the DB)", () => {
+    expect(prismaDisconnectLine).toBeGreaterThan(0);
+    expect(shutdownSaaSLine).toBeLessThan(prismaDisconnectLine);
+    expect(shutdownEnterpriseLine).toBeLessThan(prismaDisconnectLine);
+  });
+});

@@ -6,10 +6,11 @@
 import { Router, type Request, type Response } from "express";
 import { Prisma } from "@prisma/client";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import { requireFeature, requireFeatureLimit } from "../middleware/license";
 import { isFeatureEnabled, getLicenseInfo } from "../services/licenseService";
-import { createWidgetSchema, updateWidgetSchema, widgetAnalyticsQuerySchema } from "@simmetric-chat/shared";
+import { createWidgetSchema, updateWidgetSchema, widgetAnalyticsQuerySchema, DEFAULT_ORG_ID } from "@simmetric-chat/shared";
 import { Parser } from "@json2csv/plainjs";
 import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
@@ -21,7 +22,7 @@ import {
 import { fireWidgetCacheBust } from "../services/widgetCacheBustService";
 
 const router = Router();
-router.use(authMiddleware, requireAdmin);
+router.use(authMiddleware, tenantContextMiddleware, requireAdmin);
 
 // Tri-state Json write translation (D-04, D-08): the shared schemas accept
 // `.nullable()` on the localization blobs, but Prisma 7's InputJsonValue
@@ -237,6 +238,10 @@ router.post("/", requireFeature("widget_enabled"), requireFeatureLimit("max_widg
         suggestedQuestions: toJsonWriteValue(parsed.data.suggestedQuestions),
         credits: toJsonWriteValue(parsed.data.credits),
         createdBy: req.userId!,
+        // CR-03 (185-05, D-04): explicit org stamp — the WidgetWorkspace
+        // createMany at the whitelist route derives from widget.organizationId
+        // and now picks up the stamped org naturally.
+        organizationId: req.organizationId!,
       },
       include: {
         workspaces: { select: { workspaceId: true } },
@@ -485,7 +490,11 @@ router.put("/:id/workspaces", async (req: Request, res: Response) => {
     await prisma.$transaction([
       prisma.widgetWorkspace.deleteMany({ where: { widgetId } }),
       prisma.widgetWorkspace.createMany({
-        data: workspaceIds.map((workspaceId: string) => ({ widgetId, workspaceId })),
+        // Phase 182: WidgetWorkspace carries a non-null organizationId with a
+        // Prisma-level default, but createMany does NOT apply schema defaults
+        // client-side — supply the default org explicitly (request-resolved
+        // org arrives with TenantContext, Phase 185).
+        data: workspaceIds.map((workspaceId: string) => ({ widgetId, workspaceId, organizationId: widget.organizationId ?? DEFAULT_ORG_ID })),
       }),
     ]);
 

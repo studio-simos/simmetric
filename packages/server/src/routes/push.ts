@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import { requireFeature } from "../middleware/license";
 import prisma from "../utils/prisma";
@@ -43,14 +44,14 @@ function initVapid() {
 initVapid();
 
 // GET /api/system/push/vapid-key — get public VAPID key for frontend
-router.get("/vapid-key", authMiddleware, (_req: Request, res: Response) => {
+router.get("/vapid-key", authMiddleware, tenantContextMiddleware, (_req: Request, res: Response) => {
   res.json({ publicKey: vapidKeys.publicKey });
 });
 
 // POST /api/system/push/subscribe — register a push subscription
 // Available in all tiers (Community + Enterprise) — push notifications are
 // a core UX feature, not a premium gate.
-router.post("/subscribe", authMiddleware, async (req: Request, res: Response) => {
+router.post("/subscribe", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const { endpoint, keys } = req.body;
 
@@ -59,6 +60,11 @@ router.post("/subscribe", authMiddleware, async (req: Request, res: Response) =>
       return;
     }
 
+    // T-185-10 disposition (Pitfall-2 grep-gate): self-owned child — the
+    // subscription row is keyed by the CLIENT's own endpoint and every arm
+    // re-stamps userId = req.userId (JWT principal); create gains the org
+    // from the schema @default (D-04). A cross-org endpoint collision
+    // re-binds the endpoint to the caller — same row, no cross-org READ.
     await prisma.pushSubscription.upsert({
       where: { endpoint },
       create: {
@@ -80,7 +86,7 @@ router.post("/subscribe", authMiddleware, async (req: Request, res: Response) =>
 });
 
 // DELETE /api/system/push/subscribe — unregister push subscription
-router.delete("/subscribe", authMiddleware, async (req: Request, res: Response) => {
+router.delete("/subscribe", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const { endpoint } = req.body;
     if (!endpoint) {
@@ -104,7 +110,7 @@ router.delete("/subscribe", authMiddleware, async (req: Request, res: Response) 
 const PUSH_BROADCAST_BATCH_SIZE = 100;
 
 // POST /api/system/push/test — send a test push notification (admin only)
-router.post("/test", authMiddleware, requireAdmin, async (_req: Request, res: Response) => {
+router.post("/test", authMiddleware, tenantContextMiddleware, requireAdmin, async (_req: Request, res: Response) => {
   try {
     const payload = JSON.stringify({
       title: "Simmetric Chat",

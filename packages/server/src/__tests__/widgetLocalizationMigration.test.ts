@@ -351,11 +351,24 @@ describe("audit:migrations classification", () => {
   // Phase 181 flattened the 11-migration trail to a SINGLE additive init
   // (00000000000000_init — 53 tables, byte-identical to the live schema;
   // the destructive bcrypt→HMAC api_keys history is gone from the tree,
-  // preserved in the private repo history). The audit now reports
-  // 1 migration, additive, 0 destructive.
-  it("committed MIGRATION_AUDIT.md reports the flattened single init (1 additive, 0 destructive)", () => {
+  // preserved in the private repo history).
+  // Phase 182 (M1-M4, 182-02) added the four tenancy-substrate migrations
+  // on top of the flattened init — all classified additive (Organization +
+  // OrganizationMember tables, 26-table organizationId backfill, NOT NULL
+  // + defaults). The audit now reports 5 migrations, 5 additive,
+  // 0 destructive.
+  // Phase 183 (M5, 183-03) added the SystemConfig composite-unique swap
+  // (DROP INDEX scalar unique + CREATE UNIQUE INDEX composite + partial
+  // unique — all additive per the audit gate's pattern-4 DROP INDEX
+  // whitelist). The audit now reports 6 migrations, 6 additive,
+  // 0 destructive.
+  // Phase 184 (M6, 184-01) added the additive storageKey columns on
+  // documents + upload_drafts with the null-guarded backfill
+  // (storageKey = filePath — path-as-key, no file moves). The audit now
+  // reports 7 migrations, 7 additive, 0 destructive.
+  it("committed MIGRATION_AUDIT.md reports the audit state (7 additive, 0 destructive — init + M1-M6)", () => {
     const auditPath = path.resolve(__dirname, "../../../../docs/MIGRATION_AUDIT.md");
     const audit = fs.readFileSync(auditPath, "utf-8");
-    expect(audit).toContain("**Total:** 1 migrations · **Additive:** 1 · **Destructive:** 0");
+    expect(audit).toContain("**Total:** 7 migrations · **Additive:** 7 · **Destructive:** 0");
   });
 });

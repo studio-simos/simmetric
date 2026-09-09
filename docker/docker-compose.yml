@@ -44,6 +44,13 @@ services:
       # in the server image) resolve from the same tree. A dist-only mount
       # breaks dep resolution AND nested mounts get shadowed by the parent.
       - ../../simmetric-enterprise:/simmetric-enterprise:ro
+      # ─── SaaS plugin (Parte II — private fork) ──────────────────────
+      # Same pattern as enterprise: mount the WHOLE sibling repo (dist/ +
+      # node_modules/) so require.resolve("@simmetric-chat/saas") finds the
+      # package AND its deps from the same tree. Removed with `docker compose
+      # down` if you want community-only mode (the saasLoader no-ops on
+      # MODULE_NOT_FOUND).
+      - ../../simmetric-saas:/simmetric-saas:ro
     environment:
       - NODE_ENV=production
       - SERVER_PORT=3000
@@ -78,7 +85,7 @@ services:
       # express/shared deps from the server's own node_modules, and the
       # plugin-only deps (passport, openid-client, ...) from the mounted
       # /simmetric-enterprise/node_modules.
-      - NODE_PATH=/app/packages/server/node_modules:/simmetric-enterprise/node_modules
+      - NODE_PATH=/app/packages/server/node_modules:/simmetric-enterprise/node_modules:/simmetric-saas/node_modules
       - COLLECTOR_SECRET=${COLLECTOR_SECRET:-change-me-in-production}
       # WIDGET_API_KEY: shared secret with the widget service (must match the
       # widget service env below). The server uses it to (a) auto-seed the
@@ -196,27 +203,80 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # ─── MinIO (S3-compatible storage — StorageProvider conformance) ──
+  # Phase 184 (SAAS-03, D-09): active service for the S3 arm of the
+  # StorageProvider conformance suite (`pnpm --filter server test --
+  # src/__tests__/storage` with S3_AVAILABLE=true). Pinned RELEASE tag —
+  # never :latest (pinned-tag convention, postgres/qdrant precedent).
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: simmetric-chat-minio
+    expose:
+      - "9000"
+      - "9001"
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-simmetricchat}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-simmetricchat}
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      # `mc ready local` is the image's own healthcheck idiom (A1); the
+      # fallback probe is the liveness endpoint if mc misbehaves on the
+      # pinned tag.
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # One-shot bucket init: creates ${S3_BUCKET:-simmetricchat} if missing so
+  # dev/CI conformance runs find the bucket ready without manual steps.
+  minio-init:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: simmetric-chat-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-simmetricchat}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-simmetricchat}
+    entrypoint: >
+      sh -c 'mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
+             mc mb --ignore-existing local/${S3_BUCKET:-simmetricchat}'
+    restart: "no"
+
   # ─── Ollama (Local LLM) ──────────────────────────
-  # ollama:
-  #   image: ollama/ollama:latest
-  #   container_name: simmetric-chat-ollama
-  #   environment:
-  #     - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-10m}
-  #     - OLLAMA_HOST=0.0.0.0:11434
-  #   expose:
-  #     - "11434"
-  #   volumes:
-  #     - ollama-data:/root/.ollama
-  #   healthcheck:
-  #     # The ollama/ollama image ships NO curl/wget/node — the previous curl
-  #     # probe could never execute (container permanently "unhealthy").
-  #     # `ollama ls` talks to the local daemon its own binary serves.
-  #     test: ["CMD-SHELL", "ollama ls >/dev/null 2>&1 || exit 1"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 40s
-  #   restart: unless-stopped
+  # Activated 2026-09-08 (owner decision): the provider "fetch failed" and the
+  # Ollama Cloud login (docker exec) both require a REAL ollama container on
+  # the compose network — the host daemon binds 127.0.0.1 and is unreachable
+  # from containers. NOTE: the container has its OWN model volume
+  # (ollama-data) — host-downloaded models do NOT appear here; pull models
+  # via the app UI or `docker exec simmetric-chat-ollama ollama pull <model>`.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: simmetric-chat-ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-10m}
+      - OLLAMA_HOST=0.0.0.0:11434
+    expose:
+      - "11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      # The ollama/ollama image ships NO curl/wget/node — the previous curl
+      # probe could never execute (container permanently "unhealthy").
+      # `ollama ls` talks to the local daemon its own binary serves.
+      test: ["CMD-SHELL", "ollama ls >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
 
   # ─── Redis (Horizontal Scaling Cache) ────────────
   redis:
@@ -233,6 +293,42 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+    restart: unless-stopped
+
+  # ─── searXNG (Self-hosted Metasearch — optional web-search backend) ──
+  # Added 2026-09-09 as pure optional infrastructure: NOTHING depends on it
+  # and it depends on nothing — wire it into server env only in a future task
+  # if web-search tooling needs it (redis/qdrant pattern).
+  # Pinned `YYYY.M.D-<sha>` release tag — never :latest (pinned-tag
+  # convention, minio/pgvector precedent).
+  # The image entrypoint auto-provisions /etc/searxng/settings.yml from the
+  # image template (random secret key) on first boot when the file is
+  # absent — no settings file ships with the repo.
+  # JSON API (/search?format=json) is 403 by default (template formats =
+  # html only); operators enable it by placing their own settings.yml (with
+  # `formats: [html, json]`) in the searxng-config volume — the entrypoint
+  # never overwrites an existing file.
+  # Healthcheck: unlike ollama/qdrant (no curl/wget in those images), the
+  # searxng Alpine image SHIPS wget at /usr/sbin/wget, and /healthz returns
+  # 200 once granian is up — probe verified inside the 2026.9.8-3fdc6d753
+  # image.
+  # Data note: the image's data path is /var/cache/searxng (env
+  # __SEARXNG_DATA_PATH) — cache volume lives there, config volume at
+  # /etc/searxng (env __SEARXNG_CONFIG_PATH).
+  searxng:
+    image: searxng/searxng:2026.9.8-3fdc6d753
+    container_name: simmetric-chat-searxng
+    expose:
+      - "8080"
+    volumes:
+      - searxng-config:/etc/searxng
+      - searxng-data:/var/cache/searxng
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   # ─── Qdrant (Vector Database) ──────────────────────
@@ -285,7 +381,10 @@ volumes:
   xenova-cache:
   widget-storage:
   pgdata:
-#  ollama-data:
+  ollama-data:
   redis-data:
+  minio-data:
+  searxng-config:
+  searxng-data:
 #  qdrant-storage:
 #  chroma-data:

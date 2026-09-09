@@ -8,6 +8,7 @@ import jwt from "jsonwebtoken";
 import { getEnv, ENV_PATH } from "../config/env";
 import { verifyLicenseKey, getLicenseInfo, LICENSE_PUBLIC_KEY } from "../services/licenseService";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 
 const router = Router();
@@ -47,7 +48,7 @@ function redactSecret(body: unknown): unknown {
 // reason source; getLicenseInfo() supplies the cached tier. jwt.decode is
 // display-only for structural booleans — the decoded payload is NEVER
 // serialized into the response.
-router.get("/diagnose", authMiddleware, requireAdmin, (_req: Request, res: Response) => {
+router.get("/diagnose", authMiddleware, tenantContextMiddleware, requireAdmin, (_req: Request, res: Response) => {
   const env = getEnv();
   const verdict = verifyLicenseKey(env.LICENSE_KEY, LICENSE_PUBLIC_KEY);
   const info = getLicenseInfo();

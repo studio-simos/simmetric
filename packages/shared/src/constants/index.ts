@@ -11,3 +11,6 @@ export type { FeatureFlag } from "./license";
 
 export { PROVIDER_PRESETS } from "./providerPresets";
 export type { ProviderPresetCategory } from "./providerPresets";
+
+export { DEFAULT_ORG_ID, DEFAULT_ORG_SLUG, ROLE_IN_ORG_VALUES } from "./organization";
+export type { RoleInOrg } from "./organization";

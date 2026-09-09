@@ -13,8 +13,15 @@ dist/
 # Prisma
 packages/server/storage/
 
-# Storage (runtime data)
-storage/
+# Storage (runtime data) — anchored to repo root only so source dirs named
+# storage/ (e.g. src/services/storage/, src/__tests__/storage/ from Phase 184)
+# stay trackable. Nested runtime dirs (packages/server/storage/,
+# packages/collector/storage/, packages/shared/storage/ — the shared suite
+# resolves process.cwd()-relative runtime paths when jest runs per-package)
+# are covered by their own anchored entries below.
+/storage/
+packages/collector/storage/
+packages/shared/storage/
 *.db
 *.db-journal
 
@@ -92,3 +99,4 @@ docs/DONE/
 
 # Publication boundary (Phase 181): TLS dev certs now generated at image build (never commit private keys)
 docker/certs/
+.gsd/

@@ -86,21 +86,12 @@ const minimalSidebarProps: AppSidebarProps = {
   primaryColor: "#4c6ef5",
   appSubtitle: "Custom Subtitle",
   appIconUrl: "http://x/icon.png",
-  isEnterprise: false,
-  isAdmin: false,
-  menuSections: ["chat", "settings"],
-  currentWorkspaceId: null,
-  selectedProjectId: "",
-  setSelectedProjectId: jest.fn(),
-  selectedWorkspaceId: "",
-  setSelectedWorkspaceId: jest.fn(),
-  setWorkspaceId: jest.fn(),
-  license: { tier: "community" },
+  user: null,
+  onOpenNavOverlay: jest.fn(),
+  onOpenUserMenu: jest.fn(),
   t: (key: string) => key,
   sidebarOpen: true,
   setSidebarOpen: jest.fn(),
-  projects: [],
-  workspaces: [],
 };
 
 const SETTINGS_GROUPS = [
@@ -232,7 +223,7 @@ describe("AppSidebar + SettingsMenu render theme hooks under every theme", () =>
       render(
         <SettingsMenu
           groups={SETTINGS_GROUPS}
-          activeTab="general"
+          activeVoice={{ tab: "general", labelKey: "settings.tabs.general", sectionId: null }}
           onSelectTab={jest.fn()}
           onSelectSection={jest.fn()}
         />,

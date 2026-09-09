@@ -12,10 +12,17 @@ import { PrismaClientKnownRequestError } from "@prisma/client-runtime-utils";
 import { initializeSchema } from "@simmetric-chat/shared";
 import type { SetConfigInput, ConfigKey } from "@simmetric-chat/shared";
 import prisma from "../utils/prisma";
+
+// Phase 185 (T-185-10, Pitfall-2 grep-gate): the findUnique site(s) in this
+// file target User — a GLOBAL identity model per Phase-182 D-01 (identity-
+// pure, no org column). Not in TENANT_READ_MODELS — exempt from the
+// org-assertion gate by design.
 import { logger } from "../utils/logger";
-import { getSetting } from "../services/systemConfigService";
+import { getSetting, upsertSystemConfigRow } from "../services/systemConfigService";
+import { ensureDefaultOrgMembership } from "../services/organizationService";
 import { getEnv } from "../config/env";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import { probeRateLimiter } from "../middleware/rateLimit";
 import { assertSafeProbeUrl } from "../utils/ssrfGuard";
@@ -145,8 +152,11 @@ router.post("/initialize", async (req: Request, res: Response) => {
         // (1) Re-read setup_wizard_mode via tx — if not "active", a
         //     concurrent winner already flipped it. Throw GATE_NOT_ACTIVE
         //     → outer catch maps to 404 { error: "Not found" }.
-        const modeRow = await tx.systemConfig.findUnique({
-          where: { key: "setup_wizard_mode" },
+        //     Phase 183 (SAAS-02): findFirst with the explicit null-org
+        //     filter — composite-unique-safe (survives the Plan-03 swap);
+        //     a plain `where: { key }` unique read would not compile then.
+        const modeRow = await tx.systemConfig.findFirst({
+          where: { key: "setup_wizard_mode", organizationId: null },
         });
         if (!modeRow || modeRow.value !== "active") {
           throw GATE_NOT_ACTIVE;
@@ -194,39 +204,51 @@ router.post("/initialize", async (req: Request, res: Response) => {
           });
         }
 
-        // (7) Save optional LLM/vector config via tx.systemConfig.upsert
-        //     (mirror the existing updateSettings lines but against tx, and
-        //     SKIP the updateSettings readOnly/validator/rejection path —
-        //     those are user-PUT guards, not wizard-internal writes; the
-        //     wizard is trusted boot-equivalent code writing known keys).
+        // (6.5) Phase 182 (T-182-13 / Pitfall 4b): default-org membership
+        // INSIDE the same Serializable tx — atomic with user creation, so a
+        // wizard race can never commit a membership-less admin (T-182-13).
+        await ensureDefaultOrgMembership(tx, created.id, "admin");
+
+        // (7) Save optional LLM/vector config via the shared
+        //     upsertSystemConfigRow helper ON tx (mirror the existing
+        //     updateSettings lines but against tx, and SKIP the
+        //     updateSettings readOnly/validator/rejection path — those are
+        //     user-PUT guards, not wizard-internal writes; the wizard is
+        //     trusted boot-equivalent code writing known keys). Phase 183
+        //     (SAAS-02): find-first-then-write via the helper — the tx
+        //     client satisfies the helper's PrismaDbClient param (P7:
+        //     writes stay ON tx inside the Serializable transaction).
         if (config && Object.keys(config).length > 0) {
           const configs: SetConfigInput[] = Object.entries(config)
             .filter(([, value]) => value !== undefined && value !== "")
             .map(([key, value]) => ({ key: key as ConfigKey, value: String(value) }));
           for (const c of configs) {
-            await tx.systemConfig.upsert({
-              where: { key: c.key },
-              create: { key: c.key, value: c.value },
-              update: { value: c.value },
-            });
+            await upsertSystemConfigRow(tx, { key: c.key, value: c.value });
           }
         }
 
-        // (8) D-04: close self-service registration for this deployment.
-        await tx.systemConfig.upsert({
-          where: { key: "ALLOW_REGISTRATION" },
-          create: { key: "ALLOW_REGISTRATION", value: "false" },
-          update: { value: "false" },
+        // (8) D-04: close self-service registration for this deployment
+        //     (same helper-on-tx shape as step 7).
+        await upsertSystemConfigRow(tx, {
+          key: "ALLOW_REGISTRATION",
+          value: "false",
         });
 
-        // (9) MODE-FLIP-FIRST: tx.systemConfig.update setup_wizard_mode →
+        // (9) MODE-FLIP-FIRST: tx.systemConfig update setup_wizard_mode →
         //     "completed" INSIDE the transaction, BEFORE the JWT is issued.
         //     This arms the D-10 404 gate the INSTANT the transaction commits.
         //     A concurrent request that already passed the outer fast-path
         //     gate will hit the inner re-check (step 1) on its own
         //     transaction and 404 (or abort at commit with P2034 → 409).
+        //     Phase 183 (SAAS-02): findFirst with the explicit null-org
+        //     filter, then the id-anchored update — `where: { key }` dies
+        //     after the composite-unique swap (Plan 03); `where: { id }` is
+        //     swap-agnostic by construction.
+        const wizardModeRow = await tx.systemConfig.findFirst({
+          where: { key: "setup_wizard_mode", organizationId: null },
+        });
         await tx.systemConfig.update({
-          where: { key: "setup_wizard_mode" },
+          where: { id: wizardModeRow?.id ?? "" },
           data: { value: "completed" },
         });
 
@@ -599,7 +621,7 @@ router.post("/probe-vector", probeRateLimiter, async (req: Request, res: Respons
  *         description: Internal server error
  */
 // POST /api/system/reset-db — reset database (admin only, requires confirmation)
-router.post("/reset-db", authMiddleware, requireAdmin, async (req: Request, res: Response) => {
+router.post("/reset-db", authMiddleware, tenantContextMiddleware, requireAdmin, async (req: Request, res: Response) => {
   try {
     const { confirm } = req.body;
     if (confirm !== "RESET") {
@@ -654,7 +676,7 @@ router.post("/reset-db", authMiddleware, requireAdmin, async (req: Request, res:
  *         description: Admin access required
  */
 // POST /api/system/reindex-documents — rebuild FTS index from vector DB (admin only)
-router.post("/reindex-documents", authMiddleware, requireAdmin, async (req: Request, res: Response) => {
+router.post("/reindex-documents", authMiddleware, tenantContextMiddleware, requireAdmin, async (req: Request, res: Response) => {
   const startTime = Date.now();
   let reindexed = 0;
   let skipped = 0;
@@ -790,7 +812,7 @@ router.post("/reindex-documents", authMiddleware, requireAdmin, async (req: Requ
  *       403:
  *         description: Admin access required
  */
-router.post("/reembed-documents", authMiddleware, requireAdmin, async (req: Request, res: Response) => {
+router.post("/reembed-documents", authMiddleware, tenantContextMiddleware, requireAdmin, async (req: Request, res: Response) => {
   const startTime = Date.now();
   let reindexed = 0;
   let skipped = 0;
@@ -927,7 +949,7 @@ router.post("/reembed-documents", authMiddleware, requireAdmin, async (req: Requ
 });
 
 // POST /api/system/ocr/prewarm — manually pre-warm an OCR vision model (admin only)
-router.post("/ocr/prewarm", authMiddleware, requireAdmin, async (req: Request, res: Response) => {
+router.post("/ocr/prewarm", authMiddleware, tenantContextMiddleware, requireAdmin, async (req: Request, res: Response) => {
   try {
     const { model } = req.body as { model?: string };
     if (!model || typeof model !== "string" || model.trim().length === 0) {

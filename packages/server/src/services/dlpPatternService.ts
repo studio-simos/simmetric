@@ -11,12 +11,20 @@
  * DLP_PATTERNS const in dlpFilter.ts is the graceful-degradation fallback
  * (spec §2.4 point 2) applied by scanContentAsync when the DB is unreachable.
  *
- * Caching (spec §2.4 point 5 + §4.5):
- * - DB rows cached in-memory with a 5-minute TTL — cross-instance changes
- *   propagate within the TTL even without shared invalidation.
+ * Caching (spec §4.5 + CR-02 185-05):
+ * - DB rows cached in-memory per ORG with a 5-minute TTL — cross-instance
+ *   changes propagate within the TTL even without shared invalidation. The
+ *   CR-02 fix: the cache is keyed by the orgId argument (null key for the
+ *   absent-store arm) so one org's rows can never leak into another org's
+ *   scans (the pre-185 module-level pair was org-blind).
+ * - Built-in patterns are GLOBAL safety rails: an org-scoped read always
+ *   merges (org's customs OR isBuiltIn) — built-ins redact in EVERY org
+ *   (the CR-02 fail-open class is closed). Built-in rows stay pinned to the
+ *   default org in the DB (schema M3 backfill); only the READ is org-agnostic
+ *   for built-ins.
  * - Compiled RegExp cached per pattern row id + source + flags so repeated
  *   scans never recompile. invalidateCache() (called by every CRUD mutation)
- *   clears BOTH caches.
+ *   clears EVERY org entry plus the compiled map.
  *
  * This module owns DB + compile + test logic only — no HTTP, and the scan
  * EXECUTION stays in dlpFilter.ts (scanWithPatterns) so the module-import
@@ -53,8 +61,12 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 /** Spec §4.9 — max 50 CUSTOM (non built-in) patterns per instance. */
 export const MAX_CUSTOM_PATTERNS = 50;
 
-let cachedPatterns: DlpPatternRow[] | null = null;
-let cacheLoadedAt = 0;
+/**
+ * CR-02 (185-05): per-org row cache keyed by the orgId argument (null = the
+ * absent-store arm — pre-185 unscoped semantics). One org's rows can never
+ * be reused by another org's scan within the TTL.
+ */
+const patternCache = new Map<string | null, { rows: DlpPatternRow[]; loadedAt: number }>();
 const compiledCache = new Map<string, RegExp>();
 
 /**
@@ -84,32 +96,48 @@ function compiledFor(row: DlpPatternRow): RegExp {
 }
 
 /**
- * Active (isEnabled) pattern rows: createdAt ASC (built-ins seeded first —
- * spec §4.3 sequential redaction order: the first pattern that matches wins;
- * already-redacted text is not re-scanned), name ASC as the deterministic
- * tie-break. Throws on DB failure — the CALLER (scanContentAsync) owns the
- * built-in fallback so a cache-hit hot path never pays a try/catch.
+ * Active (isEnabled) pattern rows for ONE org (CR-02 org-explicit contract):
+ * - orgId PROVIDED (in-request scans — chat/widget stream always run inside
+ *   the ALS window): where = isEnabled AND (organizationId = orgId OR
+ *   isBuiltIn) — built-ins are global safety rails, not tenant data, so they
+ *   redact in EVERY org.
+ * - orgId ABSENT (no ALS store — pre-185 equivalence for any non-request
+ *   caller): the unscoped isEnabled-only where (byte-identical pre-185 arm).
+ *
+ * Ordering: createdAt ASC (built-ins seeded first — spec §4.3 sequential
+ * redaction order: the first pattern that matches wins; already-redacted
+ * text is not re-scanned), name ASC as the deterministic tie-break. Throws
+ * on DB failure — the CALLER (scanContentAsync) owns the built-in fallback
+ * so a cache-hit hot path never pays a try/catch.
  */
-export async function getActivePatterns(): Promise<DlpPatternRow[]> {
-  if (cachedPatterns && Date.now() - cacheLoadedAt < CACHE_TTL_MS) {
-    return cachedPatterns;
+export async function getActivePatterns(orgId?: string): Promise<DlpPatternRow[]> {
+  const cacheKey = orgId ?? null;
+  const hit = patternCache.get(cacheKey);
+  if (hit && Date.now() - hit.loadedAt < CACHE_TTL_MS) {
+    return hit.rows;
   }
+  // CR-02: built-ins are org-agnostic in scans — an org-scoped read merges
+  // the org's customs with the built-ins (OR), never drops the rails.
+  const where = orgId
+    ? { isEnabled: true, OR: [{ organizationId: orgId }, { isBuiltIn: true }] }
+    : { isEnabled: true };
   const rows = (await prisma.dlpPattern.findMany({
-    where: { isEnabled: true },
+    where,
     orderBy: [{ createdAt: "asc" }, { name: "asc" }],
   })) as DlpPatternRow[];
-  cachedPatterns = rows;
-  cacheLoadedAt = Date.now();
+  patternCache.set(cacheKey, { rows, loadedAt: Date.now() });
   return rows;
 }
 
 /**
  * Compiled active patterns for scanning — same DB contract as
  * getActivePatterns with the per-row regex resolved from the compiled cache.
- * Throws on DB failure (fallback ownership: dlpFilter.scanContentAsync).
+ * `getActiveCompiledPatterns(orgId?)` threads the org from its caller
+ * (dlpFilter.scanContentAsync reads the ambient tenant store). Throws on DB
+ * failure (fallback ownership: dlpFilter.scanContentAsync).
  */
-export async function getActiveCompiledPatterns(): Promise<CompiledDlpPattern[]> {
-  const rows = await getActivePatterns();
+export async function getActiveCompiledPatterns(orgId?: string): Promise<CompiledDlpPattern[]> {
+  const rows = await getActivePatterns(orgId);
   return rows.map((row) => ({
     type: row.name,
     regex: compiledFor(row),
@@ -117,9 +145,18 @@ export async function getActiveCompiledPatterns(): Promise<CompiledDlpPattern[]>
   }));
 }
 
-/** ALL pattern rows (enabled + disabled) for the admin list. */
-export async function listPatterns(): Promise<DlpPatternRow[]> {
+/**
+ * ALL pattern rows (enabled + disabled) for the admin list — same optional
+ * orgId contract as getActivePatterns: an org-scoped admin list shows the
+ * org's customs PLUS the built-ins (visible-but-not-cross-org-mutable by
+ * design; the update/delete routes' org assertions stay fail-closed).
+ */
+export async function listPatterns(orgId?: string): Promise<DlpPatternRow[]> {
+  const where = orgId
+    ? { OR: [{ organizationId: orgId }, { isBuiltIn: true }] }
+    : {};
   return (await prisma.dlpPattern.findMany({
+    where,
     orderBy: [{ createdAt: "asc" }, { name: "asc" }],
   })) as DlpPatternRow[];
 }
@@ -130,24 +167,26 @@ export async function countCustomPatterns(): Promise<number> {
 }
 
 /**
- * Clear the row cache AND the compiled-regex map. Called by every CRUD
- * mutation route (spec §2.4 point 4) and after test mutations that need a
- * deterministic cache state.
+ * Clear EVERY org's row cache AND the compiled-regex map. Called by every
+ * CRUD mutation route (spec §2.4 point 4) and after test mutations that need
+ * a deterministic cache state. Org-blind by design: any mutation invalidates
+ * all orgs (the next scan of each org reloads its own rows).
  */
 export function invalidateCache(): void {
-  cachedPatterns = null;
-  cacheLoadedAt = 0;
+  patternCache.clear();
   compiledCache.clear();
 }
 
 /** Test-only seam: force-expire the TTL so a test can exercise reload. */
 export function expireCacheForTest(): void {
-  cacheLoadedAt = 0;
+  for (const entry of patternCache.values()) {
+    entry.loadedAt = 0;
+  }
 }
 
 /** Test-only seam: inspect whether the row cache is warm. */
 export function isCacheWarmForTest(): boolean {
-  return cachedPatterns !== null && cacheLoadedAt > 0;
+  return patternCache.size > 0;
 }
 
 export interface PatternTestResult {

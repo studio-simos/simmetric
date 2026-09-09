@@ -1,6 +1,6 @@
 {
   "name": "@simmetric-chat/server",
-  "version": "0.22.0",
+  "version": "0.25.0",
   "private": true,
   "license": "AGPL-3.0-or-later",
   "scripts": {
@@ -27,12 +27,15 @@
     "smoke:multi-instance": "tsx scripts/smoke-multi-instance.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1127.0",
+    "@aws-sdk/lib-storage": "^3.1127.0",
     "@json2csv/plainjs": "^7.0.8",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@mozilla/readability": "^0.6.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "@prisma/client-runtime-utils": "^7.10.0",
+    "@simmetric-chat/saas": "file:../../../simmetric-saas",
     "@simmetric-chat/shared": "workspace:*",
     "@tavily/core": "^0.7.8",
     "archiver": "^8.0.0",

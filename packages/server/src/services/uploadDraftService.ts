@@ -26,9 +26,35 @@ import { forwardToCollector } from "../routes/documents";
 import { dispatchUploadToArchive } from "./archiveImportService";
 import { createOcrJob } from "./ocrJobService";
 import { getSetting } from "./systemConfigService";
+import { getStorageProvider } from "./storageProvider";
 import { isDraftsPath } from "../utils/fileUtils";
 import type { UploadDraft } from "@prisma/client";
 import type { AssignDraftInput } from "@simmetric-chat/shared";
+
+/**
+ * Phase 184 (SAAS-03, D-06): layout test for a draft's storageKey — a row is
+ * NEW-LAYOUT when a key is set and it is NOT the legacy path-as-key backfill
+ * (which always contains "storage/"). New-layout rows read/exist through the
+ * provider; legacy rows keep the fs arms byte-identical.
+ */
+function isNewLayoutKey(draft: Pick<UploadDraft, "storageKey">): boolean {
+  return Boolean(draft.storageKey) && !draft.storageKey!.includes("storage/");
+}
+
+/**
+ * Read the staged draft bytes (D-06): new-layout rows go through the
+ * provider (`provider.get(storageKey)` — the staged tmp was unlinked after
+ * put, so reading the old path would ENOENT on S3-backed rows, Pitfall 2);
+ * legacy rows keep the exact fs.readFileSync shape. Buffer parity preserves
+ * both dispatch legs' memory profile.
+ */
+async function readDraftSourceBuffer(draft: UploadDraft): Promise<Buffer> {
+  if (isNewLayoutKey(draft)) {
+    const provider = await getStorageProvider(draft.organizationId);
+    return provider.get(draft.storageKey!);
+  }
+  return fs.readFileSync(draft.filePath);
+}
 
 /**
  * Persistent OCR-copy directory (quick 260829-jv7 D-02): the KB leg writes
@@ -37,6 +63,9 @@ import type { AssignDraftInput } from "@simmetric-chat/shared";
  * Hoisted to module scope so the /retry+/assign restore helper
  * (tryRestoreDraftFromOcrCopy) resolves the SAME directory the writer
  * uses. process.cwd()-relative, mirroring DRAFTS_DIR convention.
+ *
+ * Phase 184 (D-07): the directory itself stays LocalFS — it is an
+ * auxiliary recovery copy for drafts, not a user-serving surface.
  */
 const OCR_SOURCES_DIR = path.resolve(process.cwd(), "storage", "ocr-sources");
 
@@ -60,6 +89,14 @@ const OCR_SOURCES_DIR = path.resolve(process.cwd(), "storage", "ocr-sources");
  *     stage-time-sanitized originalName — sanitizeFileName at
  *     uploads.ts:409), so no traversal vector on the source side
  *     (T-JV7-03 residual risk accepted)
+ *
+ * Phase 184 (D-07): this restore stays LocalFS-ONLY. The route guards
+ * (uploads.ts, Phase 184 Task 1) gate on the row's storageKey first — for
+ * new-layout (S3-backed) rows the restore arm returns false (an S3 object
+ * cannot be copied back from the LocalFS OCR-sources dir; S3-backed draft
+ * restore is flagged Parte II) and the 400 stays byte-identical. Legacy
+ * rows keep the exact copy-back behavior (isDraftsPath passes, physical
+ * gate intact).
  *
  * Always returns a boolean — the whole body is guarded so it never
  * throws (the caller treats false as "restore impossible, keep the 400").
@@ -170,12 +207,17 @@ export async function dispatchRagLeg(draft: UploadDraft): Promise<{ ragJobId: st
 
   // cacheKey mirrors documents.ts:326 — unique per upload attempt.
   const cacheKey = `${path.basename(draft.filePath)}-${Date.now()}`;
+  // Phase 184 (SAAS-03, D-05): the Document SHARES the draft's staged file —
+  // it carries the draft's storageKey so forwardToCollector's D-06 reads
+  // (pdf pre-check / OCR / FormData blob) resolve provider bytes for
+  // new-layout rows. filePath stays (additive policy).
   const document = await prisma.document.create({
     data: {
       workspaceId: draft.workspaceId,
       name: draft.originalName,
       type: docType,
       filePath: draft.filePath,
+      storageKey: draft.storageKey,
       cacheKey,
       chunkCount: 0,
       embeddingModel,
@@ -194,6 +236,11 @@ export async function dispatchRagLeg(draft: UploadDraft): Promise<{ ragJobId: st
   // future retry ENOENTs and even the manual re-upload/DELETE recovery
   // paths lose their evidence. Only the 24h reaper (uploadDraftReaperJob,
   // A5 prefix guard) and the DELETE route may remove draft files.
+  //
+  // Phase 184 (D-06): the key + org ride the seam-1 options signature so
+  // the source bytes resolve via provider.get(storageKey) for new-layout
+  // rows (the staged tmp was unlinked after put — reading the old path
+  // would ENOENT). deleteSourceOnFailure: false is preserved VERBATIM.
   await forwardToCollector(
     document.id,
     draft.filePath,
@@ -203,7 +250,11 @@ export async function dispatchRagLeg(draft: UploadDraft): Promise<{ ragJobId: st
     embeddingModel,
     docType,
     ocrModel,
-    { deleteSourceOnFailure: false },
+    {
+      deleteSourceOnFailure: false,
+      storageKey: draft.storageKey,
+      organizationId: draft.organizationId,
+    },
   );
 
   await prisma.uploadDraft.update({
@@ -275,7 +326,12 @@ export async function dispatchKbLeg(draft: UploadDraft, archiveId: string): Prom
     const persistentPath = path.resolve(OCR_SOURCES_DIR, `${draft.id}_${draft.originalName}`);
     let ocrSourcePath: string;
     try {
-      const fileBuffer = fs.readFileSync(draft.filePath);
+      // Phase 184 (D-06/D-07): the bytes are read via the provider for
+      // new-layout rows (readDraftSourceBuffer) and written to the
+      // OCR_SOURCES_DIR copy — the directory itself stays LocalFS (D-07:
+      // recovery dir, not a serving surface). Legacy rows keep the exact
+      // fs.readFileSync arm.
+      const fileBuffer = await readDraftSourceBuffer(draft);
       fs.writeFileSync(persistentPath, fileBuffer);
       ocrSourcePath = persistentPath;
       logger.info("[uploadDraftService] Copied draft to persistent OCR source", {
@@ -324,9 +380,13 @@ export async function dispatchKbLeg(draft: UploadDraft, archiveId: string): Prom
     // leg ran, a raw ENOENT would bubble up through Promise.allSettled with
     // no AIJ status update — the row would sit in PROCESSING limbo. Flip
     // the pre-created AIJ to FAILED with a clear reason, then re-throw.
+    //
+    // Phase 184 (D-06): readDraftSourceBuffer branches to provider.get for
+    // new-layout rows; the AIJ fail-fast shape is unchanged (a provider
+    // throw flips the AIJ FAILED exactly like a read ENOENT did).
     let fileBuffer: Buffer;
     try {
-      fileBuffer = fs.readFileSync(draft.filePath);
+      fileBuffer = await readDraftSourceBuffer(draft);
     } catch (readErr: unknown) {
       const msg = readErr instanceof Error ? readErr.message : String(readErr);
       const message = `Draft source file not found for draft ${draft.id} (path: ${draft.filePath}) — ${msg}`;

@@ -163,6 +163,15 @@ function mockAgentResult() {
   };
 }
 
+// Phase 185 (185-02): widgetTenantContext resolves the org from the
+// whitelist workspace (WidgetWorkspace → Workspace.organizationId, D-08).
+// clearAllMocks() wipes mockResolvedValue implementations? No — it only
+// clears CALL HISTORY (implementations survive; resetAllMocks would not).
+// Seeded once at module scope; every describe's clearAllMocks keeps it.
+(prisma.workspace.findFirst as jest.Mock).mockResolvedValue({
+  organizationId: "org-widget-default",
+});
+
 function seedPrismaForStream() {
   (prisma.chat.findFirst as jest.Mock).mockResolvedValue({
     id: CHAT_ID, workspaceId: WORKSPACE_ID, providerId: null, model: null,
@@ -204,6 +213,12 @@ describe("POST /api/internal/widget/chat/stream — auth", () => {
 describe("POST /api/internal/widget/chat/stream — validation", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Phase 185: widgetTenantContext runs BEFORE the body validation —
+    // re-seed the widget row + whitelist workspace org after clearAllMocks.
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (prisma.workspace.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-widget-default",
+    });
   });
 
   it("returns 400 with details for an invalid body (no message)", async () => {

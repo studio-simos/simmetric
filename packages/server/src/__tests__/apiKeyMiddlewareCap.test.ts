@@ -91,8 +91,8 @@ beforeEach(() => {
 });
 
 describe("Phase 163: apiKeyMiddleware delegates to validateApiKey (HMAC O(1))", () => {
-  it("valid key: validateApiKey returns createdBy → user loaded → next() called, NOT 401", async () => {
-    mockValidateApiKey.mockResolvedValue("user-001");
+  it("valid key: validateApiKey returns { createdBy, organizationId } → user loaded → next() called, NOT 401", async () => {
+    mockValidateApiKey.mockResolvedValue({ createdBy: "user-001", organizationId: "org-001" });
 
     const res = makeRes();
     const next = jest.fn() as unknown as NextFunction;
@@ -103,6 +103,18 @@ describe("Phase 163: apiKeyMiddleware delegates to validateApiKey (HMAC O(1))", 
     expect(mockValidateApiKey).toHaveBeenCalledWith(TEST_KEY);
     // User loaded + next called (NOT 401)
     expect((res as any).statusCode).not.toBe(401);
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it("Phase 185 (D-08/D-09): seeds req.tenantOrgCandidate from the key's mint-time org BEFORE next()", async () => {
+    mockValidateApiKey.mockResolvedValue({ createdBy: "user-001", organizationId: "org-key-pinned" });
+
+    const req = makeReq(TEST_KEY);
+    const res = makeRes();
+    const next = jest.fn() as unknown as NextFunction;
+    await apiKeyMiddleware(req, res, next);
+
+    expect((req as any).tenantOrgCandidate).toBe("org-key-pinned");
     expect(next).toHaveBeenCalledTimes(1);
   });
 
@@ -143,7 +155,7 @@ describe("Phase 163: apiKeyMiddleware delegates to validateApiKey (HMAC O(1))", 
   });
 
   it("does NOT call prisma.apiKey.findMany or pass a take cap (CSW-05 cap removed)", async () => {
-    mockValidateApiKey.mockResolvedValue("user-001");
+    mockValidateApiKey.mockResolvedValue({ createdBy: "user-001", organizationId: "org-001" });
 
     const res = makeRes();
     const next = jest.fn() as unknown as NextFunction;

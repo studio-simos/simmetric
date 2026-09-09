@@ -332,8 +332,11 @@ export default function SettingsUsers() {
         </Form>
       </div>
 
-      {/* Users Table */}
-      <div className="bg-card rounded-lg border border-input overflow-hidden">
+      {/* Users Table — the table itself scrolls horizontally within the
+          card on narrow viewports (`min-w-max` inside the overflow
+          container); the outer `min-w-0` lets the card shrink so the page
+          never stretches sideways. */}
+      <div className="bg-card rounded-lg border border-input overflow-hidden min-w-0">
         <div className="px-5 py-3 border-b border-input">
           <h4 className="text-sm font-semibold text-foreground">
             {t("settings.users.usersCount", { count: users.length })}

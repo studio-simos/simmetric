@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import {
   exportArchiveAsZip,
@@ -27,6 +28,8 @@ const router = Router();
 router.get(
   "/:archiveId/export",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission("archive:read"),
   async (req: Request, res: Response) => {
     try {

@@ -138,6 +138,15 @@ describe("Widget PATCH /api/internal/widget/session/:token/chat/archive (D-10 wi
   beforeEach(() => {
     jest.clearAllMocks();
     linkArchiveMock.mockReset();
+    // Phase 185 (185-05 CR-01): widgetTenantContext resolves the org from
+    // the Widget row via identity-per-endpoint (session token →
+    // session.widgetId for this route, D-08) — seed the row/workspace mocks
+    // + the WidgetSession the slot's token lookup reads. The handler
+    // consumes the stashed row (single resolution per request).
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (prisma.workspace.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-widget-default",
+    });
   });
 
   // ARCH-LINK-01 widget — link

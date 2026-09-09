@@ -71,9 +71,20 @@ jest.mock("../services/ragOcrService", () => ({
   cleanupOcrTextFile: jest.fn(),
 }));
 
+// Phase 184 (SAAS-03): provider mock surface — terminal callback + WR-02
+// provider-delete arms resolve getStorageProvider(document.organizationId).
+jest.mock("../services/storageProvider", () =>
+  require("./helpers/mockStorageProvider").mockStorageProviderModule,
+);
+
 import { forwardToCollector } from "../routes/documents";
 import prisma from "../utils/prisma";
 import { cleanupOcrTextFile } from "../services/ragOcrService";
+import {
+  mockGetStorageProvider,
+  mockProviderDelete,
+  mockProviderGet,
+} from "./helpers/mockStorageProvider";
 
 // Deterministic non-PDF failure: docType "txt" skips the entire OCR routing
 // block, and readFileSync throws → the WR-02 catch runs with a stable
@@ -157,6 +168,132 @@ describe("forwardToCollector failure cleanup (260829-fty)", () => {
           data: expect.objectContaining({ status: "failed" }),
         }),
       );
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
+});
+
+// =========================================================================
+// Phase 184 (SAAS-03) — provider arms on the failure/cleanup paths.
+// =========================================================================
+describe("forwardToCollector provider arms (Phase 184 D-06 / Pitfall 1)", () => {
+  beforeEach(() => {
+    (prisma.document.update as jest.Mock).mockReset().mockResolvedValue({});
+    (cleanupOcrTextFile as jest.Mock).mockReset().mockResolvedValue(undefined);
+    jest.clearAllMocks();
+    mockProviderGet.mockReset().mockResolvedValue(Buffer.from("provider-bytes"));
+    mockProviderDelete.mockReset().mockResolvedValue(undefined);
+    mockGetStorageProvider.mockReset().mockResolvedValue({
+      put: jest.fn(),
+      get: mockProviderGet,
+      getReadStream: jest.fn(),
+      delete: mockProviderDelete,
+      exists: jest.fn(),
+    });
+  });
+
+  // WR-02 provider arm: fetch-throw + storageKey + deleteSourceOnFailure
+  // (default true) → provider.delete(storageKey) with the row's org. The
+  // fs.existsSync/unlinkSync arm must NOT run (the tmp was unlinked post-put;
+  // a plain existsSync would be silently false on S3 rows and the object
+  // would leak — Pitfall 1).
+  it("fetch-throw + storageKey + deleteSourceOnFailure → provider.delete(storageKey) with the row's org (WR-02 provider arm)", async () => {
+    const unlinkSpy = jest.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    try {
+      await forwardToCollector(
+        "doc-1",
+        "/tmp/fake-src.bin",
+        "f.txt",
+        "ws-1",
+        "WS",
+        "model",
+        "txt",
+        "ocr",
+        { storageKey: "org-1/uploads/f.txt", organizationId: "org-1" },
+      );
+
+      expect(mockProviderDelete).toHaveBeenCalledWith("org-1/uploads/f.txt");
+      expect(mockGetStorageProvider).toHaveBeenCalledWith("org-1");
+      // The legacy fs arm stays out of the way for key-carrying rows
+      expect(fs.unlinkSync).not.toHaveBeenCalledWith("/tmp/fake-src.bin");
+      expect(prisma.document.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: "failed" }),
+        }),
+      );
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
+
+  it("storageKey + deleteSourceOnFailure:false (draft leg) → provider.delete NOT called (draft-owned key untouched)", async () => {
+    await forwardToCollector(
+      "doc-1",
+      "/tmp/fake-src.bin",
+      "f.txt",
+      "ws-1",
+      "WS",
+      "model",
+      "txt",
+      "ocr",
+      { storageKey: "org-1/uploads/drafts/f.txt", organizationId: "org-1", deleteSourceOnFailure: false },
+    );
+
+    expect(mockProviderDelete).not.toHaveBeenCalled();
+    expect(prisma.document.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "failed" }),
+      }),
+    );
+  });
+
+  it("storageKey present → source bytes read via provider.get (Buffer parity, D-06); fs.readFileSync untouched", async () => {
+    const readSpy = jest.spyOn(fs, "readFileSync").mockImplementation(() => Buffer.from("legacy"));
+
+    try {
+      await forwardToCollector(
+        "doc-1",
+        "/tmp/fake-src.bin",
+        "f.txt",
+        "ws-1",
+        "WS",
+        "model",
+        "txt",
+        "ocr",
+        { storageKey: "org-1/uploads/f.txt", organizationId: "org-1" },
+      );
+
+      expect(mockProviderGet).toHaveBeenCalledWith("org-1/uploads/f.txt");
+      // The legacy readFileSync arm never fires for key-carrying rows —
+      // the multer tmp is gone after put (Pitfall 2)
+      expect(readSpy).not.toHaveBeenCalled();
+      // The blob construction consumed the provider bytes (fetch body is
+      // FormData with a Blob — no assertion needed beyond no-throw here).
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it("legacy row (no storageKey) → fetch-throw keeps the exact existsSync+unlink shape (byte-identical)", async () => {
+    const unlinkSpy = jest.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    try {
+      await forwardToCollector(
+        "doc-1",
+        "/tmp/fake-src.bin",
+        "f.txt",
+        "ws-1",
+        "WS",
+        "model",
+        "txt",
+        "ocr",
+      );
+
+      expect(mockProviderDelete).not.toHaveBeenCalled();
+      expect(mockGetStorageProvider).not.toHaveBeenCalled();
+      expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/fake-src.bin");
     } finally {
       unlinkSpy.mockRestore();
     }

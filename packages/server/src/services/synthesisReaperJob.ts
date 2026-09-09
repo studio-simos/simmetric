@@ -32,6 +32,15 @@ import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
 import { getBoss, createQueue, schedule } from "./jobQueue";
 
+// Phase 185 D-09: jobs run OUTSIDE the request ALS — org is resolved FROM THE
+// ROW (never the ambient tenant-context read); ambient reads in jobs are bugs (Pitfall 8).
+// Disposition: PLATFORM-LEVEL CROSS-ORG BY DESIGN — orphan recovery is
+// expiresAt-based over ALL orgs' PROCESSING runs (no org filter needed for
+// correctness; a stuck run leaks its wiki lock regardless of which org owns
+// it). The updateMany runs OUTSIDE ALS so the scoped extension skips it
+// (absent-store semantics, 185-01 spike probe 9) — the platform sweep is NOT
+// silently narrowed to one org.
+
 // Phase 165 (D-04/D-05): queue name (underscores, not colons — pg-boss 12.28
 // assertQueueName rejects ":"); mirrors the Phase 161 lock resource namespace;
 // cron expression is the 15-minute cadence the former timer used (verified

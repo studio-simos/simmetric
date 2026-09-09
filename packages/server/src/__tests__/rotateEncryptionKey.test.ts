@@ -11,8 +11,9 @@ import crypto from "crypto";
 jest.mock("../utils/prisma", () => {
   const mock = {
     systemConfig: {
-      findUnique: jest.fn(),
-      upsert: jest.fn(),
+      findFirst: jest.fn(),
+      update: jest.fn(),
+      create: jest.fn(),
       deleteMany: jest.fn(),
     },
     provider: {
@@ -113,8 +114,9 @@ describe("rotate-encryption-key — rotation skip-already-new (idempotent)", () 
       .mockResolvedValueOnce([{ id: "p1", apiKey: activeCiphertext }])
       .mockResolvedValueOnce([]);
     (prisma.backupDestination.findMany as jest.Mock).mockResolvedValue([]);
-    (prisma.systemConfig.findUnique as jest.Mock).mockResolvedValue(null);
-    (prisma.systemConfig.upsert as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.systemConfig.create as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.update as jest.Mock).mockResolvedValue({});
     (prisma.systemConfig.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
     (prisma.$transaction as jest.Mock).mockImplementation(async (cb: any) => cb({
       provider: { findUnique: jest.fn().mockResolvedValue({ apiKey: activeCiphertext }), update: jest.fn() },
@@ -143,8 +145,9 @@ describe("rotate-encryption-key — rotation re-encrypts legacy row", () => {
       .mockResolvedValueOnce([{ id: "p1", apiKey: legacyCiphertext }])
       .mockResolvedValueOnce([]);
     (prisma.backupDestination.findMany as jest.Mock).mockResolvedValue([]);
-    (prisma.systemConfig.findUnique as jest.Mock).mockResolvedValue(null);
-    (prisma.systemConfig.upsert as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.systemConfig.create as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.update as jest.Mock).mockResolvedValue({});
     (prisma.systemConfig.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
 
     let capturedUpdate: any = null;
@@ -189,8 +192,9 @@ describe("rotate-encryption-key — fail-closed undecryptable (D-07)", () => {
       ])
       .mockResolvedValueOnce([]);
     (prisma.backupDestination.findMany as jest.Mock).mockResolvedValue([]);
-    (prisma.systemConfig.findUnique as jest.Mock).mockResolvedValue(null);
-    (prisma.systemConfig.upsert as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.systemConfig.create as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.update as jest.Mock).mockResolvedValue({});
     (prisma.$transaction as jest.Mock).mockResolvedValue({});
 
     await expect(
@@ -207,23 +211,31 @@ describe("rotate-encryption-key — resume marker (D-08)", () => {
     jest.resetAllMocks();
   });
 
-  it("writes the marker via prisma.systemConfig.upsert (NOT updateSettings)", async () => {
+  it("writes the marker via direct find-first-then-write (NOT updateSettings)", async () => {
     setKeyEnv({ current: KEY_B, previous: [KEY_A] });
     (prisma.provider.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.backupDestination.findMany as jest.Mock).mockResolvedValue([]);
-    (prisma.systemConfig.findUnique as jest.Mock).mockResolvedValue(null);
-    (prisma.systemConfig.upsert as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.systemConfig.create as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.update as jest.Mock).mockResolvedValue({});
     (prisma.systemConfig.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
 
     await runRotation({ dryRun: false, resume: false });
 
-    expect(prisma.systemConfig.upsert).toHaveBeenCalled();
-    const upsertArgs = (prisma.systemConfig.upsert as jest.Mock).mock.calls[0][0];
-    expect(upsertArgs.where.key).toBe("encryption_key_rotation_progress");
+    // Phase 183 (SAAS-02): the script's inline shape — findFirst with the
+    // MARKER_KEY + explicit null-org filter, then a fresh create (id-anchored
+    // update when the row already exists). Doctrine unchanged: no
+    // updateSettings, no settings-service import.
+    expect(prisma.systemConfig.findFirst).toHaveBeenCalledWith({
+      where: { key: "encryption_key_rotation_progress", organizationId: null },
+    });
+    expect(prisma.systemConfig.create).toHaveBeenCalled();
+    const createArgs = (prisma.systemConfig.create as jest.Mock).mock.calls[0][0];
+    expect(createArgs.data.key).toBe("encryption_key_rotation_progress");
     // Marker stores a sha256 fingerprint prefix, never the key itself.
-    const parsed = JSON.parse(upsertArgs.update.value);
+    const parsed = JSON.parse(createArgs.data.value);
     expect(parsed.toKeyFingerprint).toBe(keyFingerprint(Buffer.from(KEY_B, "base64")));
-    expect(JSON.stringify(upsertArgs.update.value)).not.toContain(KEY_B);
+    expect(JSON.stringify(createArgs.data.value)).not.toContain(KEY_B);
   });
 
   it("--resume reads the marker and skips the completed table/row", async () => {
@@ -237,14 +249,15 @@ describe("rotate-encryption-key — resume marker (D-08)", () => {
       lastId: "p-done",
       status: "in_progress",
     };
-    (prisma.systemConfig.findUnique as jest.Mock).mockResolvedValue({
+    (prisma.systemConfig.findFirst as jest.Mock).mockResolvedValue({
       key: "encryption_key_rotation_progress",
       value: JSON.stringify(marker),
     });
     // backupDestination still has rows to sweep.
     (prisma.provider.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.backupDestination.findMany as jest.Mock).mockResolvedValue([]);
-    (prisma.systemConfig.upsert as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.create as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.update as jest.Mock).mockResolvedValue({});
     (prisma.systemConfig.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
 
     const result = await runRotation({ dryRun: false, resume: true });
@@ -267,13 +280,14 @@ describe("rotate-encryption-key — resume marker (D-08)", () => {
       lastId: "p-old",
       status: "in_progress",
     };
-    (prisma.systemConfig.findUnique as jest.Mock).mockResolvedValue({
+    (prisma.systemConfig.findFirst as jest.Mock).mockResolvedValue({
       key: "encryption_key_rotation_progress",
       value: JSON.stringify(staleMarker),
     });
     (prisma.provider.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.backupDestination.findMany as jest.Mock).mockResolvedValue([]);
-    (prisma.systemConfig.upsert as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.create as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.update as jest.Mock).mockResolvedValue({});
     (prisma.systemConfig.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
 
     const result = await runRotation({ dryRun: false, resume: true });
@@ -296,14 +310,17 @@ describe("rotate-encryption-key --dry-run no-write", () => {
       .mockResolvedValueOnce([{ id: "p1", apiKey: legacyCiphertext }])
       .mockResolvedValueOnce([]);
     (prisma.backupDestination.findMany as jest.Mock).mockResolvedValue([]);
-    (prisma.systemConfig.findUnique as jest.Mock).mockResolvedValue(null);
-    (prisma.systemConfig.upsert as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.systemConfig.create as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.update as jest.Mock).mockResolvedValue({});
     (prisma.systemConfig.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
 
     const result = await runRotation({ dryRun: true, resume: false });
 
     expect(prisma.$transaction).not.toHaveBeenCalled();
-    expect(prisma.systemConfig.upsert).not.toHaveBeenCalled();
+    expect(prisma.systemConfig.findFirst).not.toHaveBeenCalled();
+    expect(prisma.systemConfig.create).not.toHaveBeenCalled();
+    expect(prisma.systemConfig.update).not.toHaveBeenCalled();
     expect(prisma.systemConfig.deleteMany).not.toHaveBeenCalled();
     expect(result.provider.legacyDetected).toBe(1);
     expect(result.provider.reEncrypted).toBe(0);
@@ -331,8 +348,9 @@ describe("rotate-encryption-key — sweep includes soft-deleted BackupDestinatio
     (prisma.backupDestination.findMany as jest.Mock)
       .mockResolvedValueOnce([deletedRow])
       .mockResolvedValueOnce([]);
-    (prisma.systemConfig.findUnique as jest.Mock).mockResolvedValue(null);
-    (prisma.systemConfig.upsert as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.systemConfig.create as jest.Mock).mockResolvedValue({});
+    (prisma.systemConfig.update as jest.Mock).mockResolvedValue({});
     (prisma.systemConfig.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
 
     let capturedWhere: any = null;

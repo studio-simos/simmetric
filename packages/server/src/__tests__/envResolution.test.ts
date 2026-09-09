@@ -74,6 +74,24 @@ describe("OPS-05 env resolution + clear missing-key error", () => {
     // No-op dotenv so the fresh require does not re-populate process.env from
     // the root .env (which would re-set the key we just deleted).
     jest.doMock("dotenv", () => ({ config: jest.fn() }));
+    // 182-04 Task 2: ALSO no-op the shared loadRootEnv — it reads the root
+    // .env via node:fs directly (no dotenv import), so the dotenv mock above
+    // cannot cover it. A dev machine's root .env legitimately carries
+    // COLLECTOR_SECRET now (real secrets are persisted there per the Phase
+    // 177 single-runtime-config design), which made this hermeticity test
+    // fail locally while still passing on CI (no root .env). Mocking the
+    // loader module restores the test's original contract: the ONLY env
+    // surface under test is process.env.
+    jest.doMock("@simmetric-chat/shared", () => {
+      const shared =
+        jest.requireActual("@simmetric-chat/shared") as Record<string, unknown>;
+      return {
+        __esModule: true,
+        ...shared,
+        loadRootEnv: jest.fn(),
+        resolveRootEnvPath: shared.resolveRootEnvPath,
+      };
+    });
 
     const saved = process.env[ENV_KEY];
     delete process.env[ENV_KEY];

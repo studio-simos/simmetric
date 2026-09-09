@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import prisma from "../utils/prisma";
 import { Prisma } from "@prisma/client";
@@ -13,7 +14,7 @@ const router = Router();
 
 // All webhook management requires admin access (Phase 140: commodity flag
 // `webhooks` removed — always-ON; authMiddleware + requireAdmin preserved).
-router.use(authMiddleware, requireAdmin);
+router.use(authMiddleware, tenantContextMiddleware, requireAdmin);
 
 // GET /api/webhooks — list all webhooks
 router.get("/", async (_req: Request, res: Response) => {
@@ -50,6 +51,8 @@ router.post("/", async (req: Request, res: Response) => {
         events: JSON.stringify(events),
         secret: secret || null,
         createdBy: req.userId!,
+        // CR-03 (185-05, D-04): explicit org stamp (Webhook is Tier-A).
+        organizationId: req.organizationId!,
       },
     });
 
@@ -109,7 +112,9 @@ router.post("/:webhookId/test", async (req: Request, res: Response) => {
     const webhookId = req.params.webhookId as string;
     const webhook = await prisma.webhook.findUnique({ where: { id: webhookId } });
 
-    if (!webhook) {
+    // T-185-10 org assertion (Pitfall-2 grep-gate, option b): cross-org
+    // webhook hides as 404 — fail-closed, never 403 (existence leak).
+    if (!webhook || webhook.organizationId !== req.organizationId) {
       res.status(404).json({ error: "Webhook not found" });
       return;
     }

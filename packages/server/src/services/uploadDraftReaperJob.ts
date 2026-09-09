@@ -12,13 +12,14 @@
  * (`parseStatus = "done"`) are excluded — their files belong to the
  * Document/Archive lifecycle (Invariant 2).
  *
- * Trust boundary: the unlink path. The A5 prefix guard
- * (`path.resolve(filePath).startsWith(path.resolve("storage/uploads/drafts") + path.sep)`)
- * normalises `../` and symlinks via `path.resolve` and the trailing
- * `path.sep` prevents a `drafts-evil` sibling-prefix match (Pitfall 5 /
- * T-69-05). The guard is load-bearing even though `filePath` is
- * server-generated (never client-controllable, D-06): a DB corruption
- * scenario still cannot escape the drafts directory.
+ * Trust boundary: the cleanup path. The A5 prefix guard is reborn in key
+ * space via `isDraftStorageKey` (Phase 184 D-08): the new-layout arm's
+ * trailing-sep rule (`…/uploads/drafts/`) prevents a `drafts-evil`
+ * sibling-prefix match (Pitfall 5 / T-69-05) and the legacy arm delegates
+ * to `isDraftsPath` — backfilled rows keep the exact A5 resolve semantics
+ * (path.resolve + trailing path.sep). The guard is load-bearing even though
+ * the key is server-generated (never client-controllable, D-06): a DB
+ * corruption scenario still cannot escape the drafts contract (T-184-11).
  *
  * Idempotency: the soft-delete (`prisma.uploadDraft.update({ deletedAt })`)
  * runs BEFORE the best-effort `fs.unlinkSync`. A failed unlink is logged
@@ -37,12 +38,12 @@
  * returns early — there is NO fallback timer (D-02). The server still
  * boots and REST/SSE work normally; only the cron job is offline.
  */
-import path from "path";
-import fs from "fs";
 import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
 import { getBoss, createQueue, schedule } from "./jobQueue";
 import { getSetting } from "./systemConfigService";
+import { getStorageProvider } from "./storageProvider";
+import { isDraftStorageKey } from "../utils/fileUtils";
 
 // Phase 165 (D-04/D-05): queue name (underscores, not colons — pg-boss 12.28
 // assertQueueName rejects ":"); mirrors the Phase 161 lock resource namespace;
@@ -63,22 +64,34 @@ const DEFAULT_CRON_EXPRESSION = "0 3 * * *";
  * Completed drafts are excluded — their files belong to the Document /
  * Archive lifecycle (Invariant 2).
  *
+ * Phase 184 (SAAS-03, D-08): the guard + cleanup are KEY-BASED. The select
+ * now carries `storageKey` + `organizationId` so no row is invisible to the
+ * sweep (T-184-12); per row, `key = storageKey ?? filePath` and the
+ * isDraftStorageKey contract (trailing-sep new-layout arm + isDraftsPath
+ * legacy delegation) replaces the inline A5 resolve check — the corrupted-key
+ * skip semantics are preserved (rejected key → skipped += 1 + warn log, NO
+ * soft-delete, row stays visible for operator triage). Deletion goes through
+ * the provider (per-row org resolution — row's-org rule); legacy rows
+ * (backfilled path-as-key) resolve through the LocalFS legacy arm — the same
+ * path.resolve+unlink today's A5 performed, byte-identical.
+ *
  * For each expired draft:
- *   1. Resolve `filePath` against `process.cwd()` and apply the A5
- *      prefix guard. Reject any path outside `storage/uploads/drafts/`
- *      (T-69-05). Skip the row (no soft-delete) so an operator can
- *      inspect the corrupted `filePath` value — unlinking would be
- *      destructive, soft-deleting would hide the evidence.
- *   2. Soft-delete FIRST (`deletedAt = now()`). If unlink fails the row
+ *   1. Apply the isDraftStorageKey guard. Reject any key outside the
+ *      drafts contract (T-69-05 / T-184-11). Skip the row (no soft-delete)
+ *      so an operator can inspect the corrupted key value — deleting would
+ *      be destructive, soft-deleting would hide the evidence.
+ *   2. Soft-delete FIRST (`deletedAt = now()`). If delete fails the row
  *      is still marked and won't be re-selected (idempotent, T-69-05e).
- *   3. Best-effort `fs.unlinkSync`. Failure is logged but does not roll
- *      back the soft-delete — the disk leak is bounded by the next
- *      operator intervention, but the DB row is correctly marked.
+ *   3. Best-effort `provider.delete(key)` (LocalFS delete = existence-checked
+ *      unlink — byte-identical legacy behavior; S3 keys delete in the
+ *      tenant's bucket). Failure is logged but does not roll back the
+ *      soft-delete — the object leak is bounded by the next operator
+ *      intervention, but the DB row is correctly marked.
  *
  * Returns counts for observability:
- *   - `reaped`:  soft-deleted AND unlinked successfully
- *   - `skipped`: A5 prefix guard rejected the path (no soft-delete)
- *   - `errors`:  soft-deleted but unlink failed (best-effort)
+ *   - `reaped`:  soft-deleted AND deleted successfully
+ *   - `skipped`: isDraftStorageKey guard rejected the key (no soft-delete)
+ *   - `errors`:  soft-deleted but delete failed (best-effort)
  *
  * Phase 165 (Pitfall 8): the per-cycle running-flag mutex has been REMOVED.
  * pg-boss delivers one job at a time and its SKIP LOCKED dedup supersedes
@@ -86,22 +99,17 @@ const DEFAULT_CRON_EXPRESSION = "0 3 * * *";
  * run (the guard was dead code under the pg-boss delivery model).
  */
 export async function runReaperCycle(): Promise<{ reaped: number; skipped: number; errors: number }> {
-  // A5 prefix (Pattern 3). `path.resolve` resolves relative to
-  // `process.cwd()` — matching where multer wrote the draft via
-  // `documents.ts:21` / `uploads.ts:59`. STORAGE_PATH is intentionally
-  // NOT consulted (B1 fix — it is not in the env.ts Zod schema).
-  // The trailing `path.sep` prevents a `drafts-evil` sibling-prefix
-  // match (Pitfall 5).
-  const base = path.resolve("storage/uploads/drafts") + path.sep;
-
   // D-69-07 selector — done drafts excluded (Invariant 2).
+  // Phase 184 (T-184-12): the select now carries storageKey + organizationId
+  // so every expired row is key-resolvable and provider-cleanable — no row
+  // is invisible to the sweep.
   const expired = await prisma.uploadDraft.findMany({
     where: {
       expiresAt: { lt: new Date() },
       deletedAt: null,
       parseStatus: { not: "done" },
     },
-    select: { id: true, filePath: true },
+    select: { id: true, filePath: true, storageKey: true, organizationId: true },
   });
 
   let reaped = 0;
@@ -109,21 +117,23 @@ export async function runReaperCycle(): Promise<{ reaped: number; skipped: numbe
   let errors = 0;
 
   for (const draft of expired) {
-    const resolved = path.resolve(draft.filePath);
-    if (!resolved.startsWith(base)) {
-      // T-69-05: A5 prefix guard rejected. Do NOT soft-delete — the
-      // corrupted `filePath` must remain visible for operator triage.
-      logger.warn("[upload-draft-reaper] A5 prefix guard rejected path", {
+    // Phase 184 (D-08): key = storageKey ?? filePath — backfilled rows carry
+    // storageKey = filePath so the fallback covers pre-backfill nulls.
+    const key = draft.storageKey ?? draft.filePath;
+    if (!isDraftStorageKey(key)) {
+      // T-69-05 / T-184-11: the key-space A5 guard rejected. Do NOT
+      // soft-delete — the corrupted key must remain visible for operator
+      // triage (trailing-sep arm rejects drafts-evil siblings and URL
+      // sentinels; the legacy arm rejects non-drafts paths).
+      logger.warn("[upload-draft-reaper] A5 prefix guard rejected key", {
         draftId: draft.id,
-        filePath: draft.filePath,
-        resolved,
-        base,
+        key,
       });
       skipped += 1;
       continue;
     }
 
-    // T-69-05e: soft-delete BEFORE unlink. If unlink fails the row is
+    // T-69-05e: soft-delete BEFORE delete. If delete fails the row is
     // still marked and won't be re-selected on the next cycle.
     await prisma.uploadDraft.update({
       where: { id: draft.id },
@@ -131,12 +141,17 @@ export async function runReaperCycle(): Promise<{ reaped: number; skipped: numbe
     });
 
     try {
-      fs.unlinkSync(resolved);
+      // Row's-org rule: the provider resolves per-row via
+      // draft.organizationId. For legacy keys the LocalFS legacy arm
+      // resolves the exact physical path today's fs.unlinkSync removed —
+      // byte-identical; the existence-checked best-effort delete absorbs
+      // the reaper try/catch-warn shape.
+      await (await getStorageProvider(draft.organizationId)).delete(key);
       reaped += 1;
     } catch (e) {
-      // Best-effort — soft-delete already happened. The disk leak is
+      // Best-effort — soft-delete already happened. The disk/object leak is
       // bounded and surfaces in logs for operator follow-up.
-      logger.warn("[upload-draft-reaper] unlink failed (best-effort)", {
+      logger.warn("[upload-draft-reaper] delete failed (best-effort)", {
         draftId: draft.id,
         error: (e as Error).message,
       });

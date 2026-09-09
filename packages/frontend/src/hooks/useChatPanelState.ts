@@ -58,7 +58,6 @@ export function useChatPanelState({ persistedModel }: UseChatPanelStateArgs) {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editInput, setEditInput] = useState("");
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [statusAnnouncement, setStatusAnnouncement] = useState<string | null>(null);
   // Quick 260829-spj: global "Show DLP texts" preference for DLPNotice across
   // the conversation. Session-scoped (default OFF, no persistence) — mirrors
@@ -102,8 +101,6 @@ export function useChatPanelState({ persistedModel }: UseChatPanelStateArgs) {
     setEditInput,
     deletingMessageId,
     setDeletingMessageId,
-    mobileSidebarOpen,
-    setMobileSidebarOpen,
     statusAnnouncement,
     setStatusAnnouncement,
     showDlpTexts,

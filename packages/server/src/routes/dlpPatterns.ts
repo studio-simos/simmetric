@@ -30,6 +30,7 @@ import {
   dlpPatternIdParamSchema,
 } from "@simmetric-chat/shared";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
@@ -48,10 +49,15 @@ const router = Router();
 router.get(
   "/patterns",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission("admin:settings"),
-  async (_req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     try {
-      const patterns = await listPatterns();
+      // CR-02 (185-05): org-explicit admin list — the org's customs PLUS the
+      // built-ins (visible-but-not-cross-org-mutable by design, see the
+      // disposition comment on the update route).
+      const patterns = await listPatterns(req.organizationId);
       res.json({ patterns });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -65,6 +71,8 @@ router.get(
 router.post(
   "/patterns",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission("admin:settings"),
   async (req: Request, res: Response) => {
     try {
@@ -135,6 +143,8 @@ router.post(
 router.put(
   "/patterns/:id",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission("admin:settings"),
   async (req: Request, res: Response) => {
     try {
@@ -147,7 +157,12 @@ router.put(
       }
       const id = param.data.id;
       const existing = await prisma.dlpPattern.findUnique({ where: { id } });
-      if (!existing) {
+      // T-185-10 org assertion (Pitfall-2 grep-gate, option b): cross-org
+      // pattern hides as 404 — fail-closed. CR-02 disposition (185-05):
+      // built-in rows are DEFAULT-org-owned and remain VISIBLE in every
+      // org's admin list (listPatterns merges the built-ins) but never
+      // cross-org-mutable/deletable — the org assertion stays byte-identical.
+      if (!existing || existing.organizationId !== req.organizationId) {
         res.status(404).json({ error: "DLP pattern not found" });
         return;
       }
@@ -211,6 +226,8 @@ router.put(
 router.delete(
   "/patterns/:id",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission("admin:settings"),
   async (req: Request, res: Response) => {
     try {
@@ -223,7 +240,9 @@ router.delete(
       }
       const id = param.data.id;
       const existing = await prisma.dlpPattern.findUnique({ where: { id } });
-      if (!existing) {
+      // T-185-10 org assertion (Pitfall-2 grep-gate, option b): cross-org
+      // pattern hides as 404 — fail-closed.
+      if (!existing || existing.organizationId !== req.organizationId) {
         res.status(404).json({ error: "DLP pattern not found" });
         return;
       }
@@ -249,6 +268,8 @@ router.delete(
 router.post(
   "/patterns/:id/test",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission("admin:settings"),
   async (req: Request, res: Response) => {
     try {
@@ -261,7 +282,9 @@ router.post(
       }
       const id = param.data.id;
       const existing = await prisma.dlpPattern.findUnique({ where: { id } });
-      if (!existing) {
+      // T-185-10 org assertion (Pitfall-2 grep-gate, option b): cross-org
+      // pattern hides as 404 — fail-closed.
+      if (!existing || existing.organizationId !== req.organizationId) {
         res.status(404).json({ error: "DLP pattern not found" });
         return;
       }

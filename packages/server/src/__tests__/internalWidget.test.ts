@@ -81,6 +81,17 @@ const app = createApp();
 // implementation, so this mockReturnValue survives.
 beforeEach(() => {
   (isFeatureEnabled as jest.Mock).mockReturnValue(true);
+  // Phase 185 (185-05 CR-01): widgetTenantContext resolves the org from the
+  // Widget row's identity-per-endpoint source (header / body / param /
+  // session token) — seed the whitelist workspace org. clearAllMocks() keeps
+  // implementations (mockClear semantics), so this survives all describes.
+  // The synthetic X-Widget-Id header injection from 185-02 is UNMASKED: the
+  // widget client only sends it on /chat/stream; every other chain below
+  // resolves identity from body/param/session-token (the CR-01 regression
+  // pins are the no-header probes in each describe).
+  (prisma.workspace.findFirst as jest.Mock).mockResolvedValue({
+    organizationId: "org-widget-default",
+  });
 });
 
 const mockWidget = {
@@ -234,6 +245,42 @@ describe("POST /api/internal/widget/session", () => {
 
     expect(res.status).toBe(400);
   });
+
+  // ─── CR-01 regression pin (185-05): session create WITHOUT the header ───
+  // The widget client sends ONLY X-Api-Key here (identity rides body.widgetId).
+  it("CR-01 pin: creates a session from body.widgetId WITHOUT the X-Widget-Id header (201)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (prisma.widgetSession.create as jest.Mock).mockImplementation(({ data }: any) => ({
+      id: "session-new",
+      widgetId: data.widgetId,
+      sessionToken: data.sessionToken,
+      expiresAt: data.expiresAt,
+    }));
+
+    const res = await request(app)
+      .post("/api/internal/widget/session")
+      .set("X-Api-Key", "sk-test-key")
+      .send({ widgetId: "widget-001", ipAddress: "127.0.0.1" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.widgetId).toBe("widget-001");
+    expect(res.body.sessionToken).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  // ─── CR-01 regression pin (185-05): session validate WITHOUT the header ───
+  it("CR-01 pin: validates a session token WITHOUT the X-Widget-Id header (200 — the slot resolves the widget via the WidgetSession row)", async () => {
+    (prisma.widgetSession.findUnique as jest.Mock).mockResolvedValue(mockSession);
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+
+    const res = await request(app)
+      .get(`/api/internal/widget/session/${mockSession.sessionToken}`)
+      .set("X-Api-Key", "sk-test-key");
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe("session-001");
+    // The slot's token arm resolved the session once + the handler re-read it.
+    expect(prisma.widgetSession.findUnique).toHaveBeenCalled();
+  });
 });
 
 // ─── GET /session/:token ──────────────────────────────────────────
@@ -377,6 +424,27 @@ describe("GET /api/internal/widget/:id/config - extended with workspaceIds", () 
     expect(res.status).toBe(200);
     expect(res.body.workspaceIds).toEqual(["workspace-001"]);
     expect(res.body.workspaceId).toBe("workspace-001");
+  });
+
+  // ─── CR-01 regression pin (185-05): config WITHOUT the X-Widget-Id header ───
+  // The real widget client sends ONLY X-Api-Key on this call (identity rides
+  // the path param) — this probe would have caught the 185-02 harness mask.
+  it("CR-01 pin: resolves the widget from the path param WITHOUT the X-Widget-Id header (200, single resolution)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+
+    const res = await request(app)
+      .get("/api/internal/widget/widget-001/config")
+      .set("X-Api-Key", "sk-test-key");
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe("widget-001");
+    // The slot resolved the row via the path param — one findFirst total
+    // (the slot's resolution; the handler consumed the stashed row, WR-05).
+    expect(prisma.widget.findFirst).toHaveBeenCalledTimes(1);
+    expect(prisma.widget.findFirst).toHaveBeenCalledWith({
+      where: { id: "widget-001", deletedAt: null, isActive: true },
+      include: { workspaces: { select: { workspaceId: true } } },
+    });
   });
 
   it("returns 404 when widget has no linked workspaces (empty workspaceIds)", async () => {
@@ -597,7 +665,7 @@ describe("POST /api/internal/widget/search", () => {
     expect(res.body.error).toMatch(/invalid/i);
   });
 
-  it("returns empty results for widget with no linked workspaces", async () => {
+  it("returns 404 for a widget with no linked workspaces (Phase 185: the tenant slot fail-closes an org-less widget — byte-identical shape to the old handler check)", async () => {
     const widgetNoWorkspaces = {
       ...mockWidget,
       workspaces: [],
@@ -612,9 +680,11 @@ describe("POST /api/internal/widget/search", () => {
         widgetId: "550e8400-e29b-41d4-a716-446655440000",
       });
 
-    expect(res.status).toBe(200);
-    expect(res.body.results).toEqual([]);
-    // Phase 93-02: no workspaces → wrapper not called (route short-circuits before).
+    // Phase 185: the widget row has NO whitelisted workspace → the tenant
+    // slot cannot resolve an org (D-08: org per principal, never null) and
+    // fail-closes with the SAME 404 shape the handler used to return.
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Widget has no linked workspaces");
     expect(hybridSearchWithRerank).not.toHaveBeenCalled();
   });
 
@@ -697,11 +767,36 @@ describe("POST /api/internal/widget/search", () => {
     expect(hybridSearchWithRerank).toHaveBeenCalledWith("test query", ["workspace-001"], 10);
   });
 
-  // 131-07 (G-131-19) Test 2b — the early-return bypass regression test: a
-  // widget with a bound archive but ZERO linked workspaces must STILL search
-  // the archive. The empty-workspaces early-return must not short-circuit the
-  // archive search (archive-only widget).
-  it("searches the archive for an archive-only widget (zero linked workspaces) — early-return bypass fixed (G-131-19)", async () => {
+  // ─── CR-01 regression pin (185-05): search WITHOUT the X-Widget-Id header ───
+  // The widget client sends ONLY X-Api-Key here (body.widgetId IS the
+  // identity source — the slot asserts nothing extra per the WR-05 note).
+  it("CR-01 pin: searches from body.widgetId WITHOUT the X-Widget-Id header (200)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (hybridSearchWithRerank as jest.Mock).mockResolvedValue([
+      { chunkId: "chunk-1", documentId: "doc-1", documentName: "Test Doc", chunkText: "text", score: 0.9, source: "both", metadata: {} },
+    ]);
+
+    const res = await request(app)
+      .post("/api/internal/widget/search")
+      .set("X-Api-Key", "sk-test-key")
+      .send({
+        query: "test query",
+        widgetId: "550e8400-e29b-41d4-a716-446655440000",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(1);
+    expect(hybridSearchWithRerank).toHaveBeenCalledWith("test query", ["workspace-001"], 10);
+  });
+
+  // 131-07 (G-131-19) Test 2b — SUPERSEDED by Phase 185 (D-08): an
+  // archive-only widget (ZERO whitelisted workspaces) has no
+  // WidgetWorkspace → Workspace chain to resolve an org from. The tenant
+  // slot fail-closes with the byte-identical 404 BEFORE the handler —
+  // "org per principal, never null" outranks the archive-only search arm.
+  // The archive-only search behavior is deferred with the Parte-II
+  // multi-org whitelist union scoping (185-CONTEXT.md deferred list).
+  it("returns 404 for an archive-only widget (zero linked workspaces) — Phase 185 fail-closed (supersedes the G-131-19 archive-only arm)", async () => {
     const archiveOnlyWidget = {
       ...mockWidgetWithArchive,
       workspaces: [],
@@ -717,12 +812,59 @@ describe("POST /api/internal/widget/search", () => {
         widgetId: "550e8400-e29b-41d4-a716-446655440000",
       });
 
-    expect(res.status).toBe(200);
-    expect(hybridSearchWithRerank).toHaveBeenCalledWith(
-      "test query",
-      [`archive:${ARCHIVE_ID}`],
-      10
-    );
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Widget has no linked workspaces");
+    expect(hybridSearchWithRerank).not.toHaveBeenCalled();
+  });
+});
+
+// ─── CR-01 (185-05): lead submit WITHOUT the X-Widget-Id header ─────────────
+describe("POST /api/internal/widget/lead — CR-01 identity-per-endpoint (no header)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("CR-01 pin: submits a lead from body.widgetId WITHOUT the X-Widget-Id header (201)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({ ...mockWidget, leadCaptureEnabled: true });
+    (prisma.widgetLead.create as jest.Mock).mockResolvedValue({
+      id: "lead-1",
+      email: "lead@example.com",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+    });
+
+    const res = await request(app)
+      .post("/api/internal/widget/lead")
+      .set("X-Api-Key", "sk-test-key")
+      .send({
+        widgetId: "widget-001",
+        email: "lead@example.com",
+        transcript: [{ role: "user", content: "hi" }],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBe("lead-1");
+    // The slot resolved the widget row from body.widgetId (single resolution;
+    // the handler consumed the stash — WR-05).
+    expect(prisma.widget.findFirst).toHaveBeenCalledTimes(1);
+    expect(prisma.widgetLead.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ widgetId: "widget-001" }),
+    });
+  });
+
+  it("still 403s when leadCaptureEnabled is false (byte-identical shape)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({ ...mockWidget, leadCaptureEnabled: false });
+
+    const res = await request(app)
+      .post("/api/internal/widget/lead")
+      .set("X-Api-Key", "sk-test-key")
+      .send({
+        widgetId: "widget-001",
+        email: "lead@example.com",
+        transcript: [{ role: "user", content: "hi" }],
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/lead capture is not enabled/i);
   });
 });
 

@@ -31,6 +31,52 @@ export function isDraftsPath(relPath: string): boolean {
 }
 
 /**
+ * Key-space successor of isDraftsPath (Phase 184, SAAS-03 D-08): classifies a
+ * row-carried storageKey as draft-owned for every terminal cleanup path
+ * (collector status callback, 24h reaper A5 guard, DELETE route,
+ * retry/assign restore guards).
+ *
+ * TWO arms — the cleanup contract must work for both key generations:
+ *
+ *   1. NEW-LAYOUT arm — keys shaped "{orgId}/uploads/drafts/{uuid}-{name}".
+ *      The prefix guard is TRAILING-SEPARATOR ("…/uploads/drafts/"): a bare
+ *      "{orgId}/uploads/drafts" (the directory itself) and a sibling-prefix
+ *      "{orgId}/uploads/drafts-evil/x" do NOT match. This is A5 Pitfall 5
+ *      reborn in key space — a startsWith guard without the trailing
+ *      separator would let a sibling-prefix directory be classified as a
+ *      draft and never cleaned (or, inversely, let the reaper skip real
+ *      drafts).
+ *
+ *   2. LEGACY arm — the M6 migration backfilled storageKey = filePath, so
+ *      backfilled rows carry the old cwd-relative path ("storage/uploads/
+ *      drafts/x.pdf"). Those delegate to isDraftsPath (which stays — it is
+ *      the canonical A5 resolve) for zero behavioral delta on pre-184 data
+ *      (air-gap invariant).
+ *
+ * Deliberately-false arms: URL sentinels (backfilled URL drafts carry the
+ * URL itself as their key — matches today's A5-rejects-URL behavior: never
+ * deleted by any cleanup path) and null/undefined/empty (no key, nothing to
+ * clean).
+ *
+ * ⚠ A5 Pitfall 5 reborn in key space: ANY future cleanup guard keyed on a
+ * drafts prefix MUST go through this helper (or carry the same trailing-sep
+ * rule) — a plain startsWith("…/uploads/drafts") reopens the sibling-prefix
+ * hole this contract closes.
+ */
+export function isDraftStorageKey(key: string | null | undefined): boolean {
+  if (!key) return false;
+  // New-layout arm: {orgId}/uploads/drafts/ — trailing-sep prefix guard
+  // (anti sibling-prefix "drafts-evil", same semantics as A5: reaper:95,
+  // isDraftsPath:29).
+  if (/^[0-9a-fA-F-]{36}\/uploads\/drafts\//.test(key)) {
+    return true;
+  }
+  // Legacy arm: backfilled rows carry filePath — delegate to the existing
+  // A5 resolve.
+  return isDraftsPath(key);
+}
+
+/**
  * Dato un nome file originale, restituisce il percorso completo
  * garantendo che sia unico. Se esiste già un file con lo stesso nome,
  * aggiunge uno scalare numerico prima dell'estensione.

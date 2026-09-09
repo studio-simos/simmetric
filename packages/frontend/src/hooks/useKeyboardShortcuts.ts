@@ -8,6 +8,7 @@ import { useEffect, useEffectEvent } from "react";
 export function useKeyboardShortcuts(options: {
   onOpenPalette: () => void;
   onOpenComparison: () => void;
+  onOpenNavOverlay?: () => void;
 }) {
   const onKeyDown = useEffectEvent((e: KeyboardEvent) => {
     if (e.repeat || e.altKey) return;
@@ -22,6 +23,15 @@ export function useKeyboardShortcuts(options: {
     if (e.key === "m" && e.shiftKey && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       options.onOpenComparison();
+    }
+
+    // Nav overlay toggle (UI revision R-4): Cmd/Ctrl+/ — Firefox uses Ctrl+/
+    // for view-source of the page's HTML (quick-find is Ctrl+F), so prevent
+    // default. Cmd+M is avoided (minimize on macOS); Cmd+J conflicts with
+    // the devtools console shortcut on Chromium.
+    if (e.key === "/" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      options.onOpenNavOverlay?.();
     }
   });
 

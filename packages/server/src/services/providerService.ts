@@ -206,22 +206,8 @@ async function deleteOllamaModelLocally(baseUrl: string, modelName: string) {
   }
 }
 
-async function deleteAllOllamaModelsLocally(baseUrl: string) {
-  const resolvedBaseUrl = resolveOllamaUrl(baseUrl);
-  try {
-    const response = await getOllamaClient(resolvedBaseUrl, { timeoutMs: 15000 }).list();
-    const models: Array<{ name: string }> = response.models || [];
-    for (const model of models) {
-      await getOllamaClient(resolvedBaseUrl, { timeoutMs: 30000 }).delete({ model: model.name });
-      logger.info(`[provider] Deleted Ollama model: ${model.name} from ${resolvedBaseUrl}`);
-    }
-    logger.info(`[provider] Dropped all Ollama models from ${resolvedBaseUrl} (count: ${models.length})`);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    logger.warn(`[provider] Failed to drop all Ollama models at ${resolvedBaseUrl}: ${message}`);
-    // Non-blocking: if Ollama is unreachable, we still delete the provider from DB
-  }
-}
+// deleteAllOllamaModelsLocally removed (owner decision 2026-09-08): provider
+// deletion no longer bulk-deletes models from the Ollama daemon.
 
 // ===== CRUD =====
 
@@ -232,10 +218,12 @@ export async function deleteProvider(id: string) {
   });
   if (!provider) throw new Error("Provider not found");
 
-  // Clean up all Ollama models from the Docker instance
-  if (provider.type === "ollama") {
-    await deleteAllOllamaModelsLocally(provider.baseUrl);
-  }
+  // Owner decision (2026-09-08): deleting a provider must NOT bulk-delete the
+  // models from the Ollama daemon — the downloaded models stay on disk and
+  // remain visible in the Ollama list; individual models are removable
+  // one-at-a-time via DELETE /:providerId/models/:modelId while they are
+  // listed. The ProviderModel DB rows cascade via the provider FK (the UI
+  // list for THIS provider empties; other providers/models are untouched).
 
   return prisma.provider.delete({ where: { id } });
 }

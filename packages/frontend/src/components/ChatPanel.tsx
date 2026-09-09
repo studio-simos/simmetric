@@ -3,22 +3,19 @@
 // This file is part of the Simmetric Chat community build.
 // See LICENSE and NOTICE at the repository root for full terms.
 
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useEffectEvent } from "react";
 import { useChatNav } from "../contexts/ChatContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { useChat, type SourceCitation, resolveEffectiveModel } from "../hooks/useChat";
+import { useChat, type SourceCitation } from "../hooks/useChat";
 import { useDropzone } from "react-dropzone";
 import { useTranslation } from "react-i18next";
-import { apiGet, apiUpload, ApiError } from "../utils/api";
-import { getGlobalDefaultModel } from "../utils/modelDefaults";
-import { showSuccess, showError, showInfo } from "../lib/toast";
+import { apiUpload, ApiError } from "../utils/api";
+import { showSuccess, showError } from "../lib/toast";
 import { setOnSelectModel } from "../hooks/usePaletteCallbacks";
 import { useAvailableModels } from "../queries/useProviders";
 import { useMe } from "../queries/useAuth";
-import { useBelowLg } from "../hooks/useIsMobile";
 import { useChatPanelState, type UploadedDoc } from "../hooks/useChatPanelState";
 import { useMessageHistory } from "../hooks/useMessageHistory";
-import ChatSidebar from "./ChatSidebar";
 import RightPanel from "./RightPanel";
 import CitationPanel from "./CitationPanel";
 import { ChatMessageList } from "./chat/ChatMessageList";
@@ -38,7 +35,8 @@ import { WikiBrokenLinkDialog } from "./WikiBrokenLinkDialog";
 import { WikiDistillDialog } from "./WikiDistillDialog";
 import { DlpTextsToggle } from "./chat/DlpTextsToggle";
 import { useChats } from "../queries/useChats";
-import { X, Menu, PanelRight, BookOpen } from "lucide-react";
+import { useSettingsHelpers } from "../queries/useSettings";
+import { X, BookOpen, PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -63,12 +61,11 @@ export default function ChatPanel() {
     distillDialogOpen,
     setDistillDialogOpen,
     setMessageCount,
-    // 260815-k5s: ephemeral new-chat archive selection. Reset to null on
-    // "New chat" and threaded to sendMessage so the first message creates
-    // an archive-scoped chat row (no post-hoc PATCH). Cleared by the
-    // ChatContext reset effect once currentChatId becomes non-null.
+    // 260815-k5s: ephemeral new-chat archive selection. Threaded to sendMessage
+    // so the first message creates an archive-scoped chat row (no post-hoc
+    // PATCH). Cleared by the ChatContext reset effect once currentChatId
+    // becomes non-null; the sidebar's "New chat" resets it in App.tsx.
     newChatArchiveId,
-    setNewChatArchiveId,
   } = useChatNav();
   const mainChat = useChat(currentWorkspaceId);
   const {
@@ -82,7 +79,6 @@ export default function ChatPanel() {
     persistedModel,
     sendMessage,
     loadChat,
-    clearChat,
     abortStream,
     removeMessage,
     updateChatModel,
@@ -93,10 +89,8 @@ export default function ChatPanel() {
   const { data: availableModels = [] } = useAvailableModels(currentWorkspaceId !== null);
   const { data: authUser } = useMe();
 
-  // Below lg (1024px) the chat sidebar collapses to a Sheet and the console
-  // surfaces via a trigger in the chat title bar. At lg+ both are inline and
-  // the title bar is hidden.
-  const belowLg = useBelowLg();
+  // Below lg (1024px) the console surfaces via a Sheet opened from a trigger
+  // in the model badge bar; at lg+ the console is inline (RightPanel).
   const [consoleOpen, setConsoleOpen] = useState(false);
 
   // Phase 80 (D-01): `Chat.archiveId` is the single source of truth for the
@@ -108,6 +102,11 @@ export default function ChatPanel() {
   const { data: chats = [] } = useChats(currentWorkspaceId ?? undefined);
   const activeChatSummary = chats.find((c) => c.id === currentChatId);
   const linkedArchiveId = activeChatSummary?.archiveId ?? null;
+
+  // White-label app name for the chat empty-state wordmark (UI revision R-2).
+  // Cached TanStack query — same cache the Settings page reads, no extra fetch.
+  const { getValue: getSetting } = useSettingsHelpers();
+  const brandingAppName = getSetting("BRANDING_APP_NAME");
 
   const {
     input,
@@ -136,8 +135,6 @@ export default function ChatPanel() {
     setEditInput,
     deletingMessageId,
     setDeletingMessageId,
-    mobileSidebarOpen,
-    setMobileSidebarOpen,
     statusAnnouncement,
     setStatusAnnouncement,
     showDlpTexts,
@@ -238,12 +235,20 @@ export default function ChatPanel() {
     return () => document.removeEventListener("keydown", handler);
   }, [isComparing, setIsComparing]);
 
-  // Restore chat from chatStore on mount (session persistence)
-  useEffect(() => {
+  // Restore chat from chatStore on mount + when a chat is selected from the
+  // global sidebar (App.tsx wires the sidebar's ChatSidebar to onSelectChat →
+  // setChatId, which lands here via navChatId). While a stream is active the
+  // panel is unmounted, so switching mid-stream is impossible. `loadChat` is
+  // a stable useChatPersistence closure; it is read through the useEffectEvent
+  // channel below so the deps stay free of the whole `mainChat` object.
+  const restoreChat = useEffectEvent(() => {
     if (navChatId && currentWorkspaceId && !currentChatId) {
       loadChat(navChatId);
     }
-  }, []); // mount only
+  });
+  useEffect(() => {
+    restoreChat();
+  }, [navChatId, currentWorkspaceId]);
 
   // Sync useChat's local currentChatId into ChatContext (nav source of truth).
   // Covers paths that set currentChatId inside useChat without an explicit
@@ -434,76 +439,6 @@ export default function ChatPanel() {
     };
   }, [handleModelChange]);
 
-  const handleSelectChat = (chatId: string) => {
-    // Keep ChatContext.currentChatId (nav source of truth, read by RightPanel
-    // archive-link section + MCP pinners) in sync with the actively-open chat.
-    // loadChat only updates useChat's local currentChatId — without this sync,
-    // the archive-link section never renders in a fresh session (no
-    // localStorage lastChatId to restore from).
-    setChatId(chatId);
-    loadChat(chatId);
-  };
-
-  const handleNewChat = async () => {
-    setChatId(null);
-    clearChat();
-    // 260815-k5s (D-03): reset the ephemeral archive selector to 'none' on
-    // every "New chat" so a previous new-chat pick never leaks. The
-    // ChatContext reset effect also fires (currentChatId → null), but
-    // setting here is explicit and covers the case where navChatId was
-    // already null (re-clicking "New chat" in an already-new chat).
-    setNewChatArchiveId(null);
-    if (!currentWorkspaceId) return;
-
-    const modelPrefKey = `modelPref:${currentWorkspaceId}`;
-    // RC-4: read the per-workspace preference (written on every effective
-    // model choice, not just explicit dropdown picks) so returning to a new
-    // chat restores the same model.
-    let pref: { providerId?: string; model?: string } | null = null;
-    try {
-      const saved = localStorage.getItem(modelPrefKey);
-      if (saved) pref = JSON.parse(saved) as { providerId: string; model: string };
-    } catch {
-      // ignore parse errors
-    }
-
-    const globalDefault = getGlobalDefaultModel();
-
-    // Fetch the workspace default up front so it's part of the candidate chain.
-    let workspaceDefault: { providerId?: string; model?: string } | null = null;
-    try {
-      const config = await apiGet<{ providerId?: string; model?: string }>(`/workspaces/${currentWorkspaceId}/agent-config`);
-      workspaceDefault = config.providerId ? { providerId: config.providerId, model: config.model || undefined } : null;
-    } catch {
-      // ignore — resolve without the workspace default candidate
-    }
-
-    let resolved: { providerId?: string; model?: string } | null;
-    if (availableModels.length > 0) {
-      // RC-1: validate every candidate against the live availableModels list.
-      // A stale pref / workspace / global default pointing at an unavailable
-      // model is skipped; resolveEffectiveModel falls back to the three-tier
-      // chain (workspace → global(isDefault) → any available) so a new chat
-      // never starts on a broken model.
-      resolved = resolveEffectiveModel(availableModels, [pref, workspaceDefault, globalDefault], workspaceDefault);
-    } else {
-      // Providers query not hydrated yet — best-effort without validation.
-      resolved = pref ?? workspaceDefault ?? globalDefault ?? null;
-    }
-
-    if (resolved?.providerId) {
-      setModelOverride(resolved);
-      // Persist the effective model as the workspace preference so the next
-      // "New chat" restores it (RC-4). This also covers the auto-default case
-      // that the previous code never persisted.
-      localStorage.setItem(modelPrefKey, JSON.stringify(resolved));
-    } else if (pref) {
-      // A stale preference existed but no valid model resolved — inform the
-      // user instead of silently starting model-less.
-      showInfo(t("chat.palette.fallbackToast"));
-    }
-  };
-
   // File upload handler
   const onDrop = async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0 || !currentWorkspaceId) return;
@@ -611,52 +546,9 @@ export default function ChatPanel() {
         </div>
       )}
 
-      {/* Chat Sidebar — inline at lg+, Sheet overlay below lg (mobile + tablet).
-          The Sheet mirrors the console Sheet's styles and dynamics (same
-          width, overlay, close button, controlled-only via `open`), but
-          stays anchored to the LEFT — `left-0`, `border-r`, slides in/out
-          from the left — instead of the console's right. */}
-      {belowLg ? (
-        <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
-          <SheetPortal>
-            <SheetOverlay className="bg-black/50 backdrop-blur-sm" />
-            <SheetPrimitive.Content
-              className={cn(
-                "fixed z-50 gap-4 bg-background p-0 shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out",
-                "inset-y-0 left-0 h-full w-80 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-xs"
-              )}
-            >
-              <SheetTitle className="sr-only">{t("chat.sidebarTitle", "Chat list")}</SheetTitle>
-              <SheetDescription className="sr-only">
-                {t("chat.sidebarDescription", "List of your chats in this workspace")}
-              </SheetDescription>
-              <ChatSidebar
-                variant="sheet"
-                onClose={() => setMobileSidebarOpen(false)}
-                workspaceId={currentWorkspaceId}
-                currentChatId={currentChatId}
-                onSelectChat={(chatId) => {
-                  handleSelectChat(chatId);
-                  setMobileSidebarOpen(false);
-                }}
-                onNewChat={() => {
-                  handleNewChat();
-                  setMobileSidebarOpen(false);
-                }}
-              />
-            </SheetPrimitive.Content>
-          </SheetPortal>
-        </Sheet>
-      ) : (
-        <ChatSidebar
-          workspaceId={currentWorkspaceId}
-          currentChatId={currentChatId}
-          onSelectChat={handleSelectChat}
-          onNewChat={handleNewChat}
-        />
-      )}
-
-      {/* Main Chat Area */}
+      {/* Main Chat Area — the conversation list lives in the global AppSidebar
+          (App.tsx wires onSelectChat/onNewChat into this panel); this panel
+          hosts only the conversation surface. */}
       {isComparing ? (
         <ModelComparisonView
           workspaceId={currentWorkspaceId}
@@ -665,72 +557,6 @@ export default function ChatPanel() {
         />
       ) : (
         <div className="relative flex-1 flex flex-col min-w-0">
-          {/* Chat title bar — below lg only. Hosts the chat-list and console
-              triggers (both collapse to Sheets below lg). Hidden at lg+ where
-              the chat sidebar and right console are inline. No title text.
-              On mobile/tablet the bar is an `absolute` transparent overlay
-              pinned to the top of the chat area: the chat content (ChatMessageList)
-              fills the whole strip and scrolls behind it, so the area is
-              covered by the chat with no divider line. The container is
-              `pointer-events-none` so text behind it stays selectable; only the
-              two buttons re-enable `pointer-events-auto`. */}
-          <div className="lg:hidden absolute top-0 inset-x-0 z-30 flex items-center justify-between gap-2 px-3 sm:px-4 py-2 pointer-events-none">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setMobileSidebarOpen(true)}
-              className="pointer-events-auto shrink-0 -ml-1 bg-background/60 backdrop-blur-sm"
-              aria-label={t("chat.openSidebar", "Open chat list")}
-              title={t("chat.openSidebar", "Open chat list")}
-            >
-              <Menu className="w-5 h-5" />
-            </Button>
-            <div className="flex-1 flex items-center justify-center min-w-0 px-2 pointer-events-auto">
-              <ChatModelBadge
-                providerId={displayModel?.providerId}
-                model={displayModel?.name}
-                providerType={displayModel?.providerType}
-                capabilities={displayModel?.capabilities}
-                isDefault={modelIsDefault}
-                size="sm"
-                className="max-w-[200px]"
-              />
-            </div>
-            <div className="flex items-center gap-1 pointer-events-auto">
-              {messages.length > 0 && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => {
-                  if (citationPanelSources) {
-                    setCitationPanelSources(null);
-                  } else {
-                    const allSources = messages
-                      .filter((m) => m.metadata?.sources && Array.isArray(m.metadata.sources) && m.metadata.sources.length > 0)
-                      .flatMap((m) => (m.metadata!.sources ?? []) as SourceCitation[]);
-                    setCitationPanelSources(allSources.length > 0 ? allSources : null);
-                  }
-                }}
-                className="shrink-0 bg-background/60 backdrop-blur-sm text-muted-foreground hover:text-foreground"
-                aria-label={t("chat.sources", "Sources")}
-                title={t("chat.sources", "Sources")}
-              >
-                <BookOpen className="w-4 h-4" />
-                </Button>
-              )}
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setConsoleOpen(true)}
-                className="shrink-0 bg-background/60 backdrop-blur-sm"
-                aria-label={t("chat.openConsole", "Open console")}
-                title={t("chat.openConsole", "Open console")}
-              >
-                <PanelRight className="w-5 h-5" />
-              </Button>
-            </div>
-          </div>
-
           {/* Console Sheet — below lg, surfaces RightPanel content from the right. */}
           <Sheet open={consoleOpen} onOpenChange={setConsoleOpen}>
             <SheetPortal>
@@ -754,8 +580,9 @@ export default function ChatPanel() {
             </SheetPortal>
           </Sheet>
 
-          {/* Desktop model badge bar — visible at lg+ above messages */}
-          <div className="hidden lg:flex items-center justify-end gap-2 px-4 py-1.5 border-b border-border">
+          {/* Model badge bar — above the messages; on <lg the console trigger
+              also lives here (the inline RightPanel is hidden below lg). */}
+          <div className="flex items-center justify-end gap-2 px-4 py-1.5 border-b border-border">
             {messages.length > 0 && (
               <Button
                 variant="ghost"
@@ -785,6 +612,17 @@ export default function ChatPanel() {
               isDefault={modelIsDefault}
               size="sm"
             />
+            {/* Console trigger — only where the inline RightPanel is hidden. */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setConsoleOpen(true)}
+              className="lg:hidden shrink-0 text-muted-foreground hover:text-foreground"
+              aria-label={t("chat.openConsole", "Open console")}
+              title={t("chat.openConsole", "Open console")}
+            >
+              <PanelRight className="w-4 h-4" />
+            </Button>
           </div>
 
           {/* Messages — Feature 4: ChatMessageList owns a11y (role=log,
@@ -801,6 +639,7 @@ export default function ChatPanel() {
             emptyState={
               <ChatEmptyState
                 workspaceId={currentWorkspaceId ?? undefined}
+                appName={brandingAppName || undefined}
                 activeModel={{
                   providerId: modelOverride?.providerId ?? persistedModel?.providerId,
                   model: modelOverride?.model ?? persistedModel?.model,

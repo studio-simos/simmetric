@@ -134,6 +134,30 @@ describe("dedupeCitations", () => {
   it("handles empty input", () => {
     expect(dedupeCitations([])).toEqual([]);
   });
+
+  // G-131-loop: repeated identical tool calls flatMap the same citation set
+  // once per call — exact duplicates carry zero extra signal.
+  it("(G-131-loop) drops exact duplicates from repeated identical tool calls, keeps first", () => {
+    const wiki = wikiPage("acme-corporation", ["doc-123"]);
+    const chunk = ragChunk("doc-456", "Other.pdf");
+
+    const result = dedupeCitations([wiki, chunk, wiki, chunk, wiki]);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toBe(wiki);
+    expect(result[1]).toBe(chunk);
+  });
+
+  it("(G-131-loop) keeps distinct chunks of the same document (different pageNumber/chunkText)", () => {
+    const chunk1 = ragChunk("doc-1", "Doc.pdf", { pageNumber: 1, chunkText: "first page content" });
+    const chunk2 = ragChunk("doc-1", "Doc.pdf", { pageNumber: 2, chunkText: "second page content" });
+
+    const result = dedupeCitations([chunk1, chunk2, chunk1]);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toBe(chunk1);
+    expect(result[1]).toBe(chunk2);
+  });
 });
 
 describe("filterGroundedCitations", () => {

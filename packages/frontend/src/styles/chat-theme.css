@@ -15,12 +15,15 @@
   --chat-ai-bg: #FDFAF4;
   --chat-input-bg: #FDFAF4;
   --chat-border: #D9CFC1;
-  --chat-accent: #C2673A;
+  /* UI revision R-1: darkened from #C2673A (3.8:1 on --card, below AA) to
+     #A85428 (~5:1) — keeps the warm accent identity, passes WCAG AA for the
+     prose links / focus accents that use --chat-accent. */
+  --chat-accent: #A85428;
   --chat-code-bg: #F2EBE0;
   --chat-code-header-bg: #EDE6DB;
-  --chat-cursor-color: #C2673A;
+  --chat-cursor-color: #A85428;
   --chat-cursor-glow: none;
-  --chat-citation-glow: #C2673A;
+  --chat-citation-glow: #A85428;
   --chat-status-banner-bg: #E8D9C5;
 }
 

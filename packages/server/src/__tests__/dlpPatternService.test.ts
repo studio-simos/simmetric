@@ -111,7 +111,7 @@ describe("getActivePatterns cache", () => {
     expect(findMany).toHaveBeenCalledTimes(2);
   });
 
-  it("returns only enabled rows (where isEnabled: true)", async () => {
+  it("returns only enabled rows (where isEnabled: true) for the ABSENT-org arm (pre-185 equivalence)", async () => {
     findMany.mockResolvedValue([row()]);
     await getActivePatterns();
     expect(findMany).toHaveBeenCalledWith(
@@ -120,6 +120,39 @@ describe("getActivePatterns cache", () => {
         orderBy: [{ createdAt: "asc" }, { name: "asc" }],
       }),
     );
+  });
+
+  // ─── CR-02 (185-05): org-explicit reads keep the built-ins as global rails ───
+  it("orgId provided → where merges the org's customs WITH the built-ins (isEnabled AND (org OR isBuiltIn))", async () => {
+    findMany.mockResolvedValue([row()]);
+    await getActivePatterns("org-b");
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          isEnabled: true,
+          OR: [{ organizationId: "org-b" }, { isBuiltIn: true }],
+        },
+        orderBy: [{ createdAt: "asc" }, { name: "asc" }],
+      }),
+    );
+  });
+
+  it("cache is keyed PER-ORG — org-a and org-b reads hit the DB independently (no cross-org cache contamination)", async () => {
+    findMany.mockResolvedValue([row()]);
+    await getActivePatterns("org-a");
+    await getActivePatterns("org-b");
+    await getActivePatterns("org-a"); // org-a arm cached
+    await getActivePatterns("org-b"); // org-b arm cached
+    expect(findMany).toHaveBeenCalledTimes(2);
+    expect(findMany.mock.calls[0][0].where.OR[0].organizationId).toBe("org-a");
+    expect(findMany.mock.calls[1][0].where.OR[0].organizationId).toBe("org-b");
+  });
+
+  it("the ABSENT-org arm (null key) is a DISTINCT cache entry from any org arm", async () => {
+    findMany.mockResolvedValue([row()]);
+    await getActivePatterns();
+    await getActivePatterns("org-a");
+    expect(findMany).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -187,12 +220,25 @@ describe("MAX_CUSTOM_PATTERNS", () => {
 });
 
 describe("listPatterns", () => {
-  it("lists ALL rows (no isEnabled filter) ordered createdAt then name", async () => {
+  it("lists ALL rows (no isEnabled filter) ordered createdAt then name for the ABSENT-org arm", async () => {
     findMany.mockResolvedValue([row(), row({ id: "r2", isEnabled: false })]);
     const all = await listPatterns();
     expect(all).toHaveLength(2);
     expect(findMany).toHaveBeenCalledWith({
+      where: {},
       orderBy: [{ createdAt: "asc" }, { name: "asc" }],
     });
+  });
+
+  // CR-02 (185-05): the admin list shows the org's customs PLUS the built-ins.
+  it("orgId provided → admin list merges org customs with built-ins (same OR filter)", async () => {
+    findMany.mockResolvedValue([row()]);
+    await listPatterns("org-b");
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { OR: [{ organizationId: "org-b" }, { isBuiltIn: true }] },
+        orderBy: [{ createdAt: "asc" }, { name: "asc" }],
+      }),
+    );
   });
 });

@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import {
   createArchiveSchema,
@@ -29,7 +30,7 @@ const createFromTemplateSchema = z.object({
 });
 
 // GET / — List all archives (global visibility per D-02)
-router.get("/", authMiddleware, async (req: Request, res: Response) => {
+router.get("/", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const archives = await getArchives();
     res.json(archives);
@@ -41,7 +42,7 @@ router.get("/", authMiddleware, async (req: Request, res: Response) => {
 });
 
 // POST / — Create a new archive
-router.post("/", authMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
+router.post("/", authMiddleware, tenantContextMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
   try {
     const result = createArchiveSchema.safeParse(req.body);
     if (!result.success) {
@@ -77,7 +78,7 @@ router.post("/", authMiddleware, requirePermission("archive:write"), async (req:
 });
 
 // GET /:archiveId — Get single archive
-router.get("/:archiveId", authMiddleware, async (req: Request, res: Response) => {
+router.get("/:archiveId", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const archiveId = req.params.archiveId as string;
 
@@ -107,7 +108,7 @@ router.get("/:archiveId", authMiddleware, async (req: Request, res: Response) =>
 });
 
 // PUT /:archiveId — Update archive
-router.put("/:archiveId", authMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
+router.put("/:archiveId", authMiddleware, tenantContextMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
   try {
     const archiveId = req.params.archiveId as string;
 
@@ -150,7 +151,7 @@ router.put("/:archiveId", authMiddleware, requirePermission("archive:write"), as
 });
 
 // DELETE /:archiveId — Soft-delete archive
-router.delete("/:archiveId", authMiddleware, requirePermission("archive:delete"), async (req: Request, res: Response) => {
+router.delete("/:archiveId", authMiddleware, tenantContextMiddleware, requirePermission("archive:delete"), async (req: Request, res: Response) => {
   try {
     const archiveId = req.params.archiveId as string;
 
@@ -180,7 +181,7 @@ router.delete("/:archiveId", authMiddleware, requirePermission("archive:delete")
 });
 
 // POST /from-template — Create archive from template (ARCH-06)
-router.post("/from-template", authMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
+router.post("/from-template", authMiddleware, tenantContextMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
   try {
     const result = createFromTemplateSchema.safeParse(req.body);
     if (!result.success) {
@@ -216,7 +217,7 @@ router.post("/from-template", authMiddleware, requirePermission("archive:write")
 });
 
 // POST /:archiveId/reindex — Admin-only reindex
-router.post("/:archiveId/reindex", authMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
+router.post("/:archiveId/reindex", authMiddleware, tenantContextMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
   try {
     const archiveId = req.params.archiveId as string;
 

@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireProjectAccess, requirePermission } from "../middleware/rbac";
 import { requireFeatureLimit } from "../middleware/license";
 import prisma, { withSoftDelete } from "../utils/prisma";
@@ -16,6 +17,10 @@ const router = Router();
 
 // All project routes require authentication
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 // GET /api/projects — list projects accessible to the current user
 router.get("/", async (req: Request, res: Response) => {
@@ -52,6 +57,8 @@ router.post("/", requirePermission("project:create"), requireFeatureLimit("max_p
         name: validated.name,
         description: validated.description,
         createdBy: req.userId!,
+        // CR-03 (185-05, D-04): explicit org stamp.
+        organizationId: req.organizationId!,
       },
     });
 
@@ -382,6 +389,10 @@ router.post("/:projectId/access", requireProjectAccess, async (req: Request, res
       return;
     }
 
+    // T-185-10 disposition (Pitfall-2 grep-gate): parent-verified — the
+    // route proves project access upstream (requireProjectAccess chain);
+    // the composite-unique upsert keys (userId, projectId), both
+    // access-checked parameters.
     await prisma.projectAccess.upsert({
       where: {
         userId_projectId: { userId, projectId: req.params.projectId as string },

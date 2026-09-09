@@ -11,6 +11,7 @@ import {
   archivePageParseCallbackSchema,
 } from "@simmetric-chat/shared";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import { getEnv } from "../config/env";
 import { logger } from "../utils/logger";
@@ -56,6 +57,8 @@ function secretEquals(a: string, b: string): boolean {
 router.post(
   "/:archiveId/copy-from-doc",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission("archive:write"),
   async (req: Request, res: Response) => {
     try {
@@ -160,6 +163,8 @@ router.post(
 router.get(
   "/import/:jobId",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission("archive:read"),
   async (req: Request, res: Response) => {
     try {
@@ -172,7 +177,9 @@ router.get(
       const job = await prisma.archiveImportJob.findUnique({
         where: { id: jobId },
       });
-      if (!job) {
+      // T-185-10 org assertion (Pitfall-2 grep-gate, option b): cross-org
+      // import job hides as 404 — fail-closed.
+      if (!job || job.organizationId !== req.organizationId) {
         res.status(404).json({ error: "Import job not found" });
         return;
       }
@@ -225,6 +232,15 @@ router.put(
         res.status(401).json({ error: "Invalid collector secret" });
         return;
       }
+
+      // Phase 185 (D-05/D-08, T-185-08 — BYPASS SURFACE, citeable in the
+      // org-b suite): the collector has NO principal and this route never
+      // passes a tenant slot. The sentinel is set ONLY after the secret
+      // compare passes (never on open routes); absent-store +
+      // extension-skip semantics (185-01 spike probe 9) keep the
+      // callback-driven archiveImportJob writes unscoped. Contract
+      // byte-identical: no new status codes, no new response fields.
+      req.tenantBypass = true;
 
       const jobId = req.params.jobId as string;
       if (!UUID_RE.test(jobId)) {

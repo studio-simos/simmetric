@@ -5,13 +5,14 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import { buildArchiveGraph } from "../services/archiveGraphService";
 
 const router = Router();
 
 // GET /:archiveId/graph — Return nodes and edges for D3.js force-directed graph
-router.get("/:archiveId/graph", authMiddleware, requirePermission("archive:read"), async (req: Request, res: Response) => {
+router.get("/:archiveId/graph", authMiddleware, tenantContextMiddleware, requirePermission("archive:read"), async (req: Request, res: Response) => {
   try {
     const archiveId = req.params.archiveId as string;
 

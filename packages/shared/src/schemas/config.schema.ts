@@ -38,6 +38,14 @@ export const configKeySchema = z.enum([
   "VECTOR_DB_URL",
   "VECTOR_DB_API_KEY",
 
+  // Storage Provider (Phase 184 SAAS-03 — per-org via 183 cascade)
+  "STORAGE_PROVIDER",
+  "S3_ENDPOINT",
+  "S3_BUCKET",
+  "S3_REGION",
+  "S3_ACCESS_KEY_ID",
+  "S3_SECRET_ACCESS_KEY",
+
   // Server Configuration
   "SERVER_PORT",
   "COLLECTOR_PORT",
@@ -145,6 +153,12 @@ export const configKeySchema = z.enum([
 export const setConfigSchema = z.object({
   key: configKeySchema,
   value: z.string(),
+  // Phase 183 (SAAS-02, D-04): optional per-item org target — the override's
+  // organization arrives explicitly in the body item (requireAdmin stays the
+  // sole gate). Absent = global row (the pre-183 behavior, byte-identical).
+  // uuid-validated (V5). ALWAYS_READONLY keys remain rejected on the write
+  // path regardless of this field (D-11 — enforced in updateSettings).
+  organizationId: z.string().uuid().optional(),
 });
 
 export const bulkSetConfigSchema = z.object({

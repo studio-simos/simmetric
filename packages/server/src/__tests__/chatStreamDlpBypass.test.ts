@@ -165,6 +165,12 @@ function seedPrismaForStream() {
   (prisma.chat.create as jest.Mock).mockResolvedValue({ id: CHAT_ID, workspaceId: WORKSPACE_ID, providerId: null, model: null });
   (prisma.chatMessage.create as jest.Mock).mockResolvedValue({ id: "assistant-msg-1" });
   (prisma.chatMessage.findMany as jest.Mock).mockResolvedValue([]);
+  // Phase 185 (185-01 tracer): workspaceRoutes mounts tenantContextMiddleware
+  // for the whole /api/workspaces prefix — seed a live membership so the
+  // JWT arm resolves and the chain proceeds.
+  (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+    organizationId: "00000000-0000-0000-0000-000000000000",
+  });
 }
 
 function postSSE(path: string, token: string, body: unknown): Promise<string> {
@@ -284,6 +290,11 @@ describe("chat/stream — DLP role bypass (260829-n95)", () => {
       (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
         id: "widget-001", isActive: true, deletedAt: null,
         workspaces: [{ workspaceId: WORKSPACE_ID }],
+      });
+      // Phase 185 (185-02): widgetTenantContext resolves the org from the
+      // widget's whitelist workspace (WidgetWorkspace → Workspace org, D-08).
+      (prisma.workspace.findFirst as jest.Mock).mockResolvedValue({
+        organizationId: "org-widget-default",
       });
     });
 

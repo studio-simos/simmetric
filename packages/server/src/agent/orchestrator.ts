@@ -130,6 +130,65 @@ interface ToolCallRecord {
   sources?: SourceCitation[];
 }
 
+/**
+ * Stable stringify for repeat-call comparison (sorted keys recursively —
+ * mirrors the LoopDetector's canonicalization semantics so key-order
+ * variants of the same arguments compare equal).
+ */
+function canonicalInput(value: unknown): string {
+  try {
+    return JSON.stringify(sortKeysDeep(value));
+  } catch {
+    return String(value);
+  }
+}
+
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (value !== null && typeof value === "object") {
+    const sorted: Record<string, unknown> = {};
+    for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[k] = sortKeysDeep((value as Record<string, unknown>)[k]);
+    }
+    return sorted;
+  }
+  return value;
+}
+
+/**
+ * Build the user-role tool-result context entry pushed after each skill
+ * execution (both ReAct loops). The `[Used tool: X]` prefix is load-bearing —
+ * downstream parsers (contextCompaction.extractToolName,
+ * agentBudgetService.isToolResult) match on it — so extra lines are APPENDED
+ * only.
+ *
+ * G-131-loop (repeat-call guard): when the identical (tool, input) pair was
+ * already executed in this run, append an explicit no-retry warning with the
+ * arguments used. Small/weak models (observed: deepseek-v4-flash:cloud)
+ * re-issue the same wiki_query call even after a successful result — the
+ * LoopDetector eventually trips at window=3 and the whole run dies with
+ * "loop detected". The warning gives the model an in-context reason to stop
+ * BEFORE the breaker trips; identical-input retries after the warning can no
+ * longer be accidental.
+ */
+function buildToolResultEntry(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  resultText: string,
+  toolCalls: ToolCallRecord[],
+): ChatMessageEntry {
+  const inputKey = canonicalInput(toolInput);
+  const priorIdentical = toolCalls.filter(
+    (tc) => tc.tool === toolName && canonicalInput(tc.input) === inputKey,
+  ).length;
+
+  let content = `[Used tool: ${toolName}]\nArguments used: ${inputKey}\nResult: ${resultText}`;
+  if (priorIdentical > 0) {
+    content += `\n\nREPEAT-CALL GUARD (call #${priorIdentical + 1} with identical arguments): this result is the same as the previous one. Do NOT call this tool again with the same arguments — answer the user from the result you now have.`;
+  }
+  return { role: "user", content };
+}
+
 import {
   AgentBudgetTracker,
   truncateToolOutput,
@@ -463,7 +522,10 @@ export async function runAgent(params: AgentRunParams): Promise<AgentRunResult> 
       // Add tool result to context for next iteration.
       // Using role: "user" maintains proper user/assistant alternation
       // which strict APIs (DeepSeek, Anthropic) require.
-      context.push({ role: "user", content: `[Used tool: ${toolName}]\nResult: ${resultText}` });
+      // G-131-loop: entry now carries the arguments used + a repeat-call
+      // guard warning when identical (tool, input) already ran (see
+      // buildToolResultEntry).
+      context.push(buildToolResultEntry(toolName, toolInput, resultText, toolCalls));
 
       // If the LLM used rag_search, include sources in the final result
       if (toolName === "rag_search" && result.sources) {
@@ -1035,7 +1097,10 @@ export async function runAgentStreaming(
         budget.setAbortReason("context_overflow");
       }
 
-      context.push({ role: "user", content: `[Used tool: ${toolName}]\nResult: ${resultText}` });
+      // G-131-loop: entry carries the arguments used + a repeat-call guard
+      // warning when identical (tool, input) already ran (see
+      // buildToolResultEntry — shared with the non-streaming loop).
+      context.push(buildToolResultEntry(toolName, toolInput, resultText, toolCalls));
 
       // Loop re-iterates naturally with a fresh streamLLM call + fresh
       // iterationTokens buffer on the next pass. No second callLLM, no

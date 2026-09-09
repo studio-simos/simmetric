@@ -36,6 +36,17 @@ import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
 import { getBoss, createQueue, schedule } from "./jobQueue";
 
+// Phase 185 D-09: jobs run OUTSIDE the request ALS — org is resolved FROM THE
+// ROW (never the ambient tenant-context read); ambient reads in jobs are bugs (Pitfall 8).
+// Disposition: PLATFORM-LEVEL CROSS-ORG BY DESIGN — runReaperCycle iterates
+// the in-process connection snapshot (all orgs' sockets, FD-leak prevention
+// is platform-wide) and runReconnectCycle sweeps ALL orgs' enabled
+// MCPConnections. MCPConnection rows carry organizationId (Phase 182) but no
+// operation here is org-scoped: connect/disconnect are keyed by the row's own
+// connectionId. Write ops (mCPConnection.findMany here, disconnect's
+// delete/update) run OUTSIDE ALS so the scoped extension skips them
+// (absent-store semantics, 185-01 spike probe 9).
+
 // Phase 165 (D-04/D-05): queue name (underscores, not colons — pg-boss 12.28
 // assertQueueName rejects ":"); mirrors the Phase 161 lock resource namespace;
 // cron expression is the 5-minute cadence the former timer used (verified valid

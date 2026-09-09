@@ -91,6 +91,38 @@ All commands run from the repository root.
 
 - The integration `globalSetup` probes Postgres and sets `PGVECTOR_AVAILABLE`; if Postgres is unavailable the suites skip loudly instead of false-passing. The config sets a 30s `testTimeout` and `forceExit: true` (lingering `pg.Pool` idle clients).
 
+### S3 conformance tests (StorageProvider, Phase 184)
+
+- **Where:** `packages/server/src/__tests__/storage/storageProvider.conformance.test.ts` — one parametrized suite factory (`defineStorageConformance`) run against both providers (D-10): the LocalFS arm runs ALWAYS (Postgres-free, part of `pnpm test`); the S3 arm runs against a real S3-compatible endpoint (MinIO) when `S3_AVAILABLE=true`.
+- **Gate semantics (D-09):** `S3_AVAILABLE=true` arms the S3 describe. When the env is unset (local runs without Docker), each gated test early-returns with a loud `[s3-conformance]` console.warn — skipped loudly, never a green-empty false-pass. The D-02 factory-pin assertions (`forcePathStyle: true` + `WHEN_REQUIRED` checksums on a custom endpoint) are UNCONDITIONAL — client construction is offline, so they run in every run regardless of the gate.
+- **Local run:**
+
+  ```bash
+  docker compose -f docker/docker-compose.yml up -d minio minio-init
+  S3_AVAILABLE=true S3_ENDPOINT=http://localhost:9000 S3_BUCKET=simmetricchat \
+  S3_REGION=us-east-1 S3_ACCESS_KEY_ID=simmetricchat S3_SECRET_ACCESS_KEY=simmetricchat \
+    pnpm --filter server test -- src/__tests__/storage
+  ```
+
+- **CI:** the `test-unit` job always provisions a MinIO service container (pinned `minio/minio:RELEASE.xxxx`, `mc ready local` healthcheck), creates the bucket via an `mc` step, and exports the `S3_*` env — the S3 conformance arm executes in every CI run, never skipped.
+- **Multipart:** the suite uploads a ~100MB buffer via `@aws-sdk/lib-storage` (13 × 8MB parts) and asserts byte-equality, plus an abort probe (`leavePartsOnError: false` → no orphaned object, idempotent re-put).
+
+#### Static assets under S3 — avatar + branding runbook (Phase 184, D-03/D-04)
+
+When `STORAGE_PROVIDER=s3`, static serving moves to provider-first download endpoints with a **permanent local-disk fallback** (`/avatars/:size/:file` and `/branding/:file` in `packages/server/src/index.ts`):
+
+- **Avatars** are written through the provider automatically on every upload (keys `{organizationId}/avatars/{size}/{filename}.webp`). No operator action needed; pre-phase avatar files keep serving from `storage/uploads/avatars/` via the fallback arm forever (coexistence — also the rollback point for the D-03 costly-reversibility surface).
+- **Branding has NO upload endpoint** (D-04 — the write path is the enterprise white-label route, which writes to local disk only). When `STORAGE_PROVIDER=s3`, the operator uploads the app icon into the bucket so `/branding/app-icon.png` resolves from object storage:
+
+  ```bash
+  # Bucket copy of the operator-managed branding file (no file migration on disk)
+  docker run --rm --network <compose-network> -v "$PWD:/files" minio/mc:latest \
+    sh -c "mc alias set local \$S3_ENDPOINT \$S3_ACCESS_KEY_ID \$S3_SECRET_ACCESS_KEY && \
+           mc cp /files/app-icon.png local/\$S3_BUCKET/\$DEFAULT_ORGANIZATION_ID/branding/app-icon.png"
+  ```
+
+  The object key is `{organizationId}/branding/{file}` — the default-org prefix (`00000000-0000-0000-0000-000000000000/branding/`) for the global arm. `BRANDING_APP_ICON_URL` config stays untouched (D-04); the file behind it is what the endpoint serves. On provider miss the endpoint falls back to `storage/branding/` on disk, so an icon uploaded via the enterprise route keeps working until the bucket copy lands.
+
 ### Test environment (`.env.test`)
 
 Server tests load `packages/server/.env.test` (tracked in git) via `src/__tests__/helpers/setupEnv.ts`, which must be imported **first** in any test file that touches `getEnv()`:

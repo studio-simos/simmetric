@@ -121,6 +121,11 @@ model EventLog {
 
 model BackupDestination {
   id            String    @id @default(uuid())
+  // Phase 182 (SAAS-01b): non-null org pin — in SAAS-01b's locked list;
+  // requireFeatureLimit("backupDestination") counting becomes org-scoped in
+  // Phase 185. Lives in this fragment per Pitfall 6 (BOTH schema files edited
+  // before any generate/migrate — directory mode merges them).
+  organizationId String   @default("00000000-0000-0000-0000-000000000000")
   name          String
   type          String    // "local" | "s3" | "s3_compatible" | "google_drive" | "dropbox" | "sftp" | "ftp" | "email"
   config        String    @db.Text  // JSON cifrato (AES-256-GCM)
@@ -134,10 +139,15 @@ model BackupDestination {
   updatedAt     DateTime  @updatedAt
 
   // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   creator User           @relation(fields: [createdBy], references: [id])
   jobs    BackupJob[]
   logs    BackupLog[]
 
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked —
+  // see the project_access note in schema.prisma: the Plan-02 empirical probe
+  // proved Prisma proposes DROP INDEX for any DB index absent from the schema).
+  @@index([organizationId])
   @@map("backup_destinations")
 }
 

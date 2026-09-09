@@ -33,8 +33,11 @@ describe("seedBootstrapAdmin", () => {
     clearEnvCache();
     // Phase 152 (WIZ-02, D-05): default the wizard mode to "completed" so
     // existing tests exercise the historical seed path. The wizard-active
-    // skip guard reads setup_wizard_mode via getSetting → prisma mock.
-    (prisma.systemConfig.findUnique as jest.Mock).mockResolvedValue({
+    // skip guard reads setup_wizard_mode via getSetting → getDbValue →
+    // prisma mock. 183-01: getDbValue reads via findFirst({ key,
+    // organizationId: null }) — the wiring re-pointed from findUnique with
+    // the SAME row fixture.
+    (prisma.systemConfig.findFirst as jest.Mock).mockResolvedValue({
       key: "setup_wizard_mode",
       value: "completed",
     });
@@ -76,6 +79,9 @@ describe("seedBootstrapAdmin", () => {
   it("skips seeding when an admin user already exists (never resets a real admin)", async () => {
     (prisma.role.findFirst as jest.Mock).mockResolvedValue(ADMIN_ROLE);
     (prisma.userRole.count as jest.Mock).mockResolvedValue(1);
+    // WR-01/G-182-01: the exists path now heals membership for admin-role
+    // holders via user.findMany — mock it so the heal loop is a no-op.
+    (prisma.user.findMany as jest.Mock).mockResolvedValue([]);
 
     await seedBootstrapAdmin();
 
@@ -83,6 +89,64 @@ describe("seedBootstrapAdmin", () => {
     expect(prisma.userRole.create).not.toHaveBeenCalled();
     // The handle collision check must not even run once an admin exists.
     expect(prisma.user.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("user_roles-wipe self-heal: re-grants the admin role to the surviving 'admin' user instead of creating a duplicate bootstrap admin (v0.24 WATCH)", async () => {
+    (prisma.role.findFirst as jest.Mock).mockResolvedValue(ADMIN_ROLE);
+    // The wipe: user_roles is EMPTY (the exact symptom observed 2026-09-05/07/08).
+    (prisma.userRole.count as jest.Mock).mockResolvedValue(0);
+    // The well-known admin account SURVIVED the wipe.
+    (prisma.user.findFirst as jest.Mock).mockResolvedValue({
+      id: "51233792-ac08-4729-a4d2-5b0404669d4e",
+      username: "admin",
+      deletedAt: null,
+    });
+    (prisma.userRole.create as jest.Mock).mockResolvedValue({});
+    (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.organization.findFirst as jest.Mock).mockResolvedValue({
+      id: "00000000-0000-0000-0000-000000000000",
+    });
+    (prisma.organizationMember.create as jest.Mock).mockResolvedValue({});
+    // user.create MUST NOT be called — a duplicate bootstrap admin would lock
+    // the operator out of their real account.
+    (prisma.user.create as jest.Mock).mockResolvedValue({});
+
+    await seedBootstrapAdmin();
+
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(prisma.userRole.create).toHaveBeenCalledWith({
+      data: { userId: "51233792-ac08-4729-a4d2-5b0404669d4e", roleId: ADMIN_ROLE.id },
+    });
+  });
+
+  it("self-heals membership for existing admin users (WR-01 exists-path)", async () => {
+    (prisma.role.findFirst as jest.Mock).mockResolvedValue(ADMIN_ROLE);
+    (prisma.userRole.count as jest.Mock).mockResolvedValue(1);
+    (prisma.user.findMany as jest.Mock).mockResolvedValue([{ id: "admin-9" }]);
+    (prisma.user.findFirst as jest.Mock).mockResolvedValue(null);
+
+    await seedBootstrapAdmin();
+
+    expect(prisma.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ roles: expect.anything() }) }),
+    );
+    expect(prisma.organizationMember.findFirst).toHaveBeenCalledWith({
+      where: expect.objectContaining({ userId: "admin-9" }),
+    });
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it("self-heals membership for the handle-taking user (WR-01 role-grant crash window)", async () => {
+    (prisma.role.findFirst as jest.Mock).mockResolvedValue(ADMIN_ROLE);
+    (prisma.userRole.count as jest.Mock).mockResolvedValue(0);
+    (prisma.user.findFirst as jest.Mock).mockResolvedValue({ id: "other-1", username: "admin" });
+
+    await seedBootstrapAdmin();
+
+    expect(prisma.organizationMember.findFirst).toHaveBeenCalledWith({
+      where: expect.objectContaining({ userId: "other-1" }),
+    });
+    expect(prisma.user.create).not.toHaveBeenCalled();
   });
 
   it("skips seeding when the admin role is not found", async () => {
@@ -98,7 +162,16 @@ describe("seedBootstrapAdmin", () => {
   it("skips seeding when the configured username/email is already taken by a non-admin", async () => {
     (prisma.role.findFirst as jest.Mock).mockResolvedValue(ADMIN_ROLE);
     (prisma.userRole.count as jest.Mock).mockResolvedValue(0);
-    (prisma.user.findFirst as jest.Mock).mockResolvedValue({ id: "other-1", username: "admin" });
+    // The user_roles-wipe self-heal re-grants the admin role to the existing
+    // 'admin' account (v0.24 WATCH — wiped 3× before Parte II). A NON-admin
+    // holder of the handle must NOT be promoted, so the mock must respect the
+    // where clause: username "admin" never matches this lookup's user.
+    (prisma.user.findFirst as jest.Mock).mockImplementation(
+      async (args?: { where?: { username?: string } }) => {
+        if (args?.where?.username === "admin") return null;
+        return { id: "other-1", username: "someone-else" };
+      },
+    );
 
     await seedBootstrapAdmin();
 
@@ -147,7 +220,9 @@ describe("seedBootstrapAdmin", () => {
   // (env override still wins for docker/CI) and BEFORE the admin-role lookup,
   // so prisma.role.findFirst / userRole.count / user.create are never called.
   it("skips seeding when setup_wizard_mode=active (wizard owns admin creation)", async () => {
-    (prisma.systemConfig.findUnique as jest.Mock).mockResolvedValue({
+    // 183-01: the wizard-mode read wires through getDbValue's findFirst
+    // (re-pointed from findUnique; same row fixture).
+    (prisma.systemConfig.findFirst as jest.Mock).mockResolvedValue({
       key: "setup_wizard_mode",
       value: "active",
     });
@@ -167,7 +242,7 @@ describe("seedBootstrapAdmin", () => {
     // only a hard-OFF override (false → skip), never a hard-ON override that
     // bypasses the wizard. The toggle check runs first so SEED_BOOTSTRAP_ADMIN=false
     // still short-circuits before the wizard read.
-    (prisma.systemConfig.findUnique as jest.Mock).mockResolvedValue({
+    (prisma.systemConfig.findFirst as jest.Mock).mockResolvedValue({
       key: "setup_wizard_mode",
       value: "active",
     });

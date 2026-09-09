@@ -6,8 +6,9 @@
 import { Router, type Request, type Response } from "express";
 import { chatRetentionSchema } from "@simmetric-chat/shared";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
-import { getSetting } from "../services/systemConfigService";
+import { getSetting, upsertSystemConfigRow } from "../services/systemConfigService";
 import { logEvent } from "../services/eventLogService";
 import { logger } from "../utils/logger";
 import prisma from "../utils/prisma";
@@ -68,6 +69,8 @@ const router = Router();
 router.put(
   "/chat-retention",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission("admin:settings"),
   async (req: Request, res: Response) => {
     try {
@@ -94,12 +97,12 @@ router.put(
         prevRaw && Number.isFinite(Number(prevRaw)) && Number(prevRaw) > 0
           ? Number(prevRaw)
           : null;
-      // D-09: bypass updateSettings (it rejects this key). Direct upsert is the
-      // SOLE write path for chat_message_retention_days.
-      await prisma.systemConfig.upsert({
-        where: { key: "chat_message_retention_days" },
-        create: { key: "chat_message_retention_days", value },
-        update: { value },
+      // D-09: bypass updateSettings (it rejects this key). upsertSystemConfigRow
+      // (find-first-then-write) is the SOLE write path for
+      // chat_message_retention_days (global row — Phase-176 doctrine).
+      await upsertSystemConfigRow(prisma, {
+        key: "chat_message_retention_days",
+        value,
       });
       await logEvent("chat", "system", "retention.updated", req.userId!, {
         retentionDays,

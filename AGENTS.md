@@ -65,6 +65,12 @@ No npm install, no phone-home, no telemetry. The license service is read-only + 
 
 The enterprise plugin loads AFTER the license is validated so `ctx.licenseInfo` reflects the current tier. Enforced by `packages/server/src/__tests__/bootOrder.test.ts`. See `packages/server/src/index.ts` for the boot sequence.
 
+## Two-repo topology (public = primary)
+
+- **`main` branch ↔ `public` remote (studio-simos/simmetric)** — PRIMARY. Curated snapshot history, append-only. Coolify deploys from it. Never merge dev history into it, never rewrite it.
+- **`dev` branch ↔ `origin` (simooooone/simoschat-improved)** — SECONDARY. Full dev history and every tracked file. All day-to-day work happens here.
+- Publishing to the public repo is TREE-BASED, not patch-based: `node scripts/sync-public-release.cjs` (optionally `--dry-run` / `--check`) assembles the gated clean tree (`prepare-public-release.cjs` gates: personal-data grep, exclusions) and pushes it as ONE snapshot commit via the sibling clone `../simmetric-public` (auto-cloned on first run). Do NOT cherry-pick or use worktrees for this — the two histories are intentionally divergent.
+
 ## Commands
 
 ```bash

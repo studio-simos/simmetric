@@ -17,6 +17,7 @@
  */
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import {
   providerPresetIdParamSchema,
@@ -32,6 +33,10 @@ const router = Router();
 
 // All catalog routes require authentication
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 // GET / — list all presets, augmented with `isInstalled` (Provider with same name exists)
 router.get("/", requirePermission("provider:read"), async (_req: Request, res: Response) => {
@@ -70,6 +75,10 @@ router.get("/:presetId", requirePermission("provider:read"), async (req: Request
       return;
     }
     const { presetId } = paramResult.data;
+    // T-185-10 disposition (Pitfall-2 grep-gate): exempt model —
+    // ProviderPreset is the GLOBAL read-only catalog (no org column,
+    // not in TENANT_READ_MODELS); the org-owning resource is the Provider
+    // row the install creates (schema @default org, D-04).
     const preset = await prisma.providerPreset.findUnique({ where: { id: presetId } });
     if (!preset) {
       res.status(404).json({ error: "Provider preset not found" });
@@ -106,6 +115,10 @@ router.post("/:presetId/install", requirePermission("provider:write"), async (re
     }
     const { name: overrideName, apiKey } = parsed.data;
 
+    // T-185-10 disposition (Pitfall-2 grep-gate): exempt model —
+    // ProviderPreset is the GLOBAL read-only catalog (no org column,
+    // not in TENANT_READ_MODELS); the org-owning resource is the Provider
+    // row the install creates (schema @default org, D-04).
     const preset = await prisma.providerPreset.findUnique({ where: { id: presetId } });
     if (!preset) {
       res.status(404).json({ error: "Provider preset not found" });
@@ -141,6 +154,9 @@ router.post("/:presetId/install", requirePermission("provider:write"), async (re
         baseUrl: preset.baseUrl ?? "",
         apiKey: apiKey ? encrypt(apiKey) : null,
         isEnabled: true,
+        // CR-03 (185-05, D-04): explicit org stamp (Provider is Tier-A —
+        // 185-02's disposition already noted "self-created parent").
+        organizationId: req.organizationId!,
       },
     });
 
@@ -160,6 +176,9 @@ router.post("/:presetId/install", requirePermission("provider:write"), async (re
         const message = err instanceof Error ? err.message : String(err);
         logger.warn(`[providerPresets] Native refreshModels failed for ${provider.id}: ${message}`);
         await prisma.provider.update({ where: { id: provider.id }, data: { lastError: message } });
+        // T-185-10 disposition: self-created parent — provider.id was created
+        // by THIS request inside the caller's org (D-04 @default); re-read
+        // cannot cross orgs.
         const updated = await prisma.provider.findUnique({ where: { id: provider.id }, include: { models: true } });
         res.status(201).json(stripApiKey(updated));
         return;
@@ -174,6 +193,7 @@ router.post("/:presetId/install", requirePermission("provider:write"), async (re
       }
     }
 
+    // T-185-10 disposition: self-created parent (same rationale above).
     const fresh = await prisma.provider.findUnique({ where: { id: provider.id }, include: { models: true } });
     res.status(201).json(stripApiKey(fresh));
   } catch (err: unknown) {

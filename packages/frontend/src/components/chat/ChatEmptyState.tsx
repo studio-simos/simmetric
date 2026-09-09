@@ -5,7 +5,7 @@
 
 import { useTranslation } from "react-i18next";
 import { FileText, BrainCircuit, Wrench, Gauge } from "lucide-react";
-import { GlitchText } from "../GlitchText";
+import ChatWordmark from "./ChatWordmark";
 import { ChatModelBadge } from "./ChatModelBadge";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -14,13 +14,13 @@ import { useSessionTokens } from "../../queries/useChatTokens";
 import { formatTokens } from "../../utils/tokens";
 
 /**
- * ChatEmptyState — "Simmetric Native" terminal status board (Feature 4.4.1).
+ * ChatEmptyState — workspace status board with a monochrome wordmark (UI
+ * revision R-2/R-1: the former glitch "SIMMETRIC CHAT // READY" header is
+ * replaced by the elegant `<ChatWordmark />`).
  *
- * Replaces the generic suggested-prompt grid (which the spec explicitly
- * forbade) with a context-aware status board: a 2×2 grid of cards that report
- * real workspace state — indexed documents, knowledge-base archives, the
- * built-in skill set, and today's token usage — plus a header "SIMMETRIC CHAT //
- * READY" and a footer carrying the active model + air-gap status.
+ * A 2×2 grid of cards reports real workspace state — indexed documents,
+ * knowledge-base archives, the built-in skill set, and today's token usage —
+ * plus a footer carrying the active model + air-gap status.
  *
  * The two actionable cards ("Ask about your documents", "Search the knowledge
  * base") emit a context-aware prompt via `onQuickAction`; the skills + token
@@ -36,6 +36,8 @@ export interface ChatEmptyStateProps {
   activeModel?: { providerId?: string; model?: string; modelProvider?: string };
   /** When true, an "AIR-GAPPED" status badge is shown in the footer. */
   airGapped?: boolean;
+  /** White-label app name (BRANDING_APP_NAME) for the wordmark. */
+  appName?: string;
   onQuickAction?: (prompt: string) => void;
 }
 
@@ -51,6 +53,7 @@ export function ChatEmptyState({
   documentCount,
   activeModel,
   airGapped,
+  appName,
   onQuickAction,
 }: ChatEmptyStateProps) {
   const { t } = useTranslation();
@@ -66,17 +69,11 @@ export function ChatEmptyState({
       role="status"
       aria-live="polite"
     >
-      {/* Header — terminal status board title. */}
-      <div className="flex flex-col items-center gap-1">
-        <GlitchText
-          as="h2"
-          text={t("chat.emptyState.ready", "SIMMETRIC CHAT // READY")}
-          className="text-lg tracking-wider text-primary"
-        />
-        <p className="text-xs font-mono text-muted-foreground">
-          {t("chat.emptyState.subtitle", "Ask anything, or pick a quick start below.")}
-        </p>
-      </div>
+      {/* Header — elegant monochrome wordmark (UI revision R-2). */}
+      <ChatWordmark
+        appName={appName}
+        statusLine={t("chat.emptyState.ready", "READY").replace("SIMMETRIC CHAT // ", "")}
+      />
 
       {/* 2×2 status board. */}
       <div
@@ -92,7 +89,7 @@ export function ChatEmptyState({
           className="chat-quick-card group flex items-start gap-3 rounded-lg border border-border bg-card p-3 text-left hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={t("chat.emptyState.action.docs.label", "Ask about your documents")}
         >
-          <FileText className="size-5 shrink-0 text-muted-foreground group-hover:text-primary transition-colors" />
+          <FileText className="size-5 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
           <span className="flex-1 min-w-0">
             <span className="block text-sm text-foreground leading-snug">
               {t("chat.emptyState.action.docs.label", "Ask about your documents")}
@@ -111,7 +108,7 @@ export function ChatEmptyState({
           className="chat-quick-card group flex items-start gap-3 rounded-lg border border-border bg-card p-3 text-left hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={t("chat.emptyState.action.kb.label", "Search knowledge base")}
         >
-          <BrainCircuit className="size-5 shrink-0 text-muted-foreground group-hover:text-primary transition-colors" />
+          <BrainCircuit className="size-5 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
           <span className="flex-1 min-w-0">
             <span className="block text-sm text-foreground leading-snug">
               {t("chat.emptyState.action.kb.label", "Search knowledge base")}

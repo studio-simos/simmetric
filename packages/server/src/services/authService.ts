@@ -12,6 +12,7 @@ import { logger } from "../utils/logger";
 import { getRedis } from "./redisService";
 import { loginSchema, registerSchema } from "@simmetric-chat/shared";
 import type { LoginInput, RegisterInput } from "@simmetric-chat/shared";
+import { ensureDefaultOrgMembership } from "./organizationService";
 
 const SALT_ROUNDS = 12;
 
@@ -50,24 +51,36 @@ export async function register(input: RegisterInput) {
   const salt = await bcrypt.genSalt(SALT_ROUNDS);
   const passwordHash = await bcrypt.hash(validated.password, salt);
 
-  const user = await prisma.user.create({
-    data: {
-      username: validated.username,
-      email: validated.email,
-      passwordHash,
-      salt,
-      // Admin-created users must rotate their initial password on first login (D-01).
-      mustChangePassword: true,
-    },
-  });
-
-  // Assign default "user" role
-  const defaultRole = await prisma.role.findFirst({ where: { isDefault: true, name: "user" } });
-  if (defaultRole) {
-    await prisma.userRole.create({
-      data: { userId: user.id, roleId: defaultRole.id },
+  // WR-01/G-182-01 (T-182-13 wizard parity): user creation + default-role
+  // grant + membership commit in ONE transaction — a membership failure can
+  // no longer leave an orphaned user that 409s on retry.
+  const user = await prisma.$transaction(async (tx) => {
+    const created = await tx.user.create({
+      data: {
+        username: validated.username,
+        email: validated.email,
+        passwordHash,
+        salt,
+        // Admin-created users must rotate their initial password on first login (D-01).
+        mustChangePassword: true,
+      },
     });
-  }
+
+    // Assign default "user" role
+    const defaultRole = await tx.role.findFirst({ where: { isDefault: true, name: "user" } });
+    if (defaultRole) {
+      await tx.userRole.create({
+        data: { userId: created.id, roleId: defaultRole.id },
+      });
+    }
+
+    // Phase 182 (Pitfall 4b / SAAS-01a): default-org membership is mandatory
+    // post-tenancy. The helper accepts a tx client (PrismaDbClient) — the
+    // insert commits atomically with the user row.
+    await ensureDefaultOrgMembership(tx, created.id, "member");
+
+    return created;
+  });
 
   const token = generateToken(user.id);
 

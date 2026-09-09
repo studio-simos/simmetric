@@ -27,6 +27,16 @@ import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
 import { getBoss, createQueue, schedule } from "./jobQueue";
 
+// Phase 185 D-09: jobs run OUTSIDE the request ALS — org is resolved FROM THE
+// ROW (never the ambient tenant-context read); ambient reads in jobs are bugs (Pitfall 8).
+// Disposition: PLATFORM-LEVEL CROSS-ORG BY DESIGN — the health-check cycle
+// probes ALL orgs' enabled MCPConnections and updates the global
+// McpCatalogEntry health status (catalogs are global models, no org column).
+// MCPConnection rows carry organizationId (Phase 182) but no operation here
+// is org-scoped: the ping needs url+headers only (selected from the row).
+// Write ops (mcpCatalogEntry.update by PK) run OUTSIDE ALS so the scoped
+// extension skips them (absent-store semantics, 185-01 spike probe 9).
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /**

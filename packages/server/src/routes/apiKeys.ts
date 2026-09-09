@@ -5,11 +5,16 @@
 
 import { Router } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { createApiKey, listApiKeys, revokeApiKey } from "../services/apiKeyService";
 
 const router = Router();
 
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 /**
  * @openapi
@@ -72,7 +77,11 @@ router.post("/", async (req, res) => {
       expiry = new Date(expiresAt);
     }
 
-    const result = await createApiKey(name, req.userId!, expiry);
+    // CR-03 (185-05, D-08 mint-time pin): pass the tenant-resolved org —
+    // the apiKeys router carries the tenant slot (185-02 sweep), so
+    // req.organizationId is populated; new keys stop validating as
+    // default-org regardless of creator.
+    const result = await createApiKey(name, req.userId!, expiry, req.organizationId);
 
     // Return as "key" for frontend compatibility
     res.status(201).json({

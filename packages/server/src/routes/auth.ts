@@ -8,6 +8,7 @@ import bcrypt from "bcryptjs";
 import { register, login, invalidateAuthCache, verifyToken, getCachedUserWithRoles } from "../services/authService";
 import { isTokenRevoked } from "../services/tokenRevocation";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import { authRateLimiter } from "../middleware/rateLimit";
 import { getEnv } from "../config/env";
@@ -20,6 +21,11 @@ import {
   getOidcProviderFromDiscoveryUrl,
 } from "@simmetric-chat/shared";
 import prisma from "../utils/prisma";
+
+// Phase 185 (T-185-10, Pitfall-2 grep-gate): the findUnique site(s) in this
+// file target User — a GLOBAL identity model per Phase-182 D-01 (identity-
+// pure, no org column). Not in TENANT_READ_MODELS — exempt from the
+// org-assertion gate by design.
 import { isAdmin } from "../utils/auth";
 // Phase 143 (EPA-03): `services/ssoService.ts` + `services/oidcClient.ts`
 // moved to the enterprise package (Plans 01 + 02). The community
@@ -168,7 +174,7 @@ router.post("/register", authRateLimiter, async (req, res) => {
 });
 
 // POST /api/auth/admin-register — admin-only user creation (always requires auth)
-router.post("/admin-register", authMiddleware, requireAdmin, async (req, res) => {
+router.post("/admin-register", authMiddleware, tenantContextMiddleware, requireAdmin, async (req, res) => {
   try {
     const parsed = adminRegisterSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -353,6 +359,9 @@ router.get("/sso/status", async (_req, res) => {
  *       401: { description: Missing or invalid token }
  */
 // GET /api/auth/me — get current user with roles/permissions
+// Phase 185 D-02 EXCEPTION (auth tier, not tenant tier): /me is the identity
+// bootstrap endpoint — no tenant slot (documented in the index.ts exception
+// inventory).
 router.get("/me", authMiddleware, async (req, res) => {
   const user = req.user!;
   const permissions = new Set<string>();
@@ -383,7 +392,7 @@ router.get("/me", authMiddleware, async (req, res) => {
 });
 
 // GET /api/auth/users — list all users (admin only)
-router.get("/users", authMiddleware, requireAdmin, async (_req, res) => {
+router.get("/users", authMiddleware, tenantContextMiddleware, requireAdmin, async (_req, res) => {
   try {
     const users = await prisma.user.findMany({
       include: {
@@ -429,6 +438,9 @@ router.get("/users", authMiddleware, requireAdmin, async (_req, res) => {
 });
 
 // POST /api/auth/change-password — change own password (requires current password)
+// Phase 185 D-02 EXCEPTION (auth tier, not tenant tier): credential
+// management runs outside tenant scoping — no tenant slot (documented in the
+// index.ts exception inventory).
 router.post("/change-password", authMiddleware, async (req, res) => {
   const parsed = changePasswordSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -498,6 +510,8 @@ router.post("/change-password", authMiddleware, async (req, res) => {
  *       404: { description: User not found }
  */
 // POST /api/auth/set-initial-password — set new password + clear mustChangePassword flag atomically
+// Phase 185 D-02 EXCEPTION (auth tier, not tenant tier): forced-first-login
+// credential setup — no tenant slot (documented in the index.ts inventory).
 router.post("/set-initial-password", authMiddleware, async (req, res) => {
   const parsed = setInitialPasswordSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -546,7 +560,7 @@ router.post("/set-initial-password", authMiddleware, async (req, res) => {
 });
 
 // POST /api/auth/admin-reset-password — admin resets a user's password
-router.post("/admin-reset-password", authMiddleware, requireAdmin, async (req, res) => {
+router.post("/admin-reset-password", authMiddleware, tenantContextMiddleware, requireAdmin, async (req, res) => {
   // G-6 (T-DRD-05): shared adminResetPasswordSchema (safeParse) replaces the
   // ad-hoc destructure + manual length check — no unvalidated field reaches
   // Prisma, and the error shape matches the { error, details } convention.

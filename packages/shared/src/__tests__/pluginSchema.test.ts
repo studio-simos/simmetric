@@ -15,21 +15,133 @@ import {
   API_VERSION,
   type PluginContext,
   type EnterprisePlugin,
+  type SaaSPlugin,
+  type SaaSPluginContext,
+  type QuotaEnforcer,
+  type BillingProvider,
+  type PlanResolver,
+  type TenantProvisioner,
   type MinimalPrismaClient,
   type MinimalExpressApp,
   type MinimalLogger,
 } from "../schemas/plugin.schema";
 
 describe("plugin.schema — API_VERSION", () => {
-  it("equals 1", () => {
-    expect(API_VERSION).toBe(1);
-  });
-
+  // Phase 186 (SAAS-05, D-03): the const bumped 1 → 2. The pin moved to the
+  // Phase 186 describe below; the structural typeof assertion stays.
   it("is a literal const (typeof number)", () => {
     expect(typeof API_VERSION).toBe("number");
   });
 });
 
+describe("Phase 186 — contract v2 (SAAS-05, D-01/D-03/D-04/D-07)", () => {
+  it("API_VERSION is bumped to 2 (the SAAS gate)", () => {
+    expect(API_VERSION).toBe(2);
+  });
+
+  it("EnterprisePlugin contract is UNCHANGED — apiVersion stays the literal 1 (D-03/A1)", () => {
+    const plugin: EnterprisePlugin = {
+      apiVersion: 1,
+      register: jest.fn(),
+    };
+    expect(plugin.apiVersion).toBe(1);
+    expect(typeof plugin.register).toBe("function");
+  });
+
+  it("SaaSPlugin requires apiVersion: 2 (literal, not number)", () => {
+    const plugin: SaaSPlugin = {
+      apiVersion: 2,
+      register: jest.fn(),
+    };
+    expect(plugin.apiVersion).toBe(2);
+    expect(typeof plugin.register).toBe("function");
+  });
+
+  it("SaaSPlugin.register may be async", () => {
+    const plugin: SaaSPlugin = {
+      apiVersion: 2,
+      register: async () => {
+        /* async ok */
+      },
+    };
+    const result = plugin.register({} as SaaSPluginContext);
+    expect(result).toBeInstanceOf(Promise);
+  });
+
+  it("SaaSPluginContext is assignable where PluginContext is expected (extends, additive — D-01)", () => {
+    // Structural proof: a complete SaaSPluginContext (all v2 members present)
+    // satisfies the PluginContext structural type.
+    const saasCtx = {
+      app: { use: jest.fn() } as unknown as MinimalExpressApp,
+      prisma: {
+        $connect: jest.fn(),
+        $disconnect: jest.fn(),
+        $executeRaw: jest.fn(),
+        $queryRaw: jest.fn(),
+      } as unknown as MinimalPrismaClient,
+      logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as MinimalLogger,
+      env: { NODE_ENV: "test" },
+      licenseInfo: {
+        tier: "community",
+        licensee: null,
+        expiresAt: null,
+        features: {},
+        valid: true,
+      },
+      mountProtected: jest.fn(),
+      mountPublic: jest.fn(),
+      registerScheduler: jest.fn(),
+      onShutdown: jest.fn(),
+      registerAuditLogWriter: jest.fn(),
+      registerConfigKeyValidator: jest.fn(),
+      auditLog: undefined,
+      overrideFeatureLimit: jest.fn(),
+      registerBillingProvider: jest.fn(),
+      registerQuotaEnforcer: jest.fn(),
+      registerPlanResolver: jest.fn(),
+      registerTenantProvisioner: jest.fn(),
+      issueTenantLicense: jest.fn(),
+    } as unknown as SaaSPluginContext;
+    // Additive assignability: SaaSPluginContext feeds a PluginContext slot.
+    const baseCtx: PluginContext = saasCtx;
+    expect(baseCtx.app).toBeDefined();
+  });
+
+  it("QuotaEnforcer verdict type accepts BOTH sync and async returns (D-06/A4)", () => {
+    const syncEnforcer: QuotaEnforcer = (_input) => ({ allowed: true });
+    const asyncEnforcer: QuotaEnforcer = async (_input) => ({ allowed: false, current: 3, limit: 2 });
+    expect(syncEnforcer({ organizationId: "org-1", flag: "max_workspaces", current: 1 }).allowed).toBe(true);
+    return asyncEnforcer({ organizationId: "org-1", flag: "max_workspaces", current: 3 }).then((verdict) => {
+      expect(verdict.allowed).toBe(false);
+    });
+  });
+
+  it("minimal Part I hook interfaces accept call-signature stubs (D-07 — Parte II widens additively)", () => {
+    const billing: BillingProvider = {};
+    const plan: PlanResolver = {};
+    const provisioner: TenantProvisioner = {};
+    expect(billing).toBeDefined();
+    expect(plan).toBeDefined();
+    expect(provisioner).toBeDefined();
+  });
+
+  it("structural zero-dep guard: plugin.schema.ts imports NOTHING beyond the existing shared type imports", () => {
+    // The shared kernel's zero-runtime-dep rule (only zod) — plugin.schema.ts
+    // is structural interfaces; it must never import express or @prisma/client
+    // (or anything else beyond ../types + ./config.schema).
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../schemas/plugin.schema.ts"),
+      "utf8",
+    );
+    const importLines = src.split(/\r?\n/).filter((l: string) => /^import /.test(l));
+    expect(importLines.length).toBe(2);
+    expect(importLines[0]).toContain('from "../types"');
+    expect(importLines[1]).toContain('from "./config.schema"');
+    expect(src).not.toMatch(/from ["'](express|@prisma\/client)["']/);
+  });
+});
 describe("plugin.schema — EnterprisePlugin contract", () => {
   it("requires apiVersion: 1 (literal)", () => {
     const plugin: EnterprisePlugin = {

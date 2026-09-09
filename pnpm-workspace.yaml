@@ -17,6 +17,8 @@ overrides:
   xlsx@https://cdn.sheetjs.com/xlsx-0.20.2/xlsx-0.20.2.tgz: npm:xlsx@0.18.5
   sharp@0.32.6: 0.34.5
   '@simmetric-chat/enterprise': link:../simmetric-enterprise
+  # Parte II SaaS plugin (private fork sibling) — resolved by saasLoader
+  '@simmetric-chat/saas': link:../simmetric-saas
   # quick 260831-sqr (CI fix): nwsapi 2.2.27 (pulled by jsdom 26.1.0 via
   # jest-environment-jsdom@30.5.0, lockfile bump f46604ec) blocks the jsdom
   # event loop ~14-17s SYNCHRONOUSLY in the Radix popover-open selector path

@@ -21,7 +21,6 @@ import type { ChatSummary, ChatFolder } from "../queries/useChats";
 import { useTranslation } from "react-i18next";
 import { HighlightedName } from "./HighlightedName";
 import ChatBadgeMenu from "./ChatBadgeMenu";
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import FolderAccordion from "./FolderAccordion";
 import { DndContext, PointerSensor, KeyboardSensor, TouchSensor, useSensor, useSensors, DragEndEvent, useDraggable, useDroppable } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
@@ -47,24 +46,6 @@ interface ChatSidebarProps {
   currentChatId: string | null;
   onSelectChat: (chatId: string) => void;
   onNewChat: () => void;
-  /**
-   * "panel" (default) — inline sidebar at lg+, fixed `w-64` with a right
-   * border that separates it from the chat area.
-   * "sheet" — rendered inside the mobile/tablet Sheet. Fills the Sheet
-   * width (`w-full`) and drops its own right border (the Sheet content
-   * already provides `border-r`), mirroring how `RightPanel` fills the
-   * console Sheet.
-   */
-  variant?: "panel" | "sheet";
-  /**
-   * Called when the sheet variant's header close (chevron) button is
-   * clicked — ChatPanel wires it to `setMobileSidebarOpen(false)`. The
-   * panel variant ignores this and closes itself by collapsing to the
-   * rail. Keeping the close affordance inside the header (next to the
-   * "New chat" button) makes the mobile sheet bar visually consistent
-   * with the desktop panel, instead of a separate corner X.
-   */
-  onClose?: () => void;
 }
 
 interface DragData { folderId?: string | null; }
@@ -108,7 +89,7 @@ function UnfiledDropTarget({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function ChatSidebar({ workspaceId, currentChatId, onSelectChat, onNewChat, onClose, variant = "panel" }: ChatSidebarProps) {
+export default function ChatSidebar({ workspaceId, currentChatId, onSelectChat, onNewChat }: ChatSidebarProps) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameInput, setRenameInput] = useState("");
   const [sidebarView, setSidebarView] = useState<SidebarView>(readSidebarView);
@@ -119,20 +100,6 @@ export default function ChatSidebar({ workspaceId, currentChatId, onSelectChat, 
   const [deletingChat, setDeletingChat] = useState<{ chatId: string; name: string } | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
-  // Desktop panel collapse (panel variant only). Mirrors the RightPanel
-  // console: collapses to a thin left rail, open state persisted to
-  // localStorage (default open). The sheet variant is transient (driven by
-  // the Sheet open state in ChatPanel) so its `open` is never used and not
-  // persisted.
-  const [open, setOpen] = useState(() => {
-    const saved = localStorage.getItem("chat-sidebar-open");
-    return saved === null ? true : saved === "true";
-  });
-  useEffect(() => {
-    if (variant === "panel") {
-      localStorage.setItem("chat-sidebar-open", String(open));
-    }
-  }, [open, variant]);
     const { t } = useTranslation();
 
   // TanStack Query hooks (replaces store fetch actions)
@@ -413,55 +380,21 @@ export default function ChatSidebar({ workspaceId, currentChatId, onSelectChat, 
     );
   };
 
-  // Collapsed rail — desktop panel variant only, anchored LEFT (mirrors the
-  // RightPanel console's right rail). A thin `w-9` strip with a chevron + a
-  // vertical label; clicking expands the sidebar back to its full width.
-  if (variant === "panel" && !open) {
-    return (
-      <div className="hidden lg:flex flex-none w-9 border-r border-border bg-card">
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="w-full flex flex-col items-center gap-2 pt-2 text-muted-foreground hover:text-foreground transition-theme"
-          aria-label={t("chat.openSidebar", "Open chat list")}
-          title={t("chat.openSidebar", "Open chat list")}
-        >
-          <ChevronRight className="w-4 h-4" />
-          <span className="font-mono text-[10px] uppercase tracking-wider [writing-mode:vertical-rl]">
-            {t("chat.sidebarTitle", "Chat list")}
-          </span>
-        </button>
-      </div>
-    );
-  }
-
   return (
-    <div className={cn("bg-card flex flex-col h-full", variant === "sheet" ? "w-full" : "hidden lg:flex flex-none w-64 border-r border-border")}>
-      {/* Header */}
-      <div className="p-3 border-b border-border">
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => (variant === "panel" ? setOpen(false) : onClose?.())}
-            className="flex-none text-muted-foreground hover:text-foreground"
-            aria-label={t("chat.closeSidebar", "Close chat list")}
-            title={t("chat.closeSidebar", "Close chat list")}
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </Button>
-          <Button
-            variant="default"
-            size="sm"
-            onClick={onNewChat}
-            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            {t("sidebar.newChat")}
-          </Button>
-        </div>
+    <div className="bg-card flex flex-col h-full w-full min-w-0">
+      {/* New chat */}
+      <div className="p-2 border-b border-border">
+        <Button
+          variant="default"
+          size="sm"
+          onClick={onNewChat}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          {t("sidebar.newChat")}
+        </Button>
       </div>
 
       {/* Search */}

@@ -60,6 +60,9 @@ jest.mock("../services/dlpPatternService", () => {
 
 const VALID_BUILT_IN = {
   id: "11111111-1111-4111-8111-111111111111",
+  // Phase 185 (T-185-10): matches the membership mock's org — the route's
+  // org assertion hides cross-org patterns as 404.
+  organizationId: "org-default",
   name: "email",
   displayName: "Email",
   pattern: "[a-z]+@[a-z]+\\.[a-z]+",

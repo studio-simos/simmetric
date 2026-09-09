@@ -27,6 +27,10 @@ import request from "supertest";
 // --- Prisma mock ----------------------------------------------------------
 // Only the members the PUT path touches are needed; the mock object is lazy
 // (routes access members at call time).
+// Phase 185 (185-01 tracer): routes/workspaces.ts now mounts
+// tenantContextMiddleware after authMiddleware (D-09 chain) — the JWT arm
+// resolves the org via prisma.organizationMember.findFirst, so the mock needs
+// the delegate (default-org membership → 200s keep flowing).
 jest.mock("../utils/prisma", () => ({
   __esModule: true,
   default: {
@@ -35,6 +39,9 @@ jest.mock("../utils/prisma", () => ({
     },
     projectAccess: {
       findFirst: jest.fn(),
+    },
+    organizationMember: {
+      findFirst: jest.fn().mockResolvedValue({ organizationId: "org-default" }),
     },
     workspace: {
       update: jest.fn().mockResolvedValue({ id: "ws-1" }),

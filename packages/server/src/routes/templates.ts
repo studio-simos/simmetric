@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import { listTemplates, getTemplateById, saveTemplateToFile } from "../services/templateService";
 import prisma from "../utils/prisma";
@@ -13,7 +14,7 @@ import { Prisma } from "@prisma/client";
 const router = Router();
 
 // GET /api/templates — list all templates (any authenticated user can browse)
-router.get("/", authMiddleware, async (_req: Request, res: Response) => {
+router.get("/", authMiddleware, tenantContextMiddleware, async (_req: Request, res: Response) => {
   try {
     const templates = await listTemplates();
     // Parse JSON fields for each template
@@ -31,7 +32,7 @@ router.get("/", authMiddleware, async (_req: Request, res: Response) => {
 });
 
 // GET /api/templates/:templateId — get a single template
-router.get("/:templateId", authMiddleware, async (req: Request, res: Response) => {
+router.get("/:templateId", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const template = await getTemplateById(req.params.templateId as string);
     if (!template) {
@@ -51,7 +52,7 @@ router.get("/:templateId", authMiddleware, async (req: Request, res: Response) =
 });
 
 // POST /api/templates — create a custom template (any authenticated user)
-router.post("/", authMiddleware, async (req: Request, res: Response) => {
+router.post("/", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const { slug, name, description, icon, systemPrompt, skills, parsingConfig, constraints, embeddingModel, persistToDisk } = req.body;
 
@@ -69,6 +70,10 @@ router.post("/", authMiddleware, async (req: Request, res: Response) => {
         systemPrompt,
         skills: JSON.stringify(skills || ["rag_search", "workspace_memory"]),
         parsingConfig: JSON.stringify(parsingConfig || {}),
+        // CR-03 (185-05, D-04): explicit org stamp (WorkspaceTemplate is
+        // Tier-A; per-org templates are a Parte II surface — until then the
+        // row still carries the creator's org per D-04).
+        organizationId: req.organizationId!,
         constraints: JSON.stringify(constraints || {}),
         embeddingModel: embeddingModel || null,
         isBuiltIn: false,
@@ -108,7 +113,7 @@ router.post("/", authMiddleware, async (req: Request, res: Response) => {
 });
 
 // PUT /api/templates/:templateId — update a custom template (admin only)
-router.put("/:templateId", authMiddleware, requireAdmin, async (req: Request, res: Response) => {
+router.put("/:templateId", authMiddleware, tenantContextMiddleware, requireAdmin, async (req: Request, res: Response) => {
   try {
     const templateId = req.params.templateId as string;
     const existing = await getTemplateById(templateId);
@@ -154,7 +159,7 @@ router.put("/:templateId", authMiddleware, requireAdmin, async (req: Request, re
 });
 
 // DELETE /api/templates/:templateId — delete a custom template (admin only)
-router.delete("/:templateId", authMiddleware, requireAdmin, async (req: Request, res: Response) => {
+router.delete("/:templateId", authMiddleware, tenantContextMiddleware, requireAdmin, async (req: Request, res: Response) => {
   try {
     const templateId = req.params.templateId as string;
     const existing = await getTemplateById(templateId);

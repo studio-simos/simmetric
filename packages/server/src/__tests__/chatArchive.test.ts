@@ -167,6 +167,13 @@ const mockArchive = {
 describe("PATCH /api/workspaces/:workspaceId/chats/:chatId/archive (Archive-Chat Linking)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Phase 185 (185-01 tracer): workspaceRoutes now mounts
+    // tenantContextMiddleware — the JWT arm resolves the org via
+    // organizationMember.findFirst (runs for the whole /api/workspaces
+    // prefix). Seed a live membership so the chain proceeds.
+    (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "00000000-0000-0000-0000-000000000000",
+    });
     // Default user has chat:write + archive:read
     setTestUser({
       id: "admin-001",

@@ -141,7 +141,11 @@ describe("main", () => {
     (mockPrisma.roleMenuSection.upsert as jest.Mock).mockResolvedValue(undefined);
     (mockPrisma.mcpCatalogEntry.upsert as jest.Mock).mockResolvedValue(undefined);
     (mockPrisma.providerPreset.upsert as jest.Mock).mockResolvedValue(undefined);
-    (mockPrisma.systemConfig.upsert as jest.Mock).mockResolvedValue(undefined);
+    // Phase 183 (SAAS-02): seed.ts's config loop writes via the inline
+    // find-first shape — wire the findFirst/create delegates (existing rows
+    // return undefined here, so the loop attempts creates).
+    (mockPrisma.systemConfig.findFirst as jest.Mock).mockResolvedValue(undefined);
+    (mockPrisma.systemConfig.create as jest.Mock).mockResolvedValue(undefined);
     (mockPrisma.user.findFirst as jest.Mock).mockResolvedValue({ id: "existing" });
     (mockPrisma.user.create as jest.Mock).mockResolvedValue({ id: "u-1" });
     (mockPrisma.userRole.create as jest.Mock).mockResolvedValue(undefined);

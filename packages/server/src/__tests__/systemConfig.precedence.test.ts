@@ -42,6 +42,10 @@ const scMockRedis = {
   eval: jest.fn().mockResolvedValue(1),
   ping: jest.fn().mockResolvedValue("PONG"),
   disconnect: jest.fn(),
+  // Fix Round 1 (WR-01): the org-scoped global-tier cache fill SADDs the org
+  // into the membership set (config:tenants:{key}) — mock added for the
+  // fan-out-visibility probe.
+  sadd: jest.fn().mockResolvedValue(1),
 };
 
 const scMockGetRedis = jest.fn();
@@ -52,6 +56,7 @@ jest.mock("../services/redisService", () => ({
 }));
 
 const scMockFindUnique = jest.fn();
+const scMockFindFirst = jest.fn();
 const scMockFindMany = jest.fn();
 const scMockUpsert = jest.fn();
 
@@ -60,6 +65,7 @@ jest.mock("../utils/prisma", () => ({
   default: {
     systemConfig: {
       findUnique: scMockFindUnique,
+      findFirst: scMockFindFirst,
       findMany: scMockFindMany,
       upsert: scMockUpsert,
     },
@@ -126,6 +132,9 @@ beforeEach(() => {
   scMockRedis.get.mockResolvedValue(null);
   scMockGetRedis.mockReturnValue(scMockRedis);
   scMockFindUnique.mockResolvedValue(null);
+  // 183-01: getDbValue migrates to findFirst({ key, organizationId: null }) —
+  // the harness mock surface gains the delegate (row fixtures unchanged).
+  scMockFindFirst.mockResolvedValue(null);
   scMockFindMany.mockResolvedValue([]);
   scMockUpsert.mockResolvedValue({});
   // Default state for both tested keys: ENV absent (strict delete, never "")
@@ -275,6 +284,10 @@ describe("systemConfig.precedence — getSetting Redis cache-hit (D-05 case 9)",
     const result = await getSetting(LLM_KEY);
 
     expect(result).toEqual({ key: LLM_KEY, value: "openai", readOnly: false });
+    // 183-01: the DB read is the findFirst delegate now — assert the cache hit
+    // never reaches the DB (both the legacy findUnique arm and the migrated
+    // findFirst read).
+    expect(scMockFindFirst).not.toHaveBeenCalled();
     expect(scMockFindUnique).not.toHaveBeenCalled();
     // Pitfall 5: the flag is scoped to getAllSettings (settings-UI GET path);
     // the cache-first single-key path intentionally never carries it.
@@ -317,5 +330,308 @@ describe("systemConfig.precedence — empty-string env (Pitfall 4)", () => {
     const { CONFIG_DEFAULTS } = require("@simmetric-chat/shared");
     expect(entry.value).toBe(CONFIG_DEFAULTS[LLM_KEY]);
     expect(entry.envOverridden).toBeUndefined();
+  });
+});
+
+// ─── Phase 183 (SAAS-02, Plan 04): org-scoped cascade matrix ────────────────
+//
+// getSetting(key, organizationId?) resolves tenant row → global row → ENV →
+// CONFIG_DEFAULTS (D-06), caching under config:{orgId}:{key} (D-09) and
+// emitting `source` ONLY on the org-scoped path (P2 — the 8-case global
+// matrix above stays untouched-green). The P5 probe pins that the
+// ALWAYS_READONLY short-circuit runs FIRST even when organizationId is
+// passed: an org-scoped JWT_SECRET read never touches Redis or any DB row
+// (D-11/SC-2).
+
+const ORG_A = "org-a-uuid";
+const ORG_B = "org-b-uuid";
+
+/**
+ * Org-aware findFirst wiring: the service's cascade issues TWO distinct
+ * findFirst shapes — the tenant read `{ key, organizationId: <org> }` and the
+ * global read `{ key, organizationId: null }`. This helper routes fixtures by
+ * the where-clause so each probe can pin the tier it exercises.
+ */
+function wireOrgAwareFindFirst(opts: {
+  tenantRow?: { key: string; value: string } | null;
+  globalRow?: { key: string; value: string } | null;
+  orgId?: string;
+}) {
+  const { tenantRow = null, globalRow = null, orgId = ORG_A } = opts;
+  scMockFindFirst.mockImplementation(async (args: { where: { key: string; organizationId: string | null } }) => {
+    if (args.where.organizationId === orgId && tenantRow && args.where.key === tenantRow.key) {
+      return tenantRow;
+    }
+    if (args.where.organizationId === null && globalRow && args.where.key === globalRow.key) {
+      return globalRow;
+    }
+    return null;
+  });
+}
+
+describe("systemConfig.precedence — org-scoped cascade matrix (SAAS-02 SC-1)", () => {
+  it("tenant hit → tenant value, source:'tenant', cached under config:{orgId}:{key} only", async () => {
+    // BOTH tiers have rows — the tenant row must win (cascade ordering).
+    wireOrgAwareFindFirst({
+      tenantRow: { key: LLM_KEY, value: "tenant-wins" },
+      globalRow: { key: LLM_KEY, value: "global-loses" },
+    });
+    process.env[LLM_KEY] = "env-loses-too";
+
+    const { getSetting } = freshSystemConfig();
+    const result = await getSetting(LLM_KEY, ORG_A);
+
+    expect(result).toEqual({ key: LLM_KEY, value: "tenant-wins", readOnly: false, source: "tenant" });
+    // D-09: the org-scoped read consults the NAMESPACED cache key...
+    expect(scMockRedis.get).toHaveBeenCalledWith(`config:${ORG_A}:${LLM_KEY}`);
+    // ...and cache-fills ONLY the tenant tier's namespaced key. Fix Round 1
+    // (WR-01): the payload is the tier-carrying envelope { v, s }.
+    expect(scMockRedis.setex).toHaveBeenCalledWith(
+      `config:${ORG_A}:${LLM_KEY}`,
+      300,
+      JSON.stringify({ v: "tenant-wins", s: "tenant" }),
+    );
+    // No SADD on the tenant-tier fill: the tenant-write fan-out DELs this
+    // org's key directly (set membership would be redundant here).
+    expect(scMockRedis.sadd).not.toHaveBeenCalled();
+    // Org-scoped entry shape: source rides the payload (P2 org-scoped-only emission).
+    expect(Object.keys(result).sort()).toEqual(["key", "readOnly", "source", "value"]);
+  });
+
+  it("org-scoped cache hit → cached value with source:'tenant' (namespaced key)", async () => {
+    scMockRedis.get.mockResolvedValue(JSON.stringify("cached-tenant-value"));
+
+    const { getSetting } = freshSystemConfig();
+    const result = await getSetting(LLM_KEY, ORG_A);
+
+    expect(result).toEqual({ key: LLM_KEY, value: "cached-tenant-value", readOnly: false, source: "tenant" });
+    // Cache hit → no DB round-trip at either tier.
+    expect(scMockFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("tenant miss → global row fallback, source:'global'", async () => {
+    wireOrgAwareFindFirst({
+      tenantRow: null,
+      globalRow: { key: LLM_KEY, value: "global-fallback" },
+    });
+    process.env[LLM_KEY] = "env-loses-to-global-row";
+
+    const { getSetting } = freshSystemConfig();
+    const result = await getSetting(LLM_KEY, ORG_A);
+
+    expect(result).toEqual({ key: LLM_KEY, value: "global-fallback", readOnly: false, source: "global" });
+    // The tenant tier was consulted FIRST (cascade ordering proof).
+    expect(scMockFindFirst).toHaveBeenCalledWith({ where: { key: LLM_KEY, organizationId: ORG_A } });
+    // The resolved level is the global row → cached under the ORG's namespaced
+    // key. Fix Round 1 (WR-01): tier-carrying envelope + SADD into the
+    // membership set so the global-write fan-out can invalidate this org's
+    // cache (pre-fix these fills were invisible to fan-out → stale ≤ TTL).
+    expect(scMockRedis.setex).toHaveBeenCalledWith(
+      `config:${ORG_A}:${LLM_KEY}`,
+      300,
+      JSON.stringify({ v: "global-fallback", s: "global" }),
+    );
+    expect(scMockRedis.sadd).toHaveBeenCalledWith(`config:tenants:${LLM_KEY}`, ORG_A);
+  });
+
+  it("tenant + global miss → ENV override wins, source:'env'", async () => {
+    wireOrgAwareFindFirst({ tenantRow: null, globalRow: null });
+    process.env[LLM_KEY] = "env-override-value";
+
+    const { getSetting } = freshSystemConfig();
+    const result = await getSetting(LLM_KEY, ORG_A);
+
+    expect(result).toEqual({ key: LLM_KEY, value: "env-override-value", readOnly: false, source: "env" });
+    // ENV tier is never cached (only DB-resolved tiers fill the cache).
+    expect(scMockRedis.setex).not.toHaveBeenCalled();
+  });
+
+  it("tenant + global miss + no ENV → CONFIG_DEFAULTS, source:'default'", async () => {
+    wireOrgAwareFindFirst({ tenantRow: null, globalRow: null });
+    delete process.env[LLM_KEY];
+
+    const { getSetting } = freshSystemConfig();
+    const result = await getSetting(LLM_KEY, ORG_A);
+
+    const { CONFIG_DEFAULTS } = require("@simmetric-chat/shared");
+    expect(result).toEqual({
+      key: LLM_KEY,
+      value: CONFIG_DEFAULTS[LLM_KEY],
+      readOnly: false,
+      source: "default",
+    });
+    expect(scMockRedis.setex).not.toHaveBeenCalled();
+  });
+
+  it("cross-org isolation: org-a override does not bleed into org-b (org-b reads global)", async () => {
+    wireOrgAwareFindFirst({
+      tenantRow: { key: LLM_KEY, value: "org-a-override" },
+      globalRow: { key: LLM_KEY, value: "global-shared" },
+    });
+    delete process.env[LLM_KEY];
+
+    const { getSetting } = freshSystemConfig();
+    const orgA = await getSetting(LLM_KEY, ORG_A);
+    const orgB = await getSetting(LLM_KEY, ORG_B);
+
+    // org-a: tenant override. org-b: NO tenant row → global fallback.
+    expect(orgA).toEqual({ key: LLM_KEY, value: "org-a-override", readOnly: false, source: "tenant" });
+    expect(orgB).toEqual({ key: LLM_KEY, value: "global-shared", readOnly: false, source: "global" });
+    // Cache isolation (SC-3): each org's resolution lives under its own key.
+    expect(scMockRedis.get).toHaveBeenCalledWith(`config:${ORG_A}:${LLM_KEY}`);
+    expect(scMockRedis.get).toHaveBeenCalledWith(`config:${ORG_B}:${LLM_KEY}`);
+  });
+
+  it("global path (no organizationId) NEVER carries source — legacy shape byte-identical (P2)", async () => {
+    // The exact legacy scenario: Redis hit on config:{key} → no source field.
+    scMockRedis.get.mockResolvedValue(JSON.stringify("openai"));
+
+    const { getSetting } = freshSystemConfig();
+    const result = await getSetting(LLM_KEY);
+
+    expect(result).toEqual({ key: LLM_KEY, value: "openai", readOnly: false });
+    expect((result as { source?: string }).source).toBeUndefined();
+  });
+
+  // ── Fix Round 1 (WR-01, 183-REVIEW): truthful cache-hit tier + fan-out ──
+  //
+  // Pre-fix: org-scoped fills cached the bare value and cache hits hardcoded
+  // source:"tenant" — a global-tier fallback came back MISLABELED "tenant"
+  // on the hit path, and the org was never SADDed into config:tenants:{key},
+  // so a global write could not invalidate the org's cache (stale ≤ TTL).
+
+  it("WR-01: envelope cache hit carries the CACHED tier — global fill hits as source:'global'", async () => {
+    // A global-tier fallback cached the envelope { v, s: "global" } under the
+    // org's namespaced key; the subsequent hit must report source:"global"
+    // (pre-fix hardcode: "tenant") without touching the DB.
+    scMockRedis.get.mockResolvedValue(JSON.stringify({ v: "cached-global-value", s: "global" }));
+
+    const { getSetting } = freshSystemConfig();
+    const result = await getSetting(LLM_KEY, ORG_A);
+
+    expect(result).toEqual({
+      key: LLM_KEY,
+      value: "cached-global-value",
+      readOnly: false,
+      source: "global",
+    });
+    expect(scMockFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("WR-01: envelope cache hit keeps source:'tenant' for a tenant-tier fill (regression pin)", async () => {
+    scMockRedis.get.mockResolvedValue(JSON.stringify({ v: "cached-tenant-value", s: "tenant" }));
+
+    const { getSetting } = freshSystemConfig();
+    const result = await getSetting(LLM_KEY, ORG_A);
+
+    expect(result).toEqual({
+      key: LLM_KEY,
+      value: "cached-tenant-value",
+      readOnly: false,
+      source: "tenant",
+    });
+    expect(scMockFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("WR-01: legacy bare-string cache payload falls back to source:'tenant' (rolling-deploy compat)", async () => {
+    // A pre-183 / in-flight-deploy payload is the bare JSON string: decode
+    // value-only, label tenant (the only tier the legacy format ever
+    // carried under the namespaced key).
+    scMockRedis.get.mockResolvedValue(JSON.stringify("legacy-bare-value"));
+
+    const { getSetting } = freshSystemConfig();
+    const result = await getSetting(LLM_KEY, ORG_A);
+
+    expect(result).toEqual({
+      key: LLM_KEY,
+      value: "legacy-bare-value",
+      readOnly: false,
+      source: "tenant",
+    });
+    expect(scMockFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("WR-01: global-tier fill SADDs the org into the membership set — visible to global-write fan-out", async () => {
+    wireOrgAwareFindFirst({
+      tenantRow: null,
+      globalRow: { key: LLM_KEY, value: "global-fanout-visible" },
+    });
+    scMockRedis.get.mockResolvedValue(null);
+    scMockRedis.setex.mockResolvedValue("OK");
+    scMockRedis.sadd.mockClear();
+
+    const { getSetting } = freshSystemConfig();
+    await getSetting(LLM_KEY, ORG_A);
+
+    // The fill SADDed the org into config:tenants:{key} — a later global
+    // updateSettings write SMEMBERS this set and DELs config:{ORG_A}:{key}
+    // (D-01/D-03 fan-out completeness).
+    expect(scMockRedis.sadd).toHaveBeenCalledWith(`config:tenants:${LLM_KEY}`, ORG_A);
+  });
+
+  it("WR-01: SADD failure on the global-tier fill is non-blocking (read still returns the global value)", async () => {
+    wireOrgAwareFindFirst({
+      tenantRow: null,
+      globalRow: { key: LLM_KEY, value: "global-value-sadd-fails" },
+    });
+    scMockRedis.get.mockResolvedValue(null);
+    scMockRedis.sadd.mockRejectedValue(new Error("Redis connection lost"));
+
+    const { getSetting } = freshSystemConfig();
+    const result = await getSetting(LLM_KEY, ORG_A);
+
+    // The read must NOT throw: setex succeeded (cache filled), SADD failed —
+    // staleness degrades to the bounded TTL, per the SP-2 contract.
+    expect(result).toEqual({
+      key: LLM_KEY,
+      value: "global-value-sadd-fails",
+      readOnly: false,
+      source: "global",
+    });
+    const { logger } = require("../utils/logger");
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[redis] config cache write failed (non-blocking)",
+      expect.objectContaining({ key: LLM_KEY }),
+    );
+  });
+});
+
+describe("systemConfig.precedence — ALWAYS_READONLY org-scoped short-circuit (SAAS-02 SC-2 / P5)", () => {
+  it("org-scoped JWT_SECRET read → ENV value with source:'env', NO redis call, NO prisma findFirst (D-11)", async () => {
+    process.env[JWT_KEY] = "env-secret-value";
+    // Redis holds a decoy payload and the DB holds a decoy row — NEITHER may
+    // be consulted: the readonly short-circuit runs BEFORE org resolution.
+    scMockRedis.get.mockResolvedValue(JSON.stringify("should-not-be-used"));
+    scMockFindFirst.mockResolvedValue({ key: JWT_KEY, value: "db-value-should-be-ignored" });
+
+    const { getSetting } = freshSystemConfig();
+    const result = await getSetting(JWT_KEY, ORG_A);
+
+    expect(result).toEqual({ key: JWT_KEY, value: "env-secret-value", readOnly: true, source: "env" });
+    // Redis was NEVER touched (Test-6 shape, org-scoped).
+    expect(scMockRedis.get).not.toHaveBeenCalled();
+    expect(scMockRedis.setex).not.toHaveBeenCalled();
+    // No DB row was read at EITHER tier (no tenant read, no null-org read).
+    expect(scMockFindFirst).not.toHaveBeenCalled();
+    expect(scMockFindUnique).not.toHaveBeenCalled();
+  });
+
+  it("org-scoped JWT_SECRET read with no ENV → CONFIG_DEFAULTS fallback, source:'default'", async () => {
+    delete process.env[JWT_KEY];
+    scMockRedis.get.mockResolvedValue(JSON.stringify("should-not-be-used"));
+    scMockFindFirst.mockResolvedValue({ key: JWT_KEY, value: "db-value-should-be-ignored" });
+
+    const { getSetting } = freshSystemConfig();
+    const result = await getSetting(JWT_KEY, ORG_A);
+
+    const { CONFIG_DEFAULTS } = require("@simmetric-chat/shared");
+    expect(result).toEqual({
+      key: JWT_KEY,
+      value: CONFIG_DEFAULTS[JWT_KEY] ?? "",
+      readOnly: true,
+      source: "default",
+    });
+    expect(scMockRedis.get).not.toHaveBeenCalled();
+    expect(scMockFindFirst).not.toHaveBeenCalled();
   });
 });

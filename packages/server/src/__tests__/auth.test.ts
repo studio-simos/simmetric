@@ -286,6 +286,9 @@ describe("GET /api/auth/users", () => {
 
   it("returns 403 for non-admin user", async () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue(regularUser);
+    // Phase 185: the route now runs behind tenantContextMiddleware (D-09) —
+    // seed a live membership so org resolution succeeds (D-01).
+    (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({ organizationId: "00000000-0000-4000-8000-000000000001" });
     const token = generateTestToken("user-001");
     const res = await request(app).get("/api/auth/users").set("Authorization", `Bearer ${token}`);
     expect(res.status).toBe(403);
@@ -293,6 +296,9 @@ describe("GET /api/auth/users", () => {
 
   it("returns 200 for admin user", async () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue(adminUser);
+    // Phase 185: the route now runs behind tenantContextMiddleware (D-09) —
+    // seed a live membership so org resolution succeeds (D-01).
+    (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({ organizationId: "00000000-0000-4000-8000-000000000001" });
     (prisma.user.findMany as jest.Mock).mockResolvedValue([adminUser]);
     const token = generateTestToken("admin-001");
     const res = await request(app).get("/api/auth/users").set("Authorization", `Bearer ${token}`);
@@ -322,6 +328,9 @@ describe("POST /api/auth/admin-reset-password", () => {
 
   it("returns 403 for a non-admin token", async () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue(regularUser);
+    // Phase 185: the route now runs behind tenantContextMiddleware (D-09) —
+    // seed a live membership so org resolution succeeds (D-01).
+    (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({ organizationId: "00000000-0000-4000-8000-000000000001" });
     const token = generateTestToken("user-001");
     const res = await request(app)
       .post("/api/auth/admin-reset-password")
@@ -334,6 +343,9 @@ describe("POST /api/auth/admin-reset-password", () => {
   // destructure + manual length check → 400 { error, details } on bad bodies.
   it("returns 400 { error, details } when newPassword is missing", async () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue(adminUser);
+    // Phase 185: the route now runs behind tenantContextMiddleware (D-09) —
+    // seed a live membership so org resolution succeeds (D-01).
+    (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({ organizationId: "00000000-0000-4000-8000-000000000001" });
     const token = generateTestToken("admin-001");
     const res = await request(app)
       .post("/api/auth/admin-reset-password")
@@ -348,6 +360,9 @@ describe("POST /api/auth/admin-reset-password", () => {
 
   it("returns 400 { error, details } for a non-UUID userId", async () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue(adminUser);
+    // Phase 185: the route now runs behind tenantContextMiddleware (D-09) —
+    // seed a live membership so org resolution succeeds (D-01).
+    (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({ organizationId: "00000000-0000-4000-8000-000000000001" });
     const token = generateTestToken("admin-001");
     const res = await request(app)
       .post("/api/auth/admin-reset-password")
@@ -582,6 +597,17 @@ describe("POST /api/auth/register (closed registration) — revoked jti (TEC-03b
       mustChangePassword: true,
     });
     (prisma.role.findFirst as jest.Mock).mockResolvedValue(null);
+    // WR-01/G-182-01: register() now routes user creation + role grant +
+    // membership through prisma.$transaction — make the shared mock's bare
+    // jest.fn() execute the callback against the same prisma mock (the
+    // documentBulkDelete precedent).
+    // WR-03/G-182-06: mockImplementationOnce — jest.clearAllMocks() clears
+    // call history but NOT implementations, so a persistent implementation
+    // here would leak into later tests (order-dependency trap). Once-scoping
+    // pins the behavior to exactly this test's single $transaction call.
+    (prisma.$transaction as jest.Mock).mockImplementationOnce(
+      async (fn: (tx: unknown) => Promise<unknown>) => fn(prisma),
+    );
 
     const token = generateTestToken("admin-001");
     const res = await request(app)
@@ -590,5 +616,17 @@ describe("POST /api/auth/register (closed registration) — revoked jti (TEC-03b
       .send({ username: "newuser", email: "new@test.com", password: "testpassword123" });
 
     expect(res.status).toBe(201);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    // WR-03/G-182-06 content pin: the count alone cannot distinguish
+    // "create + role grant + membership ran inside the tx" from "ran outside
+    // it" — assert the tx callback actually executed the membership lookup
+    // with the created user's id (the helper's first findFirst call) and the
+    // user create itself.
+    expect(prisma.user.create).toHaveBeenCalledTimes(1);
+    expect(prisma.organizationMember.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ userId: "new-user-1" }),
+      }),
+    );
   });
 });

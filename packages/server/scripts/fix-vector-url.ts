@@ -4,14 +4,30 @@
 import { prisma } from "../src/utils/prisma";
 
 async function main() {
-  const before = await prisma.systemConfig.findUnique({ where: { key: "VECTOR_DB_URL" } });
-  console.log("[fix-vector-url] before:", before?.value ?? "(unset)");
-  await prisma.systemConfig.upsert({
-    where: { key: "VECTOR_DB_URL" },
-    create: { key: "VECTOR_DB_URL", value: "http://localhost:6333" },
-    update: { value: "http://localhost:6333" },
+  // Phase 183 (SAAS-02): inline find-first-then-write — no settings-service
+  // import (standalone tsx CLI layering, mirrors seed.ts precedent); the
+  // explicit null-org filter keeps the read composite-unique-safe (Plan 03
+  // swap), the id-anchored update keeps the write swap-agnostic.
+  const before = await prisma.systemConfig.findFirst({
+    where: { key: "VECTOR_DB_URL", organizationId: null },
   });
-  const after = await prisma.systemConfig.findUnique({ where: { key: "VECTOR_DB_URL" } });
+  console.log("[fix-vector-url] before:", before?.value ?? "(unset)");
+  const existing = await prisma.systemConfig.findFirst({
+    where: { key: "VECTOR_DB_URL", organizationId: null },
+  });
+  if (existing) {
+    await prisma.systemConfig.update({
+      where: { id: existing.id },
+      data: { value: "http://localhost:6333" },
+    });
+  } else {
+    await prisma.systemConfig.create({
+      data: { key: "VECTOR_DB_URL", value: "http://localhost:6333", organizationId: null },
+    });
+  }
+  const after = await prisma.systemConfig.findFirst({
+    where: { key: "VECTOR_DB_URL", organizationId: null },
+  });
   console.log("[fix-vector-url] after :", after?.value);
   await prisma.$disconnect();
 }

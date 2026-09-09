@@ -231,6 +231,12 @@ export interface SettingsEntry {
   // non-readonly key; the DB value still wins. Never carries a value
   // (T-176-01: display-only presence hint; the env VALUE is never exposed).
   envOverridden?: boolean;
+  // Phase 183 (SAAS-02, D-05): which cascade tier resolved this entry —
+  // "tenant" (org override row), "global" (global row), "env" (ENV var), or
+  // "default" (CONFIG_DEFAULTS). Org-scoped-only emission (Pitfall P2 /
+  // Assumption A1): the global view (no organizationId) NEVER carries the
+  // flag, keeping the legacy payload shape byte-identical.
+  source?: "tenant" | "global" | "env" | "default";
 }
 
 // ===== Event Log Types =====

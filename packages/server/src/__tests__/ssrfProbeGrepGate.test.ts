@@ -65,13 +65,21 @@ const GUARD_IMPORT_RE =
 // call site down — the guard calls themselves are UNCHANGED (verified by
 // grep: all 6 present), only the pinned line numbers drifted. Recalibrated
 // 399→404, 412→417, 429→434, 505→510, 516→521, 528→533.
+// 183-02 recalibration: the wizard Serializable-tx find-first migration
+// (helper-on-tx + id-anchored mode-flip) inserted 10 lines before the probe
+// block — all 6 guard calls present (grep-verified), pins shifted +10:
+// 410→420, 423→433, 440→450, 516→526, 527→537, 539→549.
+// 185-02 recalibration: the tenant-slot imports + admin-route tenant
+// middleware lines inserted above the probe block shifted the pins —
+// all 6 guard calls present (grep-verified): 420→426, 433→439, 450→456,
+// 526→532, 537→543, 549→555.
 const KNOWN_CALL_SITES: Array<{ file: string; line: number }> = [
-  { file: "system.ts", line: 404 },
-  { file: "system.ts", line: 417 },
-  { file: "system.ts", line: 434 },
-  { file: "system.ts", line: 510 },
-  { file: "system.ts", line: 521 },
-  { file: "system.ts", line: 533 },
+  { file: "system.ts", line: 426 },
+  { file: "system.ts", line: 439 },
+  { file: "system.ts", line: 456 },
+  { file: "system.ts", line: 532 },
+  { file: "system.ts", line: 543 },
+  { file: "system.ts", line: 555 },
 ];
 
 const ROUTES_DIR = path.resolve(__dirname, "../routes");

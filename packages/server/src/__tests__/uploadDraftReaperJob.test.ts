@@ -106,6 +106,20 @@ const { getSetting: mockGetSetting } = require("../services/systemConfigService"
   getSetting: jest.Mock;
 };
 
+// Phase 184 (SAAS-03): provider mock surface — the reaper deletes through
+// getStorageProvider(draft.organizationId); the shared helper mirrors the
+// documentUpload/uploads suite wiring.
+jest.mock("../services/storageProvider", () =>
+  require("./helpers/mockStorageProvider").mockStorageProviderModule,
+);
+const {
+  mockGetStorageProvider,
+  mockProviderDelete,
+} = require("./helpers/mockStorageProvider") as {
+  mockGetStorageProvider: jest.Mock;
+  mockProviderDelete: jest.Mock;
+};
+
 // INTENTIONALLY NOT mocking `../config/env` — the reaper (after B1) no longer
 // imports getEnv. A dead mock here would hide the real A5 base resolution.
 
@@ -132,6 +146,8 @@ beforeEach(() => {
   // Default: no expired drafts
   mockPrisma.uploadDraft.findMany.mockResolvedValue([]);
   (fs.unlinkSync as unknown as jest.Mock).mockImplementation(() => {});
+  // Phase 184: default provider delete resolves (best-effort no-op)
+  mockProviderDelete.mockResolvedValue(undefined);
 });
 
 describe("runReaperCycle", () => {
@@ -150,8 +166,12 @@ describe("runReaperCycle", () => {
       where: { id: "d1" },
       data: { deletedAt: expect.any(Date) },
     });
-    // Unlink the resolved path
-    expect(fs.unlinkSync).toHaveBeenCalledWith(filePath);
+    // Phase 184: the deletion routes through the provider — for a legacy
+    // cwd-relative filePath the LocalFS legacy arm resolves it to exactly
+    // path.resolve(filePath) (byte-identical to today's unlink; the
+    // physical-path parity is pinned in storageProvider.test.ts's legacy-arm
+    // resolve test — here the unit boundary is the provider seam).
+    expect(mockProviderDelete).toHaveBeenCalledWith(filePath);
   });
 
   it("A5 prefix guard rejects path traversal /etc/passwd", async () => {
@@ -223,20 +243,212 @@ describe("runReaperCycle", () => {
       { id: "d5", filePath },
     ]);
     (mockPrisma.uploadDraft.update as jest.Mock).mockResolvedValue({});
-    // Unlink throws — soft-delete already happened (T-69-05e idempotency)
-    (fs.unlinkSync as unknown as jest.Mock).mockImplementation(() => {
-      throw new Error("EACCES");
-    });
+    // Provider delete throws — soft-delete already happened (T-69-05e
+    // idempotency; Phase 184: the LocalFS provider absorbs the unlink
+    // try/catch, so a throw here simulates a hard provider failure)
+    mockProviderDelete.mockRejectedValueOnce(new Error("EACCES"));
 
     // No throw — cycle resolves
     const result = await runReaperCycle();
 
     expect(result).toEqual({ reaped: 0, skipped: 0, errors: 1 });
-    // Soft-delete happened BEFORE the unlink attempt
+    // Soft-delete happened BEFORE the delete attempt
     expect(mockPrisma.uploadDraft.update).toHaveBeenCalledWith({
       where: { id: "d5" },
       data: { deletedAt: expect.any(Date) },
     });
+  });
+
+  // ─── Phase 184 (SAAS-03 D-08): key-based reaper migration ───────────
+
+  it("Phase 184: select carries storageKey + organizationId (no row invisible to the sweep, T-184-12)", async () => {
+    let capturedSelect: any = null;
+    mockPrisma.uploadDraft.findMany.mockImplementation((args: any) => {
+      capturedSelect = args.select;
+      return [];
+    });
+
+    await runReaperCycle();
+
+    expect(capturedSelect).toEqual(
+      expect.objectContaining({
+        id: true,
+        filePath: true,
+        storageKey: true,
+        organizationId: true,
+      }),
+    );
+  });
+
+  it("Phase 184: new-layout draft reaped via provider.delete with the row's org", async () => {
+    const ORG = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const key = `${ORG}/uploads/drafts/uuid-1234-gone.pdf`;
+    mockPrisma.uploadDraft.findMany.mockResolvedValue([
+      { id: "nd1", filePath: "storage/uploads/drafts/gone.pdf", storageKey: key, organizationId: ORG },
+    ]);
+    (mockPrisma.uploadDraft.update as jest.Mock).mockResolvedValue({});
+
+    const result = await runReaperCycle();
+
+    expect(result).toEqual({ reaped: 1, skipped: 0, errors: 0 });
+    // Row's-org rule: provider resolved with the ROW's organizationId
+    expect(mockGetStorageProvider).toHaveBeenCalledWith(ORG);
+    expect(mockProviderDelete).toHaveBeenCalledTimes(1);
+    expect(mockProviderDelete).toHaveBeenCalledWith(key);
+    // Soft-delete BEFORE provider delete (T-69-05e ordering preserved)
+    expect(mockPrisma.uploadDraft.update).toHaveBeenCalledWith({
+      where: { id: "nd1" },
+      data: { deletedAt: expect.any(Date) },
+    });
+    expect(mockPrisma.uploadDraft.update.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockProviderDelete.mock.invocationCallOrder[0]!,
+    );
+    // The legacy physical unlink did NOT run for the new-layout row
+    expect(fs.unlinkSync).not.toHaveBeenCalled();
+  });
+
+  it("Phase 184: corrupted key (non-draft prefix) → skipped counter, row NOT soft-deleted", async () => {
+    mockPrisma.uploadDraft.findMany.mockResolvedValue([
+      {
+        id: "ck1",
+        filePath: "storage/documents/abc-uuid",
+        storageKey: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/uploads/documents/abc.pdf",
+        organizationId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      },
+    ]);
+
+    const result = await runReaperCycle();
+
+    // Corrupted-key skip semantics preserved: no soft-delete, no delete
+    expect(result).toEqual({ reaped: 0, skipped: 1, errors: 0 });
+    expect(mockPrisma.uploadDraft.update).not.toHaveBeenCalled();
+    expect(mockProviderDelete).not.toHaveBeenCalled();
+    expect(fs.unlinkSync).not.toHaveBeenCalled();
+    const warnCalls = (logger as any).warn.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(warnCalls.some((m: string) => m.includes("rejected key"))).toBe(true);
+  });
+
+  it("Phase 184: sibling-prefix drafts-evil key rejected by the trailing-sep arm (T-184-11)", async () => {
+    const ORG = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    mockPrisma.uploadDraft.findMany.mockResolvedValue([
+      {
+        id: "evil1",
+        filePath: "storage/uploads/drafts-evil/payload",
+        storageKey: `${ORG}/uploads/drafts-evil/payload`,
+        organizationId: ORG,
+      },
+    ]);
+
+    const result = await runReaperCycle();
+
+    expect(result).toEqual({ reaped: 0, skipped: 1, errors: 0 });
+    expect(mockPrisma.uploadDraft.update).not.toHaveBeenCalled();
+    expect(mockProviderDelete).not.toHaveBeenCalled();
+  });
+
+  it("Phase 184: URL sentinel (storageKey = url) → not reaped, no soft-delete", async () => {
+    mockPrisma.uploadDraft.findMany.mockResolvedValue([
+      {
+        id: "url1",
+        filePath: "https://example.com/article",
+        storageKey: "https://example.com/article",
+        organizationId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      },
+    ]);
+
+    const result = await runReaperCycle();
+
+    expect(result).toEqual({ reaped: 0, skipped: 1, errors: 0 });
+    expect(mockPrisma.uploadDraft.update).not.toHaveBeenCalled();
+    expect(mockProviderDelete).not.toHaveBeenCalled();
+  });
+
+  it("Phase 184: legacy draft (storageKey = backfilled path) unlinks the exact A5 physical path, byte-identical", async () => {
+    const legacyPath = path.join(BASE, "legacy-d6");
+    mockPrisma.uploadDraft.findMany.mockResolvedValue([
+      {
+        id: "ld6",
+        filePath: legacyPath,
+        storageKey: legacyPath, // M6 backfill: storageKey = filePath
+        organizationId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      },
+    ]);
+    (mockPrisma.uploadDraft.update as jest.Mock).mockResolvedValue({});
+
+    const result = await runReaperCycle();
+
+    expect(result).toEqual({ reaped: 1, skipped: 0, errors: 0 });
+    // Byte-identical legacy behavior: the provider received the exact
+    // backfilled key (storageKey = filePath) — the LocalFS legacy arm
+    // resolves it to path.resolve(key), the same physical path today's A5
+    // unlink removed (pinned in storageProvider.test.ts).
+    expect(mockProviderDelete).toHaveBeenCalledWith(legacyPath);
+    expect(mockPrisma.uploadDraft.update).toHaveBeenCalledWith({
+      where: { id: "ld6" },
+      data: { deletedAt: expect.any(Date) },
+    });
+  });
+
+  it("Phase 184: null storageKey (pre-backfill row) falls back to filePath — legacy arm", async () => {
+    const legacyPath = path.join(BASE, "pre-backfill");
+    mockPrisma.uploadDraft.findMany.mockResolvedValue([
+      { id: "pb1", filePath: legacyPath, storageKey: null, organizationId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" },
+    ]);
+    (mockPrisma.uploadDraft.update as jest.Mock).mockResolvedValue({});
+
+    const result = await runReaperCycle();
+
+    expect(result).toEqual({ reaped: 1, skipped: 0, errors: 0 });
+    expect(mockProviderDelete).toHaveBeenCalledWith(legacyPath);
+  });
+
+  it("Phase 184: provider delete throws → errors counter + soft-delete persisted (best-effort preserved)", async () => {
+    const ORG = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    mockPrisma.uploadDraft.findMany.mockResolvedValue([
+      {
+        id: "nd7",
+        filePath: "storage/uploads/drafts/gone.pdf",
+        storageKey: `${ORG}/uploads/drafts/uuid-1234-gone.pdf`,
+        organizationId: ORG,
+      },
+    ]);
+    (mockPrisma.uploadDraft.update as jest.Mock).mockResolvedValue({});
+    mockProviderDelete.mockRejectedValueOnce(new Error("bucket unavailable"));
+
+    const result = await runReaperCycle();
+
+    expect(result).toEqual({ reaped: 0, skipped: 0, errors: 1 });
+    // Soft-delete already happened — the row is marked (idempotent)
+    expect(mockPrisma.uploadDraft.update).toHaveBeenCalledWith({
+      where: { id: "nd7" },
+      data: { deletedAt: expect.any(Date) },
+    });
+  });
+
+  it("Phase 184: re-run on already-soft-deleted rows → no double-delete (idempotency probe)", async () => {
+    // The reaper's selector excludes deletedAt != null — a second pass finds
+    // nothing to reap (the interrupted/parallel-processing edge resolves:
+    // an unexpired draft row the reaper will reap later, never a partial).
+    const ORG = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const key = `${ORG}/uploads/drafts/uuid-1234-idem.pdf`;
+
+    // First pass: row reaped
+    mockPrisma.uploadDraft.findMany.mockResolvedValueOnce([
+      { id: "idem", filePath: "storage/uploads/drafts/idem.pdf", storageKey: key, organizationId: ORG },
+    ]);
+    (mockPrisma.uploadDraft.update as jest.Mock).mockResolvedValue({});
+    const first = await runReaperCycle();
+    expect(first).toEqual({ reaped: 1, skipped: 0, errors: 0 });
+    expect(mockProviderDelete).toHaveBeenCalledTimes(1);
+
+    // Second pass: the row is now soft-deleted → the DB-level selector
+    // (deletedAt: null) excludes it; a re-run finds ZERO rows.
+    mockPrisma.uploadDraft.findMany.mockResolvedValueOnce([]);
+    const second = await runReaperCycle();
+    expect(second).toEqual({ reaped: 0, skipped: 0, errors: 0 });
+    // No double-delete: the provider saw the key exactly once
+    expect(mockProviderDelete).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.uploadDraft.update).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -309,11 +521,12 @@ describe("initUploadDraftReaperScheduler pg-boss registration (Phase 165, Q-02)"
     const handler = bossWork.mock.calls[0][1];
 
     // Stage an expired draft inside BASE so runReaperCycle soft-deletes +
-    // unlinks it — proves the cycle actually ran inside the work handler.
+    // deletes it through the provider — proves the cycle actually ran
+    // inside the work handler.
     const filePath = path.join(BASE, "w1");
     mockPrisma.uploadDraft.findMany.mockResolvedValue([{ id: "w1", filePath }]);
     (mockPrisma.uploadDraft.update as jest.Mock).mockResolvedValue({});
-    (fs.unlinkSync as unknown as jest.Mock).mockImplementation(() => {});
+    mockProviderDelete.mockResolvedValue(undefined);
 
     // pg-boss passes a Job[] array (Pitfall 2). The handler iterates with
     // for...of and runs the cycle once per job.
@@ -327,12 +540,12 @@ describe("initUploadDraftReaperScheduler pg-boss registration (Phase 165, Q-02)"
     };
     await expect(handler([job])).resolves.toBeUndefined();
 
-    // The cycle ran → soft-delete + unlink called for the staged draft.
+    // The cycle ran → soft-delete + provider delete called for the draft.
     expect(mockPrisma.uploadDraft.update).toHaveBeenCalledWith({
       where: { id: "w1" },
       data: { deletedAt: expect.any(Date) },
     });
-    expect(fs.unlinkSync).toHaveBeenCalledWith(filePath);
+    expect(mockProviderDelete).toHaveBeenCalledWith(filePath);
   });
 
   it("Pitfall 3: work handler catches cycle errors and resolves (no re-throw → no retry storm)", async () => {

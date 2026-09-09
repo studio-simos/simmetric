@@ -8,6 +8,9 @@ jest.mock("../utils/prisma", () => ({
   default: {
     workspace: { count: jest.fn() },
     project: { count: jest.fn() },
+    synthesisRun: { count: jest.fn() },
+    widget: { count: jest.fn() },
+    backupDestination: { count: jest.fn() },
   },
 }));
 
@@ -204,105 +207,391 @@ describe("requireFeature middleware", () => {
 
 // ─── requireFeatureLimit middleware ──────────────────────────────────
 
+// Phase 185 (SAAS-04c, D-06/D-07): every counter counts WHERE
+// organizationId = req.organizationId (TenantContext-resolved upstream in
+// the chain). Org-a at its limit never consumes org-b's allowance (DoS +
+// Info-Disclosure mitigations T-185-12..15). The 402 body keys stay
+// byte-identical ({error, feature, limit, current, tier}); current is now
+// the per-org count. Org-unresolvable → 404 fail-closed BEFORE the try
+// block (D-07); transient count failures keep the pre-existing fail-open
+// catch arm.
 describe("requireFeatureLimit middleware", () => {
+  const ORG_A = "org-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const ORG_B = "org-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+
   let prisma: any;
+
+  // Minimal req/res/next harness mirroring the pre-185 shape.
+  function makeHarness(reqExtra: Record<string, unknown> = {}) {
+    const state: any = { statusCode: 200, body: {} };
+    const res: any = {
+      status(code: number) {
+        state.statusCode = code;
+        return res;
+      },
+      json(data: any) {
+        state.body = data;
+        return res;
+      },
+    };
+    const req = { ...reqExtra } as unknown as Request;
+    const next = jest.fn();
+    return { req, res, next, state };
+  }
 
   beforeEach(() => {
     prisma = require("../utils/prisma").default;
+    jest.clearAllMocks();
   });
 
-  it("allows creation when count is below limit", async () => {
+  it("counts workspaces scoped to req.organizationId (exact where arg)", async () => {
     (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
     initLicense();
-    prisma.workspace.count.mockResolvedValue(1); // 1 < 3
+    prisma.workspace.count.mockResolvedValue(1);
 
     const middleware = requireFeatureLimit("max_workspaces", "workspace");
-    const state: any = { statusCode: 200, body: {} };
-    const res: any = {
-      status(code: number) { state.statusCode = code; return res; },
-      json(data: any) { state.body = data; return res; },
-    };
-    const next = jest.fn();
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
 
-    await middleware({} as any, res, next);
+    await middleware(req, res, next);
     expect(state.statusCode).toBe(200);
     expect(next).toHaveBeenCalled();
+    expect(prisma.workspace.count).toHaveBeenCalledWith({
+      where: { organizationId: ORG_A, deletedAt: null },
+    });
   });
 
-  it("blocks creation when count equals limit", async () => {
+  it("per-org independence: org-a at limit → 402; org-b below limit → next() (same request shapes)", async () => {
     (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
     initLicense();
-    prisma.workspace.count.mockResolvedValue(3); // 3 >= 3
+    prisma.workspace.count
+      .mockResolvedValueOnce(3) // org-a: at limit
+      .mockResolvedValueOnce(1); // org-b: below
 
     const middleware = requireFeatureLimit("max_workspaces", "workspace");
-    const state: any = { statusCode: 200, body: {} };
-    const res: any = {
-      status(code: number) { state.statusCode = code; return res; },
-      json(data: any) { state.body = data; return res; },
-    };
-    const next = jest.fn();
 
-    await middleware({} as any, res, next);
+    const orgA = makeHarness({ organizationId: ORG_A });
+    await middleware(orgA.req, orgA.res, orgA.next);
+    expect(orgA.state.statusCode).toBe(402);
+    expect(orgA.state.body.current).toBe(3);
+    expect(orgA.next).not.toHaveBeenCalled();
+
+    const orgB = makeHarness({ organizationId: ORG_B });
+    await middleware(orgB.req, orgB.res, orgB.next);
+    expect(orgB.state.statusCode).toBe(200);
+    expect(orgB.next).toHaveBeenCalled();
+
+    // Both orgs' counts were queried independently with their own org id.
+    expect(prisma.workspace.count.mock.calls[0][0].where.organizationId).toBe(ORG_A);
+    expect(prisma.workspace.count.mock.calls[1][0].where.organizationId).toBe(ORG_B);
+  });
+
+  it("boundary matrix: limit-1 → next(), limit → 402, limit+1 → 402", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense();
+    // Community max_projects = 3: one below → pass, exactly at → block, above → block.
+    prisma.project.count
+      .mockResolvedValueOnce(2) // limit-1
+      .mockResolvedValueOnce(3) // limit (exactly at)
+      .mockResolvedValueOnce(4); // limit+1
+
+    const middleware = requireFeatureLimit("max_projects", "project");
+
+    const below = makeHarness({ organizationId: ORG_A });
+    await middleware(below.req, below.res, below.next);
+    expect(below.state.statusCode).toBe(200);
+    expect(below.next).toHaveBeenCalled();
+
+    const at = makeHarness({ organizationId: ORG_A });
+    await middleware(at.req, at.res, at.next);
+    expect(at.state.statusCode).toBe(402);
+    expect(at.next).not.toHaveBeenCalled();
+
+    const above = makeHarness({ organizationId: ORG_A });
+    await middleware(above.req, above.res, above.next);
+    expect(above.state.statusCode).toBe(402);
+    expect(above.next).not.toHaveBeenCalled();
+  });
+
+  it("synthesisRun count where is { organizationId } exactly — deletedAt ABSENT (Pitfall 4: the column does not exist)", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense();
+    prisma.synthesisRun.count.mockResolvedValue(0);
+
+    const middleware = requireFeatureLimit("max_projects", "synthesisRun");
+    const { req, res, next } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+    const arg = prisma.synthesisRun.count.mock.calls[0][0];
+    expect(arg).toEqual({ where: { organizationId: ORG_A } });
+    expect(Object.keys(arg.where)).not.toContain("deletedAt");
+  });
+
+  it("unresolvable org → 404 fail-closed and the count delegate NEVER called (D-07)", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense();
+
+    const middleware = requireFeatureLimit("max_workspaces", "workspace");
+    const { req, res, next, state } = makeHarness({}); // no organizationId
+
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(404);
+    expect(state.body.error).toBe("Not found");
+    expect(next).not.toHaveBeenCalled();
+    expect(prisma.workspace.count).not.toHaveBeenCalled();
+    expect(prisma.project.count).not.toHaveBeenCalled();
+    expect(prisma.synthesisRun.count).not.toHaveBeenCalled();
+    expect(prisma.widget.count).not.toHaveBeenCalled();
+    expect(prisma.backupDestination.count).not.toHaveBeenCalled();
+  });
+
+  it("count query throws → next() still called (pre-existing fail-open catch preserved for transient errors)", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense();
+    prisma.workspace.count.mockRejectedValue(new Error("DB transient"));
+
+    const middleware = requireFeatureLimit("max_workspaces", "workspace");
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(state.statusCode).toBe(200);
+    // WR-03 (185-05): the swallowed error is logged with the flag — a
+    // sustained count failure leaves a server-side signal before any
+    // circuit-breaker policy lands (accept-as-debt, 185-05 dispositions).
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[license] count query failed — allowing request",
+      { error: "DB transient", flag: "max_workspaces" },
+    );
+  });
+
+  it("402 body keys exactly {error, feature, limit, current, tier} — byte-identical shape (D-06)", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense();
+    prisma.widget.count.mockResolvedValue(1); // community max_widgets = 1
+
+    const middleware = requireFeatureLimit("max_widgets", "widget");
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
     expect(state.statusCode).toBe(402);
-    expect(state.body.feature).toBe("max_workspaces");
-    expect(state.body.limit).toBe(3);
-    expect(state.body.current).toBe(3);
+    expect(Object.keys(state.body).sort()).toEqual(
+      ["current", "error", "feature", "limit", "tier"],
+    );
+    expect(state.body.feature).toBe("max_widgets");
+    expect(state.body.limit).toBe(1);
+    expect(state.body.current).toBe(1);
+    expect(state.body.tier).toBe("community");
     expect(next).not.toHaveBeenCalled();
   });
 
-  it("blocks creation when count exceeds limit", async () => {
+  it("backupDestination count org-scoped { organizationId, deletedAt: null } (enterprise-consumed case, unit-covered — community build 404s the enterprise routes per A2)", async () => {
     (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
     initLicense();
-    prisma.project.count.mockResolvedValue(5); // 5 >= 3
+    prisma.backupDestination.count.mockResolvedValue(0);
 
-    const middleware = requireFeatureLimit("max_projects", "project");
-    const state: any = { statusCode: 200, body: {} };
-    const res: any = {
-      status(code: number) { state.statusCode = code; return res; },
-      json(data: any) { state.body = data; return res; },
-    };
-    const next = jest.fn();
+    const middleware = requireFeatureLimit("max_backup_destinations", "backupDestination");
+    const { req, res, next } = makeHarness({ organizationId: ORG_A });
 
-    await middleware({} as any, res, next);
-    expect(state.statusCode).toBe(402);
-    expect(state.body.feature).toBe("max_projects");
-    expect(state.body.limit).toBe(3);
+    await middleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(prisma.backupDestination.count).toHaveBeenCalledWith({
+      where: { organizationId: ORG_A, deletedAt: null },
+    });
   });
 
-  it("allows creation with unlimited limit (Enterprise)", async () => {
+  it("Enterprise Infinity short-circuits BEFORE the org guard (no count, no 404 on missing org)", async () => {
     const licenseKey = signTestLicense({ tier: "enterprise", sub: "Test Corp" });
     (getEnv as jest.Mock).mockReturnValue(envWith(licenseKey));
     initLicense();
     prisma.workspace.count.mockResolvedValue(100);
 
     const middleware = requireFeatureLimit("max_workspaces", "workspace");
+    const { req, res, next, state } = makeHarness({}); // deliberately no org — Infinity must not need it
+
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(200);
+    expect(next).toHaveBeenCalled();
+    expect(prisma.workspace.count).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Phase 186 (SAAS-05, D-06) — QuotaEnforcer precedence matrix ──────
+// The enforcer consult sits AFTER the core 402 arm and AFTER the transient
+// count-catch (structurally outside it): core deny is FINAL (a plugin can
+// never widen a core deny, T-186-04); core pass → the enforcer decides;
+// no enforcer → byte-identical 185 behavior. An enforcer throw responds 500
+// and returns — NEVER swallowed into the transient-catch fail-open next()
+// (Pitfall 5). The 402 body keys stay the frozen 185 D-06 shape
+// {error, feature, limit, current, tier} — the enforcer supplies
+// current/limit only.
+describe("requireFeatureLimit — QuotaEnforcer precedence (Phase 186 D-06)", () => {
+  const ORG_A = "org-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+
+  let prisma: any;
+  let setQuotaEnforcer: (fn: unknown) => void;
+
+  function makeHarness(reqExtra: Record<string, unknown> = {}) {
     const state: any = { statusCode: 200, body: {} };
     const res: any = {
-      status(code: number) { state.statusCode = code; return res; },
-      json(data: any) { state.body = data; return res; },
+      status(code: number) {
+        state.statusCode = code;
+        return res;
+      },
+      json(data: any) {
+        state.body = data;
+        return res;
+      },
     };
+    const req = { ...reqExtra } as unknown as Request;
     const next = jest.fn();
+    return { req, res, next, state };
+  }
 
-    await middleware({} as any, res, next);
+  beforeEach(() => {
+    prisma = require("../utils/prisma").default;
+    ({ setQuotaEnforcer } = require("../middleware/license"));
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    // Single-slot registry: reset so other suites stay 185-identical.
+    setQuotaEnforcer(null);
+  });
+
+  it("(a) core deny wins: count >= core limit → 402 EVEN IF the enforcer would allow (T-186-04)", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense(); // community max_workspaces = 3
+    prisma.workspace.count.mockResolvedValue(3); // at limit
+
+    const enforcer = jest.fn().mockResolvedValue({ allowed: true });
+    setQuotaEnforcer(enforcer);
+
+    const middleware = requireFeatureLimit("max_workspaces", "workspace");
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(402);
+    expect(state.body.current).toBe(3);
+    expect(state.body.limit).toBe(3);
+    expect(next).not.toHaveBeenCalled();
+    // The enforcer was NEVER consulted — the core deny is unskippable.
+    expect(enforcer).not.toHaveBeenCalled();
+  });
+
+  it("(b) core pass + enforcer deny → 402 with the ENFORCER's current/limit, keys {error, feature, limit, current, tier}", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense(); // community max_workspaces = 3
+    prisma.workspace.count.mockResolvedValue(1); // below core limit
+
+    const enforcer = jest.fn().mockResolvedValue({ allowed: false, current: 1, limit: 1 });
+    setQuotaEnforcer(enforcer);
+
+    const middleware = requireFeatureLimit("max_workspaces", "workspace");
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(402);
+    // Frozen 185 D-06 shape — the enforcer supplies current/limit only.
+    expect(Object.keys(state.body).sort()).toEqual(
+      ["current", "error", "feature", "limit", "tier"],
+    );
+    expect(state.body.feature).toBe("max_workspaces");
+    expect(state.body.limit).toBe(1);
+    expect(state.body.current).toBe(1);
+    expect(state.body.tier).toBe("community");
+    expect(next).not.toHaveBeenCalled();
+    expect(enforcer).toHaveBeenCalledWith({
+      organizationId: ORG_A,
+      flag: "max_workspaces",
+      current: 1,
+    });
+  });
+
+  it("(c) core pass + enforcer allow → next()", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense();
+    prisma.workspace.count.mockResolvedValue(1);
+
+    const enforcer = jest.fn().mockResolvedValue({ allowed: true, current: 1, limit: 10 });
+    setQuotaEnforcer(enforcer);
+
+    const middleware = requireFeatureLimit("max_workspaces", "workspace");
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(200);
+    expect(next).toHaveBeenCalled();
+    expect(enforcer).toHaveBeenCalledTimes(1);
+  });
+
+  it("(d) core pass + NO enforcer → next() (byte-identical 185 behavior)", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense();
+    prisma.workspace.count.mockResolvedValue(1);
+
+    const middleware = requireFeatureLimit("max_workspaces", "workspace");
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
     expect(state.statusCode).toBe(200);
     expect(next).toHaveBeenCalled();
   });
 
-  it("calls next() if count query fails (fail-open)", async () => {
+  it("(e) enforcer THROW → logger.error with org/flag + 500 response, NEVER the fail-open next() (Pitfall 5)", async () => {
     (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
     initLicense();
-    prisma.workspace.count.mockRejectedValue(new Error("DB error"));
+    prisma.workspace.count.mockResolvedValue(1);
+
+    const enforcer = jest.fn().mockRejectedValue(new Error("enforcer exploded"));
+    setQuotaEnforcer(enforcer);
 
     const middleware = requireFeatureLimit("max_workspaces", "workspace");
-    const state: any = { statusCode: 200, body: {} };
-    const res: any = {
-      status(code: number) { state.statusCode = code; return res; },
-      json(data: any) { state.body = data; return res; },
-    };
-    const next = jest.fn();
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
 
-    await middleware({} as any, res, next);
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(500);
+    expect(state.body.error).toBe("Quota check failed");
+    expect(next).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      "[license] quota enforcer failed",
+      expect.objectContaining({ organizationId: ORG_A, flag: "max_workspaces" }),
+    );
+  });
+
+  it("(f) limit === Infinity → next() BEFORE anything — enforcer not consulted even if registered", async () => {
+    const licenseKey = signTestLicense({ tier: "enterprise", sub: "Test Corp" });
+    (getEnv as jest.Mock).mockReturnValue(envWith(licenseKey));
+    initLicense(); // enterprise max_workspaces = Infinity
+    prisma.workspace.count.mockResolvedValue(100);
+
+    const enforcer = jest.fn().mockResolvedValue({ allowed: false });
+    setQuotaEnforcer(enforcer);
+
+    const middleware = requireFeatureLimit("max_workspaces", "workspace");
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(200);
     expect(next).toHaveBeenCalled();
+    expect(enforcer).not.toHaveBeenCalled();
+  });
+
+  it("(b-sync) sync enforcer verdict (non-Promise) is honored (A4 — verdict union)", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense();
+    prisma.workspace.count.mockResolvedValue(1);
+
+    const enforcer = jest.fn(() => ({ allowed: false, current: 1, limit: 1 }));
+    setQuotaEnforcer(enforcer);
+
+    const middleware = requireFeatureLimit("max_workspaces", "workspace");
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(402);
+    expect(state.body.limit).toBe(1);
+    expect(next).not.toHaveBeenCalled();
   });
 });
 

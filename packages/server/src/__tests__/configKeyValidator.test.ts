@@ -9,8 +9,12 @@
  * the no-plugin community fallback.
  *
  * Mock strategy mirrors `systemConfigRedis.test.ts`:
- *  - prisma is mocked for systemConfig.findMany / upsert (the
- *    updateSettings() loop reads existing settings + writes accepted ones).
+ *  - prisma is mocked for systemConfig.findMany / findFirst / update / create
+ *    (the updateSettings() loop reads existing settings + writes accepted
+ *    ones through the 183-01 `upsertSystemConfigRow` helper — find-first,
+ *    then id-anchored update-or-create). `upsert` stays mocked so suites
+ *    not yet migrated keep working; rejection-path tests assert the helper
+ *    never wrote (no update/create fire on rejection).
  *  - licenseService is mocked for `getLicenseInfo` (replaces
  *    `isFeatureEnabled` — Pitfall 2). The validator receives the
  *    `LicenseInfo`; the D-02 fallback ignores it (it only checks
@@ -28,7 +32,10 @@
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
 const ckvMockFindUnique = jest.fn();
+const ckvMockFindFirst = jest.fn();
 const ckvMockFindMany = jest.fn();
+const ckvMockUpdate = jest.fn();
+const ckvMockCreate = jest.fn();
 const ckvMockUpsert = jest.fn();
 
 jest.mock("../utils/prisma", () => ({
@@ -36,7 +43,10 @@ jest.mock("../utils/prisma", () => ({
   default: {
     systemConfig: {
       findUnique: ckvMockFindUnique,
+      findFirst: ckvMockFindFirst,
       findMany: ckvMockFindMany,
+      update: ckvMockUpdate,
+      create: ckvMockCreate,
       upsert: ckvMockUpsert,
     },
   },
@@ -84,6 +94,13 @@ describe("Phase 145 (EPA-05) — configKeyValidator hook + D-02 fallback", () =>
     jest.resetModules();
     ckvMockFindMany.mockResolvedValue([]);
     ckvMockFindUnique.mockResolvedValue(null);
+    // 183-01: updateSettings writes via upsertSystemConfigRow (find-first →
+    // update) — the probe's write-through surface is now findFirst + update.
+    // findFirst returns null by default → the helper takes the create arm;
+    // Tests 3/4 re-wire it to the update-path row below.
+    ckvMockFindFirst.mockResolvedValue(null);
+    ckvMockUpdate.mockResolvedValue({});
+    ckvMockCreate.mockResolvedValue({});
     ckvMockUpsert.mockResolvedValue({});
     mockLoggerWarn.mockReset();
   });
@@ -94,7 +111,8 @@ describe("Phase 145 (EPA-05) — configKeyValidator hook + D-02 fallback", () =>
 
     expect(result.rejected).toContain("BRANDING_APP_NAME");
     expect(result.updated).toEqual([]);
-    expect(ckvMockUpsert).not.toHaveBeenCalled();
+    expect(ckvMockUpdate).not.toHaveBeenCalled();
+    expect(ckvMockCreate).not.toHaveBeenCalled();
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       "[config] BRANDING_* key rejected (no enterprise plugin loaded)",
       expect.objectContaining({ key: "BRANDING_APP_NAME" }),
@@ -112,7 +130,8 @@ describe("Phase 145 (EPA-05) — configKeyValidator hook + D-02 fallback", () =>
 
     expect(result.rejected).toContain("BRANDING_APP_NAME");
     expect(result.updated).toEqual([]);
-    expect(ckvMockUpsert).not.toHaveBeenCalled();
+    expect(ckvMockUpdate).not.toHaveBeenCalled();
+    expect(ckvMockCreate).not.toHaveBeenCalled();
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       "[config] Config key rejected by validator",
       expect.objectContaining({
@@ -125,17 +144,24 @@ describe("Phase 145 (EPA-05) — configKeyValidator hook + D-02 fallback", () =>
   it("Test 3: validator returning {allowed:true} for BRANDING_* → persisted (D-01)", async () => {
     const { updateSettings, registerConfigKeyValidator } = freshSystemConfigForValidators();
     registerConfigKeyValidator(() => ({ allowed: true }));
+    // Update-path probe: an existing global row → the helper issues the
+    // id-anchored update (not create).
+    ckvMockFindFirst.mockResolvedValue({ id: "row-branding", key: "BRANDING_APP_NAME", value: "old" });
 
     const result = await updateSettings([{ key: "BRANDING_APP_NAME", value: "My Brand" }]);
 
     expect(result.rejected).toEqual([]);
     expect(result.updated).toHaveLength(1);
     expect(result.updated[0].key).toBe("BRANDING_APP_NAME");
-    expect(ckvMockUpsert).toHaveBeenCalledWith(
+    // 183-01: the write routes through upsertSystemConfigRow — find-first on
+    // the global row, then an id-anchored update (existing-row path).
+    expect(ckvMockFindFirst).toHaveBeenCalledWith({
+      where: { key: "BRANDING_APP_NAME", organizationId: null },
+    });
+    expect(ckvMockUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { key: "BRANDING_APP_NAME" },
-        create: { key: "BRANDING_APP_NAME", value: "My Brand" },
-        update: { value: "My Brand" },
+        where: { id: "row-branding" },
+        data: { value: "My Brand" },
       }),
     );
   });
@@ -144,17 +170,22 @@ describe("Phase 145 (EPA-05) — configKeyValidator hook + D-02 fallback", () =>
     const { updateSettings, registerConfigKeyValidator } = freshSystemConfigForValidators();
     // Validator returns null (no opinion) for non-BRANDING keys.
     registerConfigKeyValidator(() => null);
+    // Update-path probe: an existing global row → id-anchored update.
+    ckvMockFindFirst.mockResolvedValue({ id: "row-llm", key: "LLM_PROVIDER", value: "ollama" });
 
     const result = await updateSettings([{ key: "LLM_PROVIDER", value: "openai" }]);
 
     expect(result.rejected).toEqual([]);
     expect(result.updated).toHaveLength(1);
     expect(result.updated[0].key).toBe("LLM_PROVIDER");
-    expect(ckvMockUpsert).toHaveBeenCalledWith(
+    // 183-01: helper-mediated shape — findFirst probe then id-anchored update.
+    expect(ckvMockFindFirst).toHaveBeenCalledWith({
+      where: { key: "LLM_PROVIDER", organizationId: null },
+    });
+    expect(ckvMockUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { key: "LLM_PROVIDER" },
-        create: { key: "LLM_PROVIDER", value: "openai" },
-        update: { value: "openai" },
+        where: { id: "row-llm" },
+        data: { value: "openai" },
       }),
     );
   });
@@ -169,7 +200,8 @@ describe("Phase 145 (EPA-05) — configKeyValidator hook + D-02 fallback", () =>
     // D-02 fallback via the `validatorDecision === "reject"` → `continue`).
     expect(result.rejected).toEqual(["BRANDING_APP_NAME"]);
     expect(result.rejected).toHaveLength(1);
-    expect(ckvMockUpsert).not.toHaveBeenCalled();
+    expect(ckvMockUpdate).not.toHaveBeenCalled();
+    expect(ckvMockCreate).not.toHaveBeenCalled();
     // The validator-rejection log fired; the fallback log did NOT.
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       "[config] Config key rejected by validator",

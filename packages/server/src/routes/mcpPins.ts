@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import {
   chatIdParamSchema,
   createMcpPinSchema,
@@ -19,6 +20,10 @@ const router = Router();
 // D-11: any workspace member can manage pins (not admin-only)
 // Workspace access verified inline in each handler by loading the chat and checking membership
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 // GET /:chatId/pins — List all MCP pins for a chat (MCP-07, per D-10)
 router.get("/:chatId/pins", async (req: Request, res: Response) => {
@@ -35,9 +40,12 @@ router.get("/:chatId/pins", async (req: Request, res: Response) => {
 
     const chat = await prisma.chat.findUnique({
       where: { id: chatId },
-      select: { id: true, workspaceId: true },
+      // T-185-10 (Pitfall-2 grep-gate): the org assertion rides the SAME
+      // select — a cross-org chat resolves null-equivalent (404 below).
+      select: { id: true, workspaceId: true, organizationId: true },
     });
-    if (!chat) {
+    // T-185-10 org assertion: cross-org chat hides as 404 — fail-closed.
+    if (!chat || chat.organizationId !== req.organizationId) {
       res.status(404).json({ error: "Chat not found" });
       return;
     }
@@ -122,9 +130,12 @@ router.post("/:chatId/pins", async (req: Request, res: Response) => {
 
     const chat = await prisma.chat.findUnique({
       where: { id: chatId },
-      select: { id: true, workspaceId: true },
+      // T-185-10 (Pitfall-2 grep-gate): the org assertion rides the SAME
+      // select — a cross-org chat resolves null-equivalent (404 below).
+      select: { id: true, workspaceId: true, organizationId: true },
     });
-    if (!chat) {
+    // T-185-10 org assertion: cross-org chat hides as 404 — fail-closed.
+    if (!chat || chat.organizationId !== req.organizationId) {
       res.status(404).json({ error: "Chat not found" });
       return;
     }
@@ -224,9 +235,12 @@ router.delete("/:chatId/pins/:pinId", async (req: Request, res: Response) => {
 
     const chat = await prisma.chat.findUnique({
       where: { id: chatId },
-      select: { id: true, workspaceId: true },
+      // T-185-10 (Pitfall-2 grep-gate): the org assertion rides the SAME
+      // select — a cross-org chat resolves null-equivalent (404 below).
+      select: { id: true, workspaceId: true, organizationId: true },
     });
-    if (!chat) {
+    // T-185-10 org assertion: cross-org chat hides as 404 — fail-closed.
+    if (!chat || chat.organizationId !== req.organizationId) {
       res.status(404).json({ error: "Chat not found" });
       return;
     }

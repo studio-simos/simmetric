@@ -21,8 +21,8 @@ import { logger } from "../utils/logger";
 import { hybridSearchWithRerank, type HybridSearchResult } from "../services/hybridSearchService";
 import type { HybridSearchFilters } from "@simmetric-chat/shared";
 import { RagMetadataFilterSchema } from "@simmetric-chat/shared";
-import { getSetting } from "../services/systemConfigService";
-import { getPage } from "../services/archivePageService";
+import { getSetting, upsertSystemConfigRow } from "../services/systemConfigService";
+import { getPage, getPages } from "../services/archivePageService";
 import { generatePreview } from "../services/wikiWriteService";
 import { searchWeb } from "../services/webSearchService";
 import { MULTI_CONFIG_PLAINTO_TSQUERY } from "../services/ftsService";
@@ -382,16 +382,17 @@ registerSkill({
       const configKey = `ws_memory:${workspaceId}:${key}`;
 
       if (action === "write" && content) {
-        await prisma.systemConfig.upsert({
-          where: { key: configKey },
-          create: { key: configKey, value: content },
-          update: { value: content },
-        });
+        // Phase 183 (SAAS-02): helper-mediated find-first-then-write —
+        // global row (ws_memory:* keys stay global-only, P3).
+        await upsertSystemConfigRow(prisma, { key: configKey, value: content });
         return { success: true, data: `Memory saved under key "${key}".` };
       }
 
-      // Read action — check key-value store first
-      const entry = await prisma.systemConfig.findUnique({ where: { key: configKey } });
+      // Read action — check key-value store first (findFirst with the
+      // explicit null-org filter — composite-unique-safe read shape).
+      const entry = await prisma.systemConfig.findFirst({
+        where: { key: configKey, organizationId: null },
+      });
       if (entry) {
         return { success: true, data: entry.value };
       }
@@ -643,7 +644,7 @@ registerSkill({
   name: "wiki_query",
   displayName: "Wiki Query",
   description:
-    "Search and read wiki pages. Use 'query' for full-text search, 'slug' for direct page lookup. Supports link traversal up to depth 3 and 10-page budget.",
+    "Search and read wiki pages. Use 'query' for full-text search, 'slug' for direct page lookup, or 'list: true' to enumerate all pages in the bound archive (no query needed). Supports link traversal up to depth 3 and 10-page budget.",
   inputSchema: {
     type: "object",
     properties: {
@@ -654,6 +655,10 @@ registerSkill({
       slug: {
         type: "string",
         description: "Direct wiki page slug lookup (alternative to query)",
+      },
+      list: {
+        type: "boolean",
+        description: "Set true to list all wiki pages (slug + title + category) without searching. Use this for 'what documents/pages do you have' questions.",
       },
       depth: {
         type: "number",
@@ -667,11 +672,51 @@ registerSkill({
     const { query, metadata } = params;
     const slug = metadata?.slug as string | undefined;
     const depth = Math.min((metadata?.depth as number) || 1, 3);
+    const list = metadata?.list === true;
     // D-08: prefer params.archiveId (deterministic from Chat.archiveId) over
     // metadata.archiveId (LLM-passed) to prevent cross-archive IDOR.
     const archiveId = params.archiveId ?? (metadata?.archiveId as string | undefined);
 
     try {
+      // List mode (G-131-loop): enumerate all pages of the bound archive
+      // without a query. Answers "what documents/pages do you have" — the
+      // question class that previously caused wiki_query retry loops (FTS
+      // has no sensible query for it). Same archiveId scoping rule as the
+      // FTS path: without a bound archive the listing cannot be scoped, so
+      // we fail with the same distinguishable error instead of leaking
+      // cross-archive titles.
+      if (list) {
+        if (!archiveId) {
+          return { success: false, error: "archiveId is required to list wiki pages" };
+        }
+        const pages = await getPages(archiveId, undefined, 100);
+        if (pages.length === 0) {
+          return {
+            success: true,
+            data: "[WIKI_NO_CONTENT] The bound archive contains no wiki pages. Do not retry this query — there is nothing to list.",
+          };
+        }
+        const listing = pages
+          .map((p) => `- [[${p.slug}]] ${p.title}${p.category ? ` (${p.category})` : ""}`)
+          .join("\n");
+        return {
+          success: true,
+          data: `Wiki pages in the bound archive (${pages.length}):\n\n${listing}\n\nUse wiki_query with 'slug' to read a specific page.`,
+          // List-mode citations: one entry per listed page so the normal
+          // citation pipeline (dedupe → grounding filter) treats the answer
+          // as grounded on the archive, mirroring the traversal path's
+          // per-page citation emission.
+          sources: pages.map((p) => ({
+            documentId: "",
+            documentName: p.slug,
+            chunkText: "",
+            score: 0,
+            source: "tool" as const,
+            pageSlug: p.slug,
+          })),
+        };
+      }
+
       const visited = new Set<string>();
       // Phase 151 (RAG-02): per-page frontmatter captured during traversal so
       // the normal-path citations can derive sourceDocumentIds from

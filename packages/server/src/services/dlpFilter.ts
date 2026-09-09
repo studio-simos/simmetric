@@ -234,7 +234,14 @@ export async function scanContentAsync(text: string): Promise<DLPResult> {
   let patterns: ScanPattern[];
   try {
     const { getActiveCompiledPatterns } = await import("./dlpPatternService");
-    patterns = await getActiveCompiledPatterns();
+    // CR-02 (185-05): thread the AMBIENT tenant org into the DB read — the
+    // scan only ever runs inside chat/widget stream requests, which are
+    // inside the ALS window. An org-scoped read keeps the built-ins (global
+    // safety rails) AND the org's customs; a call outside any tenant window
+    // (getTenantContext() undefined) passes undefined → the pre-185
+    // unscoped isEnabled-only read (absent-store equivalence).
+    const { getTenantContext } = await import("../utils/tenantContext");
+    patterns = await getActiveCompiledPatterns(getTenantContext()?.organizationId);
   } catch (err: unknown) {
     // Lazy import keeps the unit-test surface (dlpPlugin.test.ts mocks the
     // service module wholesale) and avoids a module-load cycle.

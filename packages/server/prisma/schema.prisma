@@ -8,6 +8,12 @@ generator client {
   // and then symlink node_modules/@prisma/client/.prisma -> ../.prisma/client
   // so the runtime require chain `default.js -> .prisma/client/default -> client.js` works.
   output   = "../node_modules/.prisma/client"
+  // Phase 182 (D-05 spike): partial unique index WHERE "deletedAt" IS NULL on
+  // OrganizationMember's composite unique — soft-deleted membership rows free
+  // the (organizationId, userId) slot for re-add (P2002 tombstone class).
+  // PREVIEW in Prisma 7.10.0 (introduced 7.4.0, NOT deprecated — unlike
+  // prismaSchemaFolder, which the enterprise fragment header bans).
+  previewFeatures = ["partialIndexes"]
 }
 
 datasource db {
@@ -17,6 +23,93 @@ datasource db {
 // ============================================================
 // RBAC Models
 // ============================================================
+
+// ============================================================
+// Multi-Tenancy Root (Phase 182 — Tenant Data Model)
+// ============================================================
+
+// Organization — the tenancy root. A fixed-UUID "default" org (see
+// DEFAULT_ORG_ID in @simmetric-chat/shared) is INSERTed by migration M1
+// (NOT the seed — fresh installs run migrate-before-seed and tolerate seed
+// failure). Air-gap installs keep behaving single-tenant: every pre-tenancy
+// row backfills into the default org (M3) and every new row defaults to it
+// (@default(DEFAULT_ORG_ID) on organizationId columns, M4 SET DEFAULT).
+model Organization {
+  id        String    @id @default(uuid())
+  name      String
+  slug      String    @unique
+  // Phase 183/Parte II consume; default-org stays 'free'
+  plan      String    @default("free")
+  // Soft-delete norm (org deletion = Parte II provisioning story)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  members OrganizationMember[]
+  // Back-relations for the Tier-A organizationId columns (Phase 182)
+  projects             Project[]
+  workspaces           Workspace[]
+  chats                Chat[]
+  chatFolders          ChatFolder[]
+  chatMessages         ChatMessage[]
+  documents            Document[]
+  archives             Archive[]
+  systemConfigs        SystemConfig[]
+  providers            Provider[]
+  providerModels       ProviderModel[]
+  apiKeys              ApiKey[]
+  workspaceAgentConfigs WorkspaceAgentConfig[]
+  projectAccesses      ProjectAccess[]
+  workspaceAccesses    WorkspaceAccess[]
+  widgets              Widget[]
+  widgetWorkspaces     WidgetWorkspace[]
+  workspaceTemplates   WorkspaceTemplate[]
+  workspaceTokenUsages WorkspaceTokenUsage[]
+  webhooks             Webhook[]
+  pushSubscriptions    PushSubscription[]
+  mcpConnections       MCPConnection[]
+  uploadDrafts         UploadDraft[]
+  ocrJobs              OcrJob[]
+  archiveImportJobs    ArchiveImportJob[]
+  synthesisRuns        SynthesisRun[]
+  dlpPatterns          DlpPattern[]
+  // Cross-fragment back-relation (schema-enterprise.prisma BackupDestination
+  // organizationId — resolves via the prismaSchemaFolder merge, Phase 141
+  // verdict; mirrors User.backupDestinations)
+  backupDestinations   BackupDestination[]
+
+  @@map("organizations")
+}
+
+// OrganizationMember — the ONLY user↔organization link (D-01: User is a
+// pure-identity entity, NO organizationId column on User). Removal of a
+// member = soft delete of this row (D-04); user-created data stays owned
+// by the org — no cascade of tenant data. roleInOrg is a tier ABOVE the
+// 31-permission RBAC surface (untouched).
+model OrganizationMember {
+  id             String    @id @default(uuid())
+  organizationId String
+  userId         String
+  // owner | admin | member — enum-as-string pattern (NOT Prisma enum) for
+  // consistency with Chat.titleSource (Phase 182 research A8).
+  roleInOrg      String    @default("member")
+  // D-04: removal = soft delete; seat count = deletedAt IS NULL
+  deletedAt      DateTime?
+  joinedAt       DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // D-05 (Phase 182): partial unique — soft-deleted rows (tombstones) free
+  // the (organizationId, userId) slot so a member can be re-added (P2002
+  // tombstone class seen across ×20 soft-deleting tables in v0.20).
+  @@unique([organizationId, userId], where: { deletedAt: null })
+  // "all orgs for user" lookup (TenantContext resolution hot path, Phase 185)
+  @@index([userId])
+  // seat-count / member-list queries
+  @@index([organizationId])
+  @@map("organization_members")
+}
 
 model User {
   id           String          @id @default(uuid())
@@ -35,6 +128,10 @@ model User {
 
   // Relations
   roles           UserRole[]
+  // Phase 182 (D-01): memberships are the ONLY org link — User carries NO
+  // organizationId column (identity stays pure); the active org resolves
+  // from request context via TenantContext (Phase 185).
+  organizationMemberships OrganizationMember[]
   projectAccess   ProjectAccess[]
   workspaceAccess WorkspaceAccess[]
   apiKeys         ApiKey[]
@@ -126,24 +223,40 @@ model RoleMenuSection {
 model ProjectAccess {
   userId    String
   projectId String
+  // Phase 182 (SAAS-01b): access grant pins its org (column only — composite
+  // PK untouched)
+  organizationId String @default("00000000-0000-0000-0000-000000000000")
   grantedAt DateTime @default(now())
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@id([userId, projectId])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column — declared here so
+  // `prisma migrate dev` drift detection keeps the M2-created DB index (the
+  // Plan-02 empirical probe proved Prisma proposes DROP INDEX for any DB index
+  // absent from the schema).
+  @@index([organizationId])
   @@map("project_access")
 }
 
 model WorkspaceAccess {
   userId      String
   workspaceId String
+  // Phase 182 (SAAS-01b): access grant pins its org (column only — composite
+  // PK untouched)
+  organizationId String @default("00000000-0000-0000-0000-000000000000")
   grantedAt   DateTime @default(now())
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@id([userId, workspaceId])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("workspace_access")
 }
 
@@ -152,8 +265,13 @@ model WorkspaceAccess {
 // ============================================================
 
 model Project {
-  id          String    @id @default(uuid())
-  name        String
+  id            String    @id @default(uuid())
+  // Phase 182 (SAAS-01b): tenant owner. @default pins the air-gap default org —
+  // zero create()-site churn until TenantContext replaces it (Phase 185).
+  organizationId String   @default("00000000-0000-0000-0000-000000000000")
+  // Phase 182 (SAAS-01b): tenant owner. @default pins the air-gap default org —
+  // zero create()-site churn until TenantContext replaces it (Phase 185).
+    name          String
     description String? @db.Text
   createdBy   String
   deletedAt   DateTime?
@@ -161,6 +279,7 @@ model Project {
   updatedAt   DateTime  @updatedAt
 
   // Relations
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   creator      User           @relation("ProjectCreator", fields: [createdBy], references: [id])
   workspaces   Workspace[]
   accessGrants ProjectAccess[]
@@ -168,11 +287,16 @@ model Project {
 
   // D-01 (quick 260809-wte): unique per-owner name, partial index WHERE "deletedAt" IS NULL (soft-deleted rows free the name).
   @@unique([createdBy, name])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("projects")
 }
 
 model Workspace {
   id             String   @id @default(uuid())
+  // Phase 182 (SAAS-01b): tenancy boundary for collector/vector layer
+  organizationId String   @default("00000000-0000-0000-0000-000000000000")
   projectId      String
   name           String
     instructions   String? @db.Text
@@ -185,6 +309,7 @@ model Workspace {
   updatedAt      DateTime @updatedAt
 
   // Relations
+  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   template      WorkspaceTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   chats         Chat[]
@@ -201,11 +326,17 @@ model Workspace {
 
   // D-01 (quick 260809-wte): unique per-project name, partial index WHERE "deletedAt" IS NULL (soft-deleted rows free the name).
   @@unique([projectId, name])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("workspaces")
 }
 
 model Chat {
   id           String   @id @default(uuid())
+  // Phase 182 (SAAS-01b, D-02 promise list): direct column for M4 scoping
+  // guarantee (today org resolves transitively via workspaceId)
+  organizationId String @default("00000000-0000-0000-0000-000000000000")
   workspaceId  String
   name         String   @default("New Chat")
     prompt       String? @db.Text
@@ -222,6 +353,7 @@ model Chat {
   updatedAt    DateTime @updatedAt
 
   // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   messages  ChatMessage[]
   folder    ChatFolder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
@@ -229,20 +361,29 @@ model Chat {
   pins      ChatPin[]
   mcpPins   ChatMCPPin[]
 
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("chats")
 }
 
 model ChatFolder {
-  id          String    @id @default(uuid())
+  id             String    @id @default(uuid())
+  // Phase 182 (SAAS-01b, D-02 promise list)
+  organizationId String    @default("00000000-0000-0000-0000-000000000000")
   workspaceId String
     name        String @db.Text
   deletedAt   DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   chats     Chat[]
 
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("chat_folders")
 }
 
@@ -260,6 +401,8 @@ model ChatPin {
 
 model ChatMessage {
   id        String   @id @default(uuid())
+  // Phase 182 (SAAS-01b, D-02 promise list)
+  organizationId String @default("00000000-0000-0000-0000-000000000000")
   chatId    String
   role      String   // "user" | "assistant" | "system"
     content   String @db.Text
@@ -270,6 +413,7 @@ model ChatMessage {
   deletedAt DateTime?
 
   // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
   // Phase 97 (MEM-01 D-07 — Pitfall 3 no orphan PII): Memories derived from this
   // message. onDelete: Cascade via Memory.sourceMessageId FK — reaper hard-purge of
@@ -277,15 +421,24 @@ model ChatMessage {
   // explicit Memory.deleteMany + memory.reaper.purge audit (defense-in-depth).
   sourceMemories Memory[] @relation("ChatMessageSourceMemories")
 
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("chat_messages")
 }
 
 model Document {
   id             String    @id @default(uuid())
+  // Phase 182 (SAAS-01b, D-02 promise list)
+  organizationId String    @default("00000000-0000-0000-0000-000000000000")
   workspaceId    String
   name           String
   type           String    // "pdf" | "md" | "csv" | "docx" | "xlsx" | "txt"
   filePath       String
+  /// Phase 184 (SAAS-03, D-05): provider key. NEW rows: {organizationId}/uploads/{uuid}-{safeName}
+  /// (drafts subpath: {orgId}/uploads/drafts/…). LEGACY rows backfilled storageKey = filePath
+  /// (path-as-key, M6 UPDATE — no file moves). Nullable, NO @default — write sites set it explicitly.
+  storageKey     String?
   cacheKey       String    @unique
   chunkCount     Int       @default(0)
   embeddingModel String    @default("Xenova/all-MiniLM-L6-v2")
@@ -306,9 +459,13 @@ model Document {
   updatedAt      DateTime  @updatedAt
 
   // Relations
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   chunks    DocumentChunk[]
 
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("documents")
 }
 
@@ -337,9 +494,12 @@ model DocumentChunk {
 // ============================================================
 
 model Archive {
-  id          String    @id @default(uuid())
-  slug        String    @unique
-  name        String
+  id            String    @id @default(uuid())
+  // Phase 182 (SAAS-01b): KB container — tenant-owned. slug @unique stays
+  // GLOBAL per D-06 (org is transitivo via createdBy→membership)
+  organizationId String   @default("00000000-0000-0000-0000-000000000000")
+  slug          String    @unique
+  name          String
   description String?   @db.Text
   createdBy   String
   deletedAt   DateTime?
@@ -347,6 +507,7 @@ model Archive {
   updatedAt   DateTime  @updatedAt
 
   // Relations
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   creator User          @relation(fields: [createdBy], references: [id])
   pages   ArchivePage[]
   chats         Chat[]
@@ -361,6 +522,9 @@ model Archive {
 
   // D-01 (quick 260809-wte): unique per-owner name, partial index WHERE "deletedAt" IS NULL (soft-deleted rows free the name).
   @@unique([createdBy, name])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("archives")
 }
 
@@ -403,12 +567,37 @@ model ArchivePage {
 
 model SystemConfig {
   id    String @id @default(uuid())
-  key   String @unique
+  key   String
   value String
+  // Phase 183 (SAAS-02, D-08 swap — the Phase-182 deferral is FULFILLED): the
+  // scalar `key @unique` is replaced by the composite `@@unique([organizationId,
+  // key])` so two orgs can override the same key (per-tenant config cascade).
+  // All ~27 former `where: { key }` call sites (systemConfigService, routes/ocr,
+  // routes/filters, routes/chatRetention, seed.ts, routes/system wizard, both
+  // operator scripts) were migrated to find-first-then-write in Phase 183 Plans
+  // 01/02 (upsertSystemConfigRow helper) — the swap lands compile-clean.
+  organizationId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // Phase 183 (D-08 + Pitfall-P1 checkpoint verdict — ADOPT): Postgres composite
+  // unique is NULLs-distinct by default, so `(NULL, key)` rows would NOT collide
+  // and the helper's P2002 race backstop would never fire for global rows. The
+  // partial unique `key WHERE organizationId IS NULL` restores DB-level
+  // global-row uniqueness (M1 partial-unique precedent; partialIndexes preview
+  // flag enabled repo-wide since Phase 182-01 D-05 spike verdict). Partial
+  // indexes cannot arbitrate ON CONFLICT (42P10 — organizationService.ts doc
+  // comment) — irrelevant here: every writer is find-first-then-write.
+  @@unique([organizationId, key])
+  @@unique([key], map: "system_config_key_key_null_org", where: { organizationId: null })
+
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column. The COLUMN stays
+  // nullable (Tier A′ global-row substrate — no M3 backfill, no M4 NOT NULL/
+  // SET DEFAULT); this index is drift-locked per the project_access note.
+  @@index([organizationId])
   @@map("system_config")
 }
 
@@ -417,9 +606,11 @@ model SystemConfig {
 // ============================================================
 
 model Provider {
-  id          String         @id @default(uuid())
-  name        String
-  type        String         // "ollama" | "openai" | "anthropic"
+  id            String         @id @default(uuid())
+  // Phase 182 (SAAS-01b): BYOK per-org seam (DF-04)
+  organizationId String        @default("00000000-0000-0000-0000-000000000000")
+  name          String
+  type          String         // "ollama" | "openai" | "anthropic"
   baseUrl     String
   apiKey      String?        // Encrypted (AES-256-GCM)
   isEnabled   Boolean        @default(true)
@@ -430,11 +621,20 @@ model Provider {
   updatedAt   DateTime       @updatedAt
   models      ProviderModel[]
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("providers")
 }
 
 model ProviderModel {
-  id          String   @id @default(uuid())
+  id            String   @id @default(uuid())
+  // Phase 182 (SAAS-01b): child of Provider (org transitivo via providerId,
+  // direct column per the promise-list letter). @@unique([providerId, name])
+  // unchanged per D-06
+  organizationId String  @default("00000000-0000-0000-0000-000000000000")
   providerId  String
   name        String
   displayName String?
@@ -450,7 +650,12 @@ model ProviderModel {
   updatedAt   DateTime @updatedAt
   provider    Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@unique([providerId, name])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("provider_models")
 }
 
@@ -463,14 +668,21 @@ model ApiKey {
   name      String
   prefix    String    @unique  // First 8 chars of plaintext key — display only (D-03, no lookup)
   key_hash  String    @unique  // HMAC-SHA256 hex digest (64 chars) — replaces bcrypt hashedKey (Phase 163, SCALE-03)
+  // Phase 182 (SAAS-01b): mint-time org pin (Pitfall 6 security fix:
+  // key→org immutable). prefix/key_hash uniques unchanged per D-06.
+  organizationId String @default("00000000-0000-0000-0000-000000000000")
   createdBy String
   lastUsed  DateTime?
   expiresAt DateTime?
   createdAt DateTime  @default(now())
 
   // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   user User @relation(fields: [createdBy], references: [id], onDelete: Cascade)
 
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("api_keys")
 }
 
@@ -480,6 +692,9 @@ model ApiKey {
 
 model WorkspaceAgentConfig {
   id             String  @id @default(uuid())
+  // Phase 182 (SAAS-01b): child of Workspace (org transitivo, direct column
+  // per the promise-list letter). workspaceId @unique unchanged per D-06
+  organizationId String  @default("00000000-0000-0000-0000-000000000000")
   workspaceId    String  @unique
     systemPrompt   String @db.Text  @default("You are a helpful AI assistant with access to workspace documents and tools.")
     enabledSkills  String @db.Text  @default("[\"rag_search\",\"workspace_memory\"]")
@@ -495,8 +710,12 @@ model WorkspaceAgentConfig {
   updatedAt DateTime @updatedAt
 
   // Relations
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("workspace_agent_configs")
 }
 
@@ -569,6 +788,11 @@ model ProviderPreset {
 
 model MCPConnection {
   id            String          @id @default(uuid())
+  // Phase 182 (SAAS-01b, research Q2): a connection with BOTH parents null
+  // has no transitive org — direct non-null column keeps the promise-list
+  // sound (it is an org-owned resource regardless of project/workspace
+  // attachment)
+  organizationId String         @default("00000000-0000-0000-0000-000000000000")
   projectId     String?
   workspaceId   String?
   name          String
@@ -584,11 +808,15 @@ model MCPConnection {
   updatedAt DateTime @updatedAt
 
   // Relations
+  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   project      Project?         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   workspace    Workspace?       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   catalogEntry McpCatalogEntry? @relation(fields: [catalogEntryId], references: [id], onDelete: SetNull)
   chatMCPPins  ChatMCPPin[]
 
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("mcp_connections")
 }
 
@@ -613,6 +841,10 @@ model ChatMCPPin {
 
 model WorkspaceTemplate {
   id            String   @id @default(uuid())
+  // Phase 182 (SAAS-01b): tenant-owned templates. slug @unique stays GLOBAL
+  // per D-06 (templates remain a shared catalog in air-gap; per-org templates
+  // = Parte II only if requested)
+  organizationId String  @default("00000000-0000-0000-0000-000000000000")
   slug          String   @unique   // e.g. "legal", "medical", "general"
   name          String              // display name e.g. "Legal Case"
     description   String? @db.Text
@@ -627,8 +859,12 @@ model WorkspaceTemplate {
   updatedAt     DateTime @updatedAt
 
   // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   workspaces Workspace[]
 
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("workspace_templates")
 }
 
@@ -638,6 +874,9 @@ model WorkspaceTemplate {
 
 model WorkspaceTokenUsage {
   id              String   @id @default(uuid())
+  // Phase 182 (SAAS-01b): per-org metering; high-volume table gets the
+  // composite index (research Tier A #13)
+  organizationId  String   @default("00000000-0000-0000-0000-000000000000")
   userId          String
   workspaceId     String
   model           String
@@ -647,8 +886,14 @@ model WorkspaceTokenUsage {
   totalTokens     Int      @default(0)
   createdAt       DateTime @default(now())
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@index([workspaceId, createdAt])
+  @@index([organizationId, createdAt])
   @@index([userId])
+  // Phase 182 (SAAS-01b): plain org-lookup index on the M2 column (drift-locked,
+  // see the project_access note; M2 creates both this and the composite below).
+  @@index([organizationId])
   @@map("workspace_token_usage")
 }
 
@@ -658,6 +903,8 @@ model WorkspaceTokenUsage {
 
 model Webhook {
   id          String   @id @default(uuid())
+  // Phase 182 (SAAS-01b): enterprise webhooks per-org
+  organizationId String @default("00000000-0000-0000-0000-000000000000")
   name        String
   url         String
     events      String @db.Text   // JSON array: ["document.uploaded", "chat.created", ...]
@@ -670,6 +917,11 @@ model Webhook {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("webhooks")
 }
 
@@ -679,13 +931,22 @@ model Webhook {
 
 model PushSubscription {
   id        String   @id @default(uuid())
+  // Phase 182 (SAAS-01b, research Q2): user-scoped device subscription —
+  // direct non-null org column for consistency with the ~20 sweep
+  // (symmetric with Webhook). endpoint @unique unchanged per D-06.
+  organizationId String @default("00000000-0000-0000-0000-000000000000")
   userId    String
   endpoint  String   @unique
     keys      String @db.Text   // JSON: { p256dh, auth }
 
   createdAt DateTime @default(now())
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@index([userId])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("push_subscriptions")
 }
 
@@ -699,6 +960,8 @@ model PushSubscription {
 
 model Widget {
   id              String    @id @default(uuid())
+  // Phase 182 (SAAS-01b): org resolution point for widget sessions (Pitfall 6)
+  organizationId  String    @default("00000000-0000-0000-0000-000000000000")
   name            String
     welcomeMessage  String? @db.Text
     fallbackMessage String? @db.Text   @default("I don't have an answer for that. Please contact us for more help.")
@@ -759,23 +1022,34 @@ model Widget {
   updatedAt       DateTime  @updatedAt
 
   // Relations
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   creator    User            @relation(fields: [createdBy], references: [id])
   workspaces WidgetWorkspace[]
   sessions   WidgetSession[]
   leads      WidgetLead[]
   events     WidgetEvent[]
 
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("widgets")
 }
 
 model WidgetWorkspace {
+  // Phase 182 (SAAS-01b): join table gets the direct column per the
+  // SAAS-01b letter (org transitivo via Widget/Workspace)
+  organizationId String @default("00000000-0000-0000-0000-000000000000")
   widgetId    String
   workspaceId String
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   widget    Widget    @relation(fields: [widgetId], references: [id], onDelete: Cascade)
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@id([widgetId, workspaceId])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("widget_workspaces")
 }
 
@@ -877,6 +1151,8 @@ enum WikiEditRunStatus {
 
 model OcrJob {
   id             String        @id @default(uuid())
+  // Phase 182 (SAAS-01b, D-02 promise list): org transitivo via archiveId
+  organizationId String        @default("00000000-0000-0000-0000-000000000000")
   archiveId      String
   archive        Archive       @relation(fields: [archiveId], references: [id])
   type           OcrJobType
@@ -897,8 +1173,13 @@ model OcrJob {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@index([archiveId, createdAt])
   @@index([archiveId, status])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("ocr_jobs")
 }
 
@@ -906,6 +1187,8 @@ model OcrJob {
 // pipeline. Status values: "PROCESSING" | "COMPLETED" | "FAILED".
 model ArchiveImportJob {
   id             String        @id @default(uuid())
+  // Phase 182 (SAAS-01b, D-02 promise list): org transitivo via archiveId
+  organizationId String        @default("00000000-0000-0000-0000-000000000000")
   archiveId      String
   documentId     String?
   status         String        @default("PROCESSING")
@@ -918,15 +1201,21 @@ model ArchiveImportJob {
   updatedAt      DateTime      @updatedAt
 
   // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   archive Archive @relation(fields: [archiveId], references: [id])
   user    User    @relation(fields: [createdBy], references: [id])
 
   @@index([archiveId, status])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("archive_import_jobs")
 }
 
 model SynthesisRun {
   id                  String              @id @default(uuid())
+  // Phase 182 (SAAS-01b, D-02 promise list): org transitivo via archiveId
+  organizationId      String              @default("00000000-0000-0000-0000-000000000000")
   archiveId           String
   status              SynthesisRunStatus  @default(PENDING)
   // D-10: human-readable, editable name. Non-nullable with a default of "" so
@@ -955,12 +1244,16 @@ model SynthesisRun {
   updatedAt           DateTime            @updatedAt
 
   // Relations
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   archive  Archive  @relation(fields: [archiveId], references: [id])
   creator  User     @relation("SynthesisRunCreator", fields: [createdBy], references: [id])
   approver User?    @relation("SynthesisRunApprover", fields: [approvedBy], references: [id])
 
   @@index([archiveId, createdAt])
   @@index([archiveId, status])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("synthesis_runs")
 }
 
@@ -1024,12 +1317,20 @@ model ArchiveSchemaTemplate {
 // layer in plan 68-02 (D-05). Migration is applied in plan 68-04.
 model UploadDraft {
   id                String    @id @default(uuid())
+  // Phase 182 (SAAS-01b, D-02 promise list): draft reaper org-scoping lands
+  // Phase 185; column now
+  organizationId    String    @default("00000000-0000-0000-0000-000000000000")
   uploadedBy        String
   workspaceId       String
   assignedArchiveId String?
   ragEnabled        Boolean   @default(false)
   kbEnabled         Boolean   @default(false)
   filePath          String
+  /// Phase 184 (SAAS-03, D-05): provider key. NEW rows: {organizationId}/uploads/drafts/{uuid}-{safeName};
+  /// URL-sentinel drafts carry the URL itself (isDraftStorageKey = false — never deleted).
+  /// LEGACY rows backfilled storageKey = filePath (path-as-key, M6 UPDATE — no file moves).
+  /// Nullable, NO @default — write sites set it explicitly.
+  storageKey        String?
   originalName      String
   fileSize          Int       @default(0)
   mimeType          String
@@ -1042,11 +1343,15 @@ model UploadDraft {
   updatedAt         DateTime  @updatedAt
 
   // Relations — D-01: onDelete Cascade on uploadedBy (user delete drags drafts)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   user User @relation(fields: [uploadedBy], references: [id], onDelete: Cascade)
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   archive Archive? @relation(fields: [assignedArchiveId], references: [id], onDelete: SetNull)
 
   @@index([uploadedBy, deletedAt])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("upload_drafts")
 }
 
@@ -1139,9 +1444,16 @@ model Memory {
 
 model DlpPattern {
   id           String   @id @default(uuid())
+  // Phase 182 (Tier A′): per-tenant DLP — built-in seeded patterns pin to the
+  // default org via M3 backfill; custom patterns become per-org (spec §4.8).
+  // organizationId NON-NULL with default (DlpPattern has NO deletedAt, so the
+  // composite is PLAIN — no partial where). This is the ONLY existing-unique
+  // rewrite in the phase (D-06 freeze).
+  organizationId String @default("00000000-0000-0000-0000-000000000000")
   // Stable machine name, snake_case per shared dlp.schema.ts — the conflict
-  // target for the built-in seed and the audit-log identifier.
-  name         String   @unique
+  // target for the built-in seed and the audit-log identifier. Unique scope
+  // widened to (organizationId, name) in Phase 182.
+  name         String
   // Admin-facing label ("Email", "Italian Fiscal Code").
   displayName  String
   // Regex SOURCE string (no /…/ delimiters), e.g. "[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{5}".
@@ -1157,6 +1469,12 @@ model DlpPattern {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, name])
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
   @@map("dlp_patterns")
 }
 

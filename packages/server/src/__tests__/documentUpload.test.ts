@@ -53,6 +53,12 @@ jest.mock("../services/ragOcrService", () => ({
   cleanupOcrTextFile: jest.fn(),
 }));
 
+// Phase 184 (SAAS-03): provider mock surface lives in a shared helper so the
+// hoisted jest.mock factory and the per-test handles reference the same fns.
+jest.mock("../services/storageProvider", () =>
+  require("./helpers/mockStorageProvider").mockStorageProviderModule,
+);
+
 import request from "supertest";
 import { createApp } from "../index";
 import {
@@ -66,6 +72,9 @@ import {
 } from "./helpers/mockAuth";
 import prisma from "../utils/prisma";
 import { getSetting } from "../services/systemConfigService";
+// Mock-surface handles (jest.mock factories hoist above the imports — the
+// live handles live here and are mutated per-test).
+import { mockProviderPut, mockGetStorageProvider, mockProviderDelete } from "./helpers/mockStorageProvider";
 
 const app = createApp();
 
@@ -362,5 +371,147 @@ describe("POST /api/documents/upload — filename sanitization (quick 260808-vzm
     expect(res.status).toBe(201);
     const createArgs = (prisma.document.create as jest.Mock).mock.calls[0][0];
     expect(createArgs.data.name).toBe("My-Report-final.txt");
+  });
+});
+
+// =========================================================================
+// Phase 184 (SAAS-03) — seam 1: upload writes storageKey (row's-org rule,
+// T-184-01), provider.put AFTER the row lands, tmp unlinked post-put
+// (T-184-06 ingress contract), forwardToCollector receives the provider
+// options { storageKey, organizationId }.
+// =========================================================================
+describe("POST /api/documents/upload — provider seam (Phase 184)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockProviderPut.mockReset().mockResolvedValue({ key: "k", size: 5 });
+    mockProviderDelete.mockReset().mockResolvedValue(undefined);
+    mockGetStorageProvider.mockReset().mockResolvedValue({
+      put: mockProviderPut,
+      get: jest.fn(),
+      getReadStream: jest.fn(),
+      delete: mockProviderDelete,
+      exists: jest.fn(),
+    });
+    (prisma.user.findUnique as jest.Mock).mockImplementation((args: any) => {
+      if (args?.where?.id === adminWithWorkspaceAccess.id) return Promise.resolve(adminWithWorkspaceAccess);
+      return Promise.resolve(null);
+    });
+    // Workspace fixture carries organizationId (Phase 182 column) — the
+    // row's-org rule derives the key prefix from IT, never client input.
+    (prisma.workspace.findFirst as jest.Mock).mockResolvedValue({
+      ...workspaceFixture(true),
+      organizationId: "22222222-2222-4222-8222-222222222222",
+    });
+    // Admin with workspace access — the D-04 gate passes without the
+    // ALLOW_NON_ADMIN_UPLOAD toggle
+    (prisma.workspaceAccess.findFirst as jest.Mock).mockImplementation((args: any) => {
+      if (args?.where?.userId === adminWithWorkspaceAccess.id && args?.where?.workspaceId === WS_ID) {
+        return Promise.resolve({ userId: adminWithWorkspaceAccess.id, workspaceId: WS_ID });
+      }
+      return Promise.resolve(null);
+    });
+    (prisma.projectAccess.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.document.create as jest.Mock).mockImplementation((args: any) =>
+      Promise.resolve({ id: "doc-new", workspaceId: WS_ID, ...args.data }),
+    );
+  });
+
+  it("writes storageKey with the workspace-org prefix and uuid-safeName shape (row's-org rule, T-184-01)", async () => {
+    const token = generateTestToken(adminWithWorkspaceAccess.id);
+    const res = await request(app)
+      .post("/api/documents/upload")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("file", Buffer.from("hello"), { filename: "report.txt", contentType: "text/plain" })
+      .field("workspaceId", WS_ID);
+
+    expect(res.status).toBe(201);
+    const createArgs = (prisma.document.create as jest.Mock).mock.calls[0][0];
+    expect(createArgs.data.storageKey).toMatch(
+      /^22222222-2222-4222-8222-222222222222\/uploads\/[0-9a-f-]{36}-report\.txt$/,
+    );
+    // filePath stays (additive policy, D-05)
+    expect(createArgs.data.filePath).toBeDefined();
+  });
+
+  it("calls provider.put with (req.file.path, storageKey) AFTER the document.create row", async () => {
+    const token = generateTestToken(adminWithWorkspaceAccess.id);
+    await request(app)
+      .post("/api/documents/upload")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("file", Buffer.from("hello"), { filename: "report.txt", contentType: "text/plain" })
+      .field("workspaceId", WS_ID);
+
+    expect(mockProviderPut).toHaveBeenCalledTimes(1);
+    expect(mockProviderPut.mock.calls[0][1]).toBe(
+      (prisma.document.create as jest.Mock).mock.calls[0][0].data.storageKey,
+    );
+    // Resolution went through the cascade with the row's org (D-01)
+    expect(mockGetStorageProvider).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222");
+  });
+
+  it("provider.put is awaited AFTER the row create (put-after-row ordering)", async () => {
+    // The put mock must see its call AFTER the create call — probe via mock
+    // invocation order.
+    const token = generateTestToken(adminWithWorkspaceAccess.id);
+    await request(app)
+      .post("/api/documents/upload")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("file", Buffer.from("hello"), { filename: "order.txt", contentType: "text/plain" })
+      .field("workspaceId", WS_ID);
+
+    const createInvoked = (prisma.document.create as jest.Mock).mock.invocationCallOrder[0]!;
+    const putInvoked = mockProviderPut.mock.invocationCallOrder[0]!;
+    expect(createInvoked).toBeLessThan(putInvoked);
+  });
+
+  it("mid-abort probe: put throws AFTER the row create → 500, row stays pre-forward (recoverable), tmp unlink attempted (T-184-06)", async () => {
+    mockProviderPut.mockRejectedValueOnce(new Error("provider put interrupted"));
+    const unlinkSpy = jest.spyOn(require("fs"), "unlinkSync").mockImplementation(() => {});
+
+    try {
+      const token = generateTestToken(adminWithWorkspaceAccess.id);
+      const res = await request(app)
+        .post("/api/documents/upload")
+        .set("Authorization", `Bearer ${token}`)
+        .attach("file", Buffer.from("hello"), { filename: "abort.txt", contentType: "text/plain" })
+        .field("workspaceId", WS_ID);
+
+      expect(res.status).toBe(500);
+      // Row create happened exactly once (the recoverable pending row)
+      expect(prisma.document.create).toHaveBeenCalledTimes(1);
+      // forwardToCollector was NOT invoked — the row remains pre-forward
+      // (its status stays "pending", never corrupt/partially-written).
+      // forwardToCollector's first prisma touch is document.update(status=processing);
+      // the abort happened before forward, so no processing update is recorded.
+      const updateCalls = (prisma.document.update as jest.Mock).mock.calls;
+      expect(
+        updateCalls.some((call: unknown[]) => JSON.stringify(call).includes('"processing"')),
+      ).toBe(false);
+      // Ingress cleanup ran for the aborted tmp (best-effort unlink in the
+      // put-catch arm) — no dangling tmp beyond WR-01/WR-02.
+      expect(unlinkSpy).toHaveBeenCalled();
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
+
+  it("unlinks the multer tmp AFTER a successful put (ingress buffer, not storage)", async () => {
+    const unlinkSpy = jest.spyOn(require("fs"), "unlinkSync").mockImplementation(() => {});
+    try {
+      const token = generateTestToken(adminWithWorkspaceAccess.id);
+      const res = await request(app)
+        .post("/api/documents/upload")
+        .set("Authorization", `Bearer ${token}`)
+        .attach("file", Buffer.from("hello"), { filename: "tmpunlink.txt", contentType: "text/plain" })
+        .field("workspaceId", WS_ID);
+
+      expect(res.status).toBe(201);
+      // The tmp unlink targeted req.file.path AFTER put
+      const putInvoked = mockProviderPut.mock.invocationCallOrder[0]!;
+      const unlinkInvoked = unlinkSpy.mock.invocationCallOrder[0]!;
+      expect(putInvoked).toBeLessThan(unlinkInvoked);
+    } finally {
+      unlinkSpy.mockRestore();
+    }
   });
 });

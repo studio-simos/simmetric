@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireWorkspaceAccess } from "../middleware/rbac";
 import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
@@ -12,6 +13,10 @@ import { parseMetadata } from "../utils/parseMetadata";
 
 const router = Router();
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 /**
  * @openapi

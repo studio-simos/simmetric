@@ -6,10 +6,16 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import bcrypt from "bcryptjs";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import { invalidateAuthCache } from "../services/authService";
 import { updateUserSchema } from "@simmetric-chat/shared";
 import prisma from "../utils/prisma";
+
+// Phase 185 (T-185-10, Pitfall-2 grep-gate): the findUnique site(s) in this
+// file target User — a GLOBAL identity model per Phase-182 D-01 (identity-
+// pure, no org column). Not in TENANT_READ_MODELS — exempt from the
+// org-assertion gate by design.
 import { avatarUpload, resizeAvatar, deleteOldAvatars, removeAvatarFiles } from "../services/avatarService";
 import { isAdmin } from "../utils/auth";
 
@@ -18,7 +24,7 @@ const router = Router();
 const SALT_ROUNDS = 12;
 
 // GET /api/users — list all users (admin-only)
-router.get("/", authMiddleware, requireAdmin, async (_req, res) => {
+router.get("/", authMiddleware, tenantContextMiddleware, requireAdmin, async (_req, res) => {
   try {
     const users = await prisma.user.findMany({
       select: {
@@ -75,6 +81,11 @@ router.get("/", authMiddleware, requireAdmin, async (_req, res) => {
 });
 
 // POST /api/users/:id/avatar — upload avatar (admin or self)
+// Phase 185 D-02 EXCEPTION (auth tier, not tenant tier): avatar-self stays
+// OUTSIDE tenant scoping — Phase 184 avatar org resolution already reads the
+// live OrganizationMember row directly (org prefix from the membership row);
+// no tenant slot, org is never taken from request input. Inline comment per
+// the Plan-02 exception-inventory doctrine.
 router.post("/:id/avatar", authMiddleware, (req: Request, res: Response, next: NextFunction) => {
   avatarUpload.single("avatar")(req, res, (err: unknown) => {
     if (err) {
@@ -103,14 +114,18 @@ router.post("/:id/avatar", authMiddleware, (req: Request, res: Response, next: N
   try {
     const userId = targetId;
 
-    // Look up current avatar path for cleanup
+    // Look up current avatar path + the user's org for provider keys.
+    // User is identity-pure (Phase 182 D-01 — no organizationId column), so
+    // the org resolves from the LIVE OrganizationMember row; the D-03
+    // row's-org rule keys the prefix on this row, never on client input.
     const currentUser = await prisma.user.findUnique({
       where: { id: userId },
-      select: { avatar: true },
+      select: { avatar: true, organizationMemberships: { where: { deletedAt: null }, select: { organizationId: true }, take: 1 } },
     });
+    const organizationId = currentUser?.organizationMemberships[0]?.organizationId;
 
-    // Resize avatar to multiple sizes
-    const primaryPath = await resizeAvatar(req.file.path, userId);
+    // Resize avatar to multiple sizes and put through the provider
+    const primaryPath = await resizeAvatar(req.file.path, userId, organizationId);
 
     // Delete old avatar files if they exist
     if (currentUser?.avatar) {
@@ -131,6 +146,8 @@ router.post("/:id/avatar", authMiddleware, (req: Request, res: Response, next: N
 });
 
 // DELETE /api/users/:id/avatar — remove avatar (admin or self)
+// Phase 185 D-02 EXCEPTION (auth tier, not tenant tier): avatar-self stays
+// OUTSIDE tenant scoping (same doctrine as the avatar upload above).
 router.delete("/:id/avatar", authMiddleware, async (req, res) => {
   const targetId = req.params.id as string;
   const requesterId = req.userId!;
@@ -153,7 +170,8 @@ router.delete("/:id/avatar", authMiddleware, async (req, res) => {
       return;
     }
 
-    // Delete avatar files from disk
+    // Delete avatar files (provider keys for new-layout URLs, fs arm for
+    // legacy physical files — D-03)
     await removeAvatarFiles(user.avatar);
 
     // Clear avatar field in database
@@ -170,7 +188,7 @@ router.delete("/:id/avatar", authMiddleware, async (req, res) => {
 });
 
 // GET /api/users/:id — get a single user (admin or self)
-router.get("/:id", authMiddleware, async (req, res) => {
+router.get("/:id", authMiddleware, tenantContextMiddleware, async (req, res) => {
   const targetId = req.params.id as string;
   const requesterId = req.userId!;
   const admin = isAdmin(req.user);
@@ -232,12 +250,12 @@ router.get("/:id", authMiddleware, async (req, res) => {
 });
 
 // PUT /api/users/:id — update user (admin or self, with restrictions)
-router.put("/:id", authMiddleware, async (req, res) => {
+router.put("/:id", authMiddleware, tenantContextMiddleware, async (req, res) => {
   await updateUserHandler(req, res);
 });
 
 // PATCH /api/users/:id — partial update (same handler)
-router.patch("/:id", authMiddleware, async (req, res) => {
+router.patch("/:id", authMiddleware, tenantContextMiddleware, async (req, res) => {
   await updateUserHandler(req, res);
 });
 
@@ -356,7 +374,7 @@ async function updateUserHandler(req: Request, res: Response) {
 }
 
 // DELETE /api/users/:id — delete user (admin-only)
-router.delete("/:id", authMiddleware, requireAdmin, async (req, res) => {
+router.delete("/:id", authMiddleware, tenantContextMiddleware, requireAdmin, async (req, res) => {
   const targetId = req.params.id as string;
 
   // Prevent admin from deleting themselves

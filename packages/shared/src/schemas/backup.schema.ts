@@ -133,7 +133,8 @@ export const createBackupDestinationSchema = z
       message: "Config does not match the expected schema for the selected destination type",
     },
   );
-type CreateBackupDestinationInput = z.infer<typeof createBackupDestinationSchema>;
+/** @enterpriseConsumed — paired inferred type (enterprise backupDestinations.ts). */
+export type CreateBackupDestinationInput = z.infer<typeof createBackupDestinationSchema>;
 
 export const updateBackupDestinationSchema = z
   .object({
@@ -143,14 +144,16 @@ export const updateBackupDestinationSchema = z
   .refine((data: Record<string, unknown>) => Object.keys(data).length > 0, {
     message: "At least one field must be provided for update",
   });
-type UpdateBackupDestinationInput = z.infer<typeof updateBackupDestinationSchema>;
+/** @enterpriseConsumed — paired inferred type (enterprise backupDestinations.ts). */
+export type UpdateBackupDestinationInput = z.infer<typeof updateBackupDestinationSchema>;
 
 // Nota: type NON è modificabile in update — il tipo di destinazione è immutabile.
 
 export const backupDestinationIdParamSchema = z.object({
   id: z.string().uuid("Invalid backup destination ID"),
 });
-type BackupDestinationIdParam = z.infer<typeof backupDestinationIdParamSchema>;
+/** @enterpriseConsumed — paired inferred type (enterprise backupDestinations.ts). */
+export type BackupDestinationIdParam = z.infer<typeof backupDestinationIdParamSchema>;
 
 // ===== Restore Schemas =====
 // Phase 55: Zod validation for the restore workflow.
@@ -168,14 +171,19 @@ type RestoreSelective = z.infer<typeof restoreSelectiveSchema>;
  * Request body for POST /api/backups/restore/:logId (D-09, D-10).
  * Requires the literal string "RESTORE" in the `confirmation` field —
  * case-sensitive, exact match. A missing or wrong value triggers 400.
+ *
+ * @enterpriseConsumed — RUNTIME-imported by the private enterprise repo
+ * (routes/restore.ts safeParse). knip cannot see the private repo;
+ * this tag is the allowlist mechanism (see knip.json `tags`).
  */
-const restoreRequestSchema = z.object({
+export const restoreRequestSchema = z.object({
   selective: restoreSelectiveSchema.default("complete"),
   confirmation: z.literal("RESTORE", {
     error: 'Confirmation required. Send confirmation: "RESTORE" to proceed.',
   }),
 });
-type RestoreRequestInput = z.infer<typeof restoreRequestSchema>;
+/** @enterpriseConsumed — paired inferred type of restoreRequestSchema. */
+export type RestoreRequestInput = z.infer<typeof restoreRequestSchema>;
 
 /**
  * Response from GET /api/backups/restore/:logId/dry-run (D-11, D-12).
@@ -213,11 +221,15 @@ type RestoreResponse = z.infer<typeof restoreResponseSchema>;
 /**
  * Path parameter validation for any route that operates on a BackupLog UUID.
  * Used by GET /api/backups, /dry-run, and the POST /restore endpoints.
+ *
+ * @enterpriseConsumed — RUNTIME-imported by the private enterprise repo
+ * (routes/restore.ts safeParse). knip cannot see the private repo.
  */
-const backupLogIdParamSchema = z.object({
+export const backupLogIdParamSchema = z.object({
   logId: z.string().uuid("Invalid backup log ID"),
 });
-type BackupLogIdParam = z.infer<typeof backupLogIdParamSchema>;
+/** @enterpriseConsumed — paired inferred type of backupLogIdParamSchema. */
+export type BackupLogIdParam = z.infer<typeof backupLogIdParamSchema>;
 
 // ===== Backup Log List Query (Phase 57-03) =====
 /**
@@ -243,7 +255,12 @@ const backupLogStatusSchema = z.enum([
   "restored",
 ]);
 
-const backupLogListQuerySchema = z.object({
+/**
+ * @enterpriseConsumed — RUNTIME-imported by the private enterprise repo
+ * (routes/restore.ts backupLogListQuerySchema). knip cannot see the
+ * private repo. Query params for GET /api/backups (Phase 57-03).
+ */
+export const backupLogListQuerySchema = z.object({
   status: backupLogStatusSchema.optional(),
   destinationId: z.string().uuid().optional(),
   jobId: z.string().uuid().optional(),
@@ -253,7 +270,8 @@ const backupLogListQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
   sort: z.string().optional(),
 });
-type BackupLogListQuery = z.infer<typeof backupLogListQuerySchema>;
+/** @enterpriseConsumed — paired inferred type of backupLogListQuerySchema. */
+export type BackupLogListQuery = z.infer<typeof backupLogListQuerySchema>;
 
 /**
  * Paginated response envelope for GET /api/backups.

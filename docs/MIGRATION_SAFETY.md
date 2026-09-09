@@ -82,6 +82,36 @@ the default expression is not literal-safe. The two-step pattern defers
 deployed and backfilled. This is the only safe way to add a required
 column to a non-empty table.
 
+### Comment-vs-SQL Discrepancy — Phase 182 Migrations M1–M4 (WR-05, accepted debt)
+
+The header comments of two APPLIED Phase 182 migrations claim safety
+mitigations the SQL does not contain. Recorded here so future operators and
+audit reviewers are not misled by the headers (182-REVIEW.md WR-05, disposition
+2026-09-05: accept as debt, document — do NOT touch the files):
+
+- `20260904130000_m2_add_org_columns/migration.sql` (header lines 6–10) claims
+  per-table "lock-timeout attribution" and that the FK add "defers the
+  full-table FK validation scan to M4". Neither is implemented: M1–M4 contain
+  NO `SET LOCAL lock_timeout` (or `statement_timeout`) — every `ALTER TABLE` in
+  M2/M4 takes an unbounded `ACCESS EXCLUSIVE` lock — and the FK constraints are
+  plain `ADD CONSTRAINT ... FOREIGN KEY`, which validates existing rows
+  immediately at M2 time (only `NOT VALID` + a later `VALIDATE CONSTRAINT`
+  would defer the scan).
+- `20260904150000_m4_org_not_null_defaults/migration.sql` (header lines 11–15)
+  describes the 26 `SET NOT NULL` statements as scan-bounded; each does a
+  full-table validation scan (no CHECK constraint exists for Postgres to
+  short-circuit it).
+
+Why the headers are left as-is: M1–M4 are APPLIED on every deployed database —
+editing `migration.sql` post-apply breaks `prisma migrate deploy` via checksum
+drift (precedent: `.planning/debug/migration-checksum-drift.md`). The SQL
+itself is correct and classified additive-only by `pnpm audit:migrations` (5/5
+additive, see `docs/MIGRATION_AUDIT.md`); the single-node, one-time air-gap
+upgrade traffic profile was judged acceptable as-is. Future migrations that
+need bounded locks should set `SET LOCAL lock_timeout` and use
+`NOT VALID`/`VALIDATE CONSTRAINT` for FK additions on populated tables — and
+only claim them in comments once the SQL implements them.
+
 ## When Destructive is OK
 
 Destructive Prisma migrations are acceptable only in the 4 cases below. All

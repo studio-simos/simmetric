@@ -5,13 +5,14 @@
 
 import { Router } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import { getArchiveConfig, setArchiveConfig, deleteArchiveConfig } from "../services/archiveConfigService";
 import { archiveConfigSchema } from "@simmetric-chat/shared";
 
 const router = Router();
 
-router.get("/:archiveId/config", authMiddleware, requirePermission("archive:read"), async (req, res) => {
+router.get("/:archiveId/config", authMiddleware, tenantContextMiddleware, requirePermission("archive:read"), async (req, res) => {
   try {
     const archiveId = req.params.archiveId as string;
     const config = await getArchiveConfig(archiveId);
@@ -23,7 +24,7 @@ router.get("/:archiveId/config", authMiddleware, requirePermission("archive:read
   }
 });
 
-router.put("/:archiveId/config", authMiddleware, requirePermission("archive:write"), async (req, res) => {
+router.put("/:archiveId/config", authMiddleware, tenantContextMiddleware, requirePermission("archive:write"), async (req, res) => {
   try {
     const parsed = archiveConfigSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -38,7 +39,7 @@ router.put("/:archiveId/config", authMiddleware, requirePermission("archive:writ
   }
 });
 
-router.delete("/:archiveId/config", authMiddleware, requirePermission("archive:delete"), async (req, res) => {
+router.delete("/:archiveId/config", authMiddleware, tenantContextMiddleware, requirePermission("archive:delete"), async (req, res) => {
   try {
     const archiveId = req.params.archiveId as string;
     await deleteArchiveConfig(archiveId);

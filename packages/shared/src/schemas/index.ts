@@ -26,6 +26,10 @@ export { chatRetentionSchema } from "./chatRetention.schema";
 
 export { createRoleSchema, updateRoleSchema, grantWorkspaceAccessSchema, roleIdParamSchema } from "./role.schema";
 
+// Phase 182 (SAAS-01d/D-04) — org membership contracts (roleInOrg tier above the 31-permission RBAC).
+export { roleInOrgSchema, createOrganizationMemberSchema } from "./organization.schema";
+export type { RoleInOrgInput, CreateOrganizationMemberInput } from "./organization.schema";
+
 
 
 export { licensePayloadSchema } from "./license.schema";
@@ -112,6 +116,75 @@ export type { EnterprisePlugin, MinimalExpressApp, MinimalLogger } from "./plugi
 // Structural interfaces (no express/@prisma/client import — shared zero-dep rule).
 export { API_VERSION } from "./plugin.schema";
 export type { PluginContext, MinimalPrismaClient, PluginScheduler, AuditLog, AuditLogEvent, ConfigKeyValidator } from "./plugin.schema";
+// Phase 186 (SAAS-05) — contract v2: SaaS plugin seam + minimal Part I hook
+// interfaces (D-01/D-03/D-04/D-06/D-07).
+export type {
+  SaaSPluginContext,
+  SaaSPlugin,
+  BillingProvider,
+  QuotaEnforcer,
+  PlanResolver,
+  TenantProvisioner,
+} from "./plugin.schema";
+
+// Phase 146 (EPA-06) — backup/restore contracts for the Settings Backup page.
+// De-exported by the Phase 180-01 dead-code sweep (4fd76c5f) because knip
+// cannot see the private enterprise sibling repo; restored (gap G-186-01,
+// Plan 06) for the enterprise backup routes (backupDestinations.ts,
+// backupJobs.ts, restore.ts), which import the RUNTIME names listed below.
+// Tag format follows the Phase 140 block: one JSDoc tag per export
+// statement (knip's tag extraction reads the comment directly above each
+// export — a block-level tag above the FIRST statement does not cover the
+// statements that follow).
+/**
+ * @enterpriseConsumed — RUNTIME-imported by the private enterprise repo
+ * (routes/backupDestinations.ts, routes/backupJobs.ts, routes/restore.ts
+ * safeParse). knip cannot see the private repo. Consumed subset: the 10
+ * runtime schema names below; frequencySchema/Frequency and the Input types
+ * ride along per the schema-export-pairs-with-its-type convention.
+ */
+export {
+  createBackupDestinationSchema,
+  updateBackupDestinationSchema,
+  backupDestinationIdParamSchema,
+  restoreRequestSchema,
+  backupLogIdParamSchema,
+  backupLogListQuerySchema,
+} from "./backup.schema";
+/**
+ * @enterpriseConsumed — inferred Input types of the schemas above (shared
+ * repo convention: a schema export pairs with its inferred type).
+ */
+export type {
+  CreateBackupDestinationInput,
+  UpdateBackupDestinationInput,
+  BackupDestinationIdParam,
+  RestoreRequestInput,
+  BackupLogIdParam,
+  BackupLogListQuery,
+} from "./backup.schema";
+/**
+ * @enterpriseConsumed — RUNTIME-imported by the private enterprise repo
+ * (routes/backupJobs.ts safeParse): the 4 backup-job CRUD schemas.
+ */
+export {
+  frequencySchema,
+  createBackupJobSchema,
+  updateBackupJobSchema,
+  toggleBackupJobSchema,
+  backupJobIdParamSchema,
+} from "./backupJob.schema";
+/**
+ * @enterpriseConsumed — inferred types of the backup-job schemas above
+ * (Frequency + 4 Input types, shared repo convention).
+ */
+export type {
+  Frequency,
+  CreateBackupJobInput,
+  UpdateBackupJobInput,
+  ToggleBackupJobInput,
+  BackupJobIdParam,
+} from "./backupJob.schema";
 // Quick 260829-ony — DLP pattern configuration contract (DLP_FEATURES_SPEC §2.3).
 export { createDlpPatternSchema, updateDlpPatternSchema, testPatternSchema } from "./dlp.schema";
 export type { DlpPatternResponse } from "./dlp.schema";

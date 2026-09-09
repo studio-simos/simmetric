@@ -48,11 +48,10 @@ import { SettingsTemplates } from "./SettingsTemplates";
 import { SettingsSecurityNonAdminUpload } from "./SettingsSecurityNonAdminUpload";
 import SettingsPushNotifications from "./SettingsPushNotifications";
 import { SETTINGS_TAB_PERMISSIONS } from "@simmetric-chat/shared";
-import { useViewTransition } from "./ui/view-transition";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils"
-import { Menu, X } from "lucide-react";
+import { ChevronRight, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -172,6 +171,23 @@ function settingsSectionAnchor(id: string): string {
   return `settings-section-${id}`;
 }
 
+/** The menu voice currently open as a detail page. */
+interface DetailVoice {
+  tab: Tab;
+  /** i18n label key of the open voice (group header OR sub-section). */
+  labelKey: string;
+  /** Sub-section id when a sub-menu voice is open, null for a group page. */
+  sectionId: string | null;
+}
+
+/**
+ * Fallback i18n label key for a tab key (kept in sync with TAB_KEYS).
+ * Used when a voice is opened before SECTION_LABEL lookup would fail.
+ */
+function labelKeyOf(tab: Tab): string {
+  return TAB_KEYS.find((t) => t.key === tab)?.labelKey ?? "settings.pageTitle";
+}
+
 const TAB_KEYS: { key: Tab; labelKey: string }[] = [
   { key: "profile", labelKey: "settings.tabs.profile" },
   { key: "llm", labelKey: "settings.tabs.llmProviders" },
@@ -258,208 +274,43 @@ function SubSection({
   );
 }
 
-export default function SettingsPage() {
+/**
+ * Animated wrapper for the settings detail page (master-detail transition).
+ *
+ * Keyed by the open voice: changing the key remounts the element, which
+ * restarts the `settings-slide-page` CSS animation (slide-in from the
+ * right, ease-out) — no transition-state bookkeeping, correct on every
+ * browser. Reduced-motion users get the plain swap (media query in
+ * index.css).
+ */
+function SettingsSlide({ slideKey, children }: { slideKey: string; children: ReactNode }) {
+  return (
+    <div
+      key={slideKey}
+      className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden settings-scroll settings-slide-page"
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Detail page for a top-level tab (group header voice): every visible
+ * sub-section of that tab, rendered as labelled `<SubSection>` blocks —
+ * the same markup the old tab column rendered. One page = one menu voice.
+ */
+function GroupPage({ tab }: { tab: Tab }) {
   const { t } = useTranslation();
-  // Phase 147 (EPA-11 — D-08, Plan 02): enterprise gate for the backups
-  // sub-section. `enterpriseInstalled` is the FIRST gate (plugin present);
-  // `tier === "enterprise"` is the tier gate. The existing
-  // `useFeature("backup_enabled")` checks INSIDE SettingsBackups (and its
-  // children BackupDestinations / BackupJobs / BackupLogs) are the SECOND
-  // gate (D-08 — the feature flag may be off even with enterprise installed).
+  const me = useMe();
+  const user = me.data;
   const { enterpriseInstalled } = useEnterpriseModulesContext();
   const tier = useLicenseTier();
-  usePageMeta(t("settings.pageTitle"), [{ label: t("breadcrumb.home"), path: "/" }, { label: t("breadcrumb.settings") }]);
-  const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState<Tab>("profile");
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  // Sub-section currently highlighted in the menu / scrolled to. `null` means
-  // no specific section is targeted (the group header is the active voice).
-  const [activeSection, setActiveSection] = useState<string | null>(null);
-  // Section id awaiting a scroll-to once its tab content is visible. Cleared
-  // after the scroll runs (see the effect below).
-  const [pendingSection, setPendingSection] = useState<string | null>(null);
-  const { isLoading, error: queryError, refetch } = useSettings();
-  const { data: user } = useMe();
-  const logoutMutation = useLogout();
-  const permissions = user?.permissions ?? [];
-  const isMobile = useIsMobile();
+  const has = (perm: string) => (user?.permissions ?? []).includes(perm);
+  const hasAny = (perms: string[]) => perms.some((p) => (user?.permissions ?? []).includes(p));
 
-  // Restore last settings tab on mount, or honor ?tab= deep link.
-  // Priority: URL ?tab= (mapped) > localStorage lastSettingsSection (mapped) > default "general".
-  useEffect(() => {
-    // Legacy deep-link: widget management moved to its own top-level page.
-    if (searchParams.get("tab") === "widgets") {
-      navigate("/widgets", { replace: true });
-      return;
-    }
-    const sectionParam = searchParams.get("section");
-    const mapped = mapLegacyTab(searchParams.get("tab"));
-    if (mapped) {
-      setActiveTab(mapped);
-      // Normalize the persisted value to the canonical key.
-      localStorage.setItem("lastSettingsSection", mapped);
-      // Honor a `?section=` deep link: scroll to it once the tab is visible.
-      if (sectionParam) setPendingSection(sectionParam);
-      return;
-    }
-    const lastSection = localStorage.getItem("lastSettingsSection");
-    const lastMapped = mapLegacyTab(lastSection);
-    if (lastMapped) setActiveTab(lastMapped);
-  }, [searchParams]);
-
-  // Persist active tab (canonical key) whenever it changes.
-  useEffect(() => {
-    if (activeTab) {
-      localStorage.setItem("lastSettingsSection", activeTab);
-    }
-  }, [activeTab]);
-
-  // Filter tabs based on user permissions (OR on sub-section perms).
-  const visibleTabs = TAB_KEYS.filter((tab) => {
-    const requiredPerms = SETTINGS_TAB_PERMISSIONS[tab.key];
-    if (!requiredPerms || requiredPerms.length === 0) return true;
-    return requiredPerms.some((p: string) => permissions.includes(p));
-  });
-
-  // Reset to first visible tab if the current tab is no longer visible.
-  useEffect(() => {
-    if (!user) return; // Don't reset until user permissions are loaded
-    if (visibleTabs.length > 0 && !visibleTabs.find((t) => t.key === activeTab)) {
-      setActiveTab(visibleTabs[0]!.key);
-    }
-  }, [visibleTabs, activeTab, user]);
-
-  const error = queryError ? queryError.message : null;
-  const errorStatus = queryError instanceof ApiError ? queryError.status : null;
-
-  const triggerAuthRedirect = useEffectEvent(() => {
-    logoutMutation.mutate();
-    navigate("/");
-  });
-
-  useEffect(() => {
-    if (errorStatus === 401 || errorStatus === 403) {
-      const timer = setTimeout(triggerAuthRedirect, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [errorStatus]);
-
-  const handleRetry = () => {
-    refetch().catch(() => showError(t("settings.errorLoadSettings")));
-  };
-
-  // Wrap tab switch in a CSS View Transition for smooth cross-fade
-  // (graceful no-op in browsers without view-transition support).
-  const transitionTo = useViewTransition();
-
-  // Group header click: switch page (tab), no specific section targeted.
-  const handleSelectTab = (tabKey: string) => {
-    transitionTo(() => {
-      setActiveTab(tabKey as Tab);
-      setActiveSection(null);
-    });
-  };
-
-  // Sub-menu voice click: switch page AND scroll to the matching section.
-  const handleSelectSection = (tabKey: string, sectionId: string) => {
-    transitionTo(() => {
-      setActiveTab(tabKey as Tab);
-      setPendingSection(sectionId);
-    });
-  };
-
-  // Scroll to the pending section once its tab content is visible. Runs after
-  // the tab switch renders (rAF waits one frame for layout to settle), then
-  // clears the pending id. Cancelled if a newer section is requested first.
-  useEffect(() => {
-    if (!pendingSection) return;
-    const id = pendingSection;
-    const raf = requestAnimationFrame(() => {
-      const el = document.getElementById(settingsSectionAnchor(id));
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
-        setActiveSection(id);
-      }
-      setPendingSection(null);
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [pendingSection]);
-
-  // Per-sub-section permission gates (OR semantics, same as tab visibility).
-  const has = (perm: string) => permissions.includes(perm);
-  const hasAny = (perms: string[]) => perms.some((p) => permissions.includes(p));
-
-  // Sub-sections per tab with their permission gates. Single source of truth
-  // shared by both the `<SettingsMenu>` sub-menu voices and the `<SubSection>`
-  // rendering below — so a voice appears in the menu iff its section renders.
-  const sectionsFor = (tab: Tab): { id: SectionId; show: boolean }[] => {
-    switch (tab) {
-      case "profile":
-        return [
-          { id: "personalInfo", show: true },
-          { id: "customInstructions", show: true },
-          { id: "languages", show: has("admin:settings") },
-        ];
-      case "llm":
-        return [
-          { id: "providers", show: hasAny(["provider:read", "provider:write"]) },
-          { id: "llmEmbedding", show: has("admin:settings") },
-        ];
-      case "appearance":
-        return [{ id: "appearance", show: true }];
-      case "security":
-        return [
-          { id: "roles", show: has("admin:roles") },
-          { id: "users", show: has("admin:users") },
-          // Phase 70 D-11 / Pitfall 6: non-admin upload toggle visible to
-          // a settings-only admin. The Security tab itself is visible
-          // because SETTINGS_TAB_PERMISSIONS.security includes admin:settings.
-          { id: "nonAdminUpload", show: has("admin:settings") },
-          { id: "notifications", show: true },
-        ];
-      case "advanced":
-        return [
-          { id: "vectorDB", show: has("admin:settings") },
-          { id: "apiKeys", show: has("admin:settings") },
-          { id: "mcpConnections", show: has("admin:settings") },
-          { id: "maintenance", show: has("admin:settings") },
-          {
-            id: "backups",
-            show: hasAny([
-              "backup:destination:read",
-              "backup:job:read",
-              "backup:log:read",
-            ]),
-          },
-          { id: "dlp", show: has("admin:settings") },
-          { id: "webSearch", show: has("admin:settings") },
-          { id: "agentWatchdog", show: has("admin:settings") },
-          { id: "reranker", show: has("admin:settings") },
-          { id: "vapid", show: has("admin:settings") },
-          { id: "filters", show: has("filters:manage") },
-          { id: "dlpAudit", show: has("admin:settings") },
-          { id: "templates", show: has("admin:settings") },
-          { id: "chatData", show: true },
-          { id: "resetDb", show: has("admin:settings") },
-        ];
-    }
-  };
-
-  // Build the two-level menu: one group per visible tab, each with its
-  // permission-filtered sub-sections as always-expanded sub-menu voices.
-  const menuGroups: SettingsMenuGroup[] = visibleTabs.map((tab) => ({
-    key: tab.key,
-    labelKey: tab.labelKey,
-    sections: sectionsFor(tab.key)
-      .filter((s) => s.show)
-      .map((s) => ({ id: s.id, labelKey: SECTION_LABEL[s.id] })),
-  }));
-
-  const tabContent = (
-    <>
-      {/* ── Profilo ── */}
-      <TabsContent value="profile" className="mt-0">
+  switch (tab) {
+    case "profile":
+      return (
         <div className="space-y-8">
           <SubSection id="personalInfo" label={t("settings.subSections.personalInfo")} show>
             <SettingsProfilePersonal />
@@ -471,10 +322,9 @@ export default function SettingsPage() {
             <SettingsGeneralLanguages />
           </SubSection>
         </div>
-      </TabsContent>
-
-      {/* ── LLM Providers ── */}
-      <TabsContent value="llm" className="mt-0">
+      );
+    case "llm":
+      return (
         <div className="space-y-8">
           <SubSection id="providers" label={t("settings.subSections.providers")} show={hasAny(["provider:read", "provider:write"])}>
             <SettingsProviders />
@@ -485,19 +335,13 @@ export default function SettingsPage() {
             <SettingsSynthesis />
           </SubSection>
         </div>
-      </TabsContent>
-
-      {/* ── Appearance ── */}
-      <TabsContent value="appearance" className="mt-0">
-        <div className="space-y-8">
-          <SubSection id="appearance" label={t("settings.subSections.appearance")} show>
-            <SettingsAppearance />
-          </SubSection>
-        </div>
-      </TabsContent>
-
-      {/* ── Sicurezza ── */}
-      <TabsContent value="security" className="mt-0">
+      );
+    case "appearance":
+      // The appearance tab is a single sub-section: its group page renders
+      // it directly, so a group-header click never lands on a blank page.
+      return <SettingsAppearance />;
+    case "security":
+      return (
         <div className="space-y-8">
           <SubSection id="roles" label={t("settings.subSections.roles")} show={has("admin:roles")}>
             <SettingsRoles />
@@ -513,10 +357,9 @@ export default function SettingsPage() {
             <SettingsPushNotifications />
           </SubSection>
         </div>
-      </TabsContent>
-
-      {/* ── Avanzate ── */}
-      <TabsContent value="advanced" className="mt-0">
+      );
+    case "advanced":
+      return (
         <div className="space-y-8">
           <SubSection id="vectorDB" label={t("settings.subSections.vectorDB")} show={has("admin:settings")}>
             <SettingsVectorDB />
@@ -589,17 +432,314 @@ export default function SettingsPage() {
             <SettingsGeneralResetDb />
           </SubSection>
         </div>
-      </TabsContent>
-    </>
-  );
+      );
+    default:
+      return null;
+  }
+}
+
+/**
+ * Detail page for one single sub-section voice (from the rail sub-menu):
+ * just that section, standalone.
+ */
+function SectionPage({ id }: { id: SectionId }) {
+  const { t } = useTranslation();
+  const { enterpriseInstalled } = useEnterpriseModulesContext();
+  const tier = useLicenseTier();
+
+  switch (id) {
+    case "personalInfo":
+      return <SettingsProfilePersonal />;
+    case "customInstructions":
+      return <SettingsProfileInstructions />;
+    case "languages":
+      return <SettingsGeneralLanguages />;
+    case "providers":
+      return <SettingsProviders />;
+    case "llmEmbedding":
+      return (
+        <div className="space-y-8">
+          <SettingsLLM />
+          <SettingsOcr />
+          <SettingsSynthesis />
+        </div>
+      );
+    case "appearance":
+      return <SettingsAppearance />;
+    case "roles":
+      return <SettingsRoles />;
+    case "users":
+      return <SettingsUsers />;
+    case "nonAdminUpload":
+      return <SettingsSecurityNonAdminUpload />;
+    case "notifications":
+      return <SettingsPushNotifications />;
+    case "vectorDB":
+      return <SettingsVectorDB />;
+    case "apiKeys":
+      return <SettingsApiKeys />;
+    case "mcpConnections":
+      return <SettingsMcpConnections />;
+    case "maintenance":
+      return <SettingsMaintenance />;
+    case "backups":
+      return enterpriseInstalled && tier === "enterprise" ? (
+        <Suspense fallback={<EnterpriseSpinner />}>
+          <SettingsBackups />
+        </Suspense>
+      ) : (
+        <UpgradePrompt
+          feature="backup_enabled"
+          message={!enterpriseInstalled ? t("upgrade.pluginRequired") : undefined}
+        />
+      );
+    case "dlp":
+      return <SettingsGeneralDlp />;
+    case "webSearch":
+      return <SettingsWebSearch />;
+    case "agentWatchdog":
+      return <SettingsAgentWatchdog />;
+    case "reranker":
+      return <SettingsReranker />;
+    case "vapid":
+      return <SettingsVapid />;
+    case "filters":
+      return <FiltersTab />;
+    case "dlpAudit":
+      return <DlpAuditPanel />;
+    case "dlpPatterns":
+      return <SettingsDlpPatterns />;
+    case "templates":
+      return <SettingsTemplates />;
+    case "chatData":
+      return <SettingsProfileChatData />;
+    case "resetDb":
+      return <SettingsGeneralResetDb />;
+    default:
+      return null;
+  }
+}
+
+export default function SettingsPage({ embedded = false }: { embedded?: boolean }) {
+  const { t } = useTranslation();
+  usePageMeta(t("settings.pageTitle"), [{ label: t("breadcrumb.home"), path: "/" }, { label: t("breadcrumb.settings") }]);
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<Tab>("profile");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { isLoading, error: queryError, refetch } = useSettings();
+  const { data: user } = useMe();
+  const logoutMutation = useLogout();
+  const permissions = user?.permissions ?? [];
+  const isMobile = useIsMobile();
+
+  // Restore last settings tab on mount, or honor ?tab= deep link.
+  // Priority: URL ?tab= (mapped) > localStorage lastSettingsSection (mapped) > default "general".
+  useEffect(() => {
+    // Legacy deep-link: widget management moved to its own top-level page.
+    if (searchParams.get("tab") === "widgets") {
+      navigate("/widgets", { replace: true });
+      return;
+    }
+    const mapped = mapLegacyTab(searchParams.get("tab"));
+    if (mapped) {
+      setActiveTab(mapped);
+      // Normalize the persisted value to the canonical key.
+      localStorage.setItem("lastSettingsSection", mapped);
+      return;
+    }
+    const lastSection = localStorage.getItem("lastSettingsSection");
+    const lastMapped = mapLegacyTab(lastSection);
+    if (lastMapped) setActiveTab(lastMapped);
+  }, [searchParams]);
+
+  // Persist active tab (canonical key) whenever it changes.
+  useEffect(() => {
+    if (activeTab) {
+      localStorage.setItem("lastSettingsSection", activeTab);
+    }
+  }, [activeTab]);
+
+  // Filter tabs based on user permissions (OR on sub-section perms).
+  const visibleTabs = TAB_KEYS.filter((tab) => {
+    const requiredPerms = SETTINGS_TAB_PERMISSIONS[tab.key];
+    if (!requiredPerms || requiredPerms.length === 0) return true;
+    return requiredPerms.some((p: string) => permissions.includes(p));
+  });
+
+  // Reset to first visible tab if the current tab is no longer visible.
+  useEffect(() => {
+    if (!user) return; // Don't reset until user permissions are loaded
+    if (visibleTabs.length > 0 && !visibleTabs.find((t) => t.key === activeTab)) {
+      setActiveTab(visibleTabs[0]!.key);
+    }
+  }, [visibleTabs, activeTab, user]);
+
+  const error = queryError ? queryError.message : null;
+  const errorStatus = queryError instanceof ApiError ? queryError.status : null;
+
+  const triggerAuthRedirect = useEffectEvent(() => {
+    logoutMutation.mutate();
+    navigate("/");
+  });
+
+  useEffect(() => {
+    if (errorStatus === 401 || errorStatus === 403) {
+      const timer = setTimeout(triggerAuthRedirect, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [errorStatus]);
+
+  const handleRetry = () => {
+    refetch().catch(() => showError(t("settings.errorLoadSettings")));
+  };
+
+  // Group header click (via the `<Tabs>` controlled container): reset to the
+  // tab's overview page.
+  const handleSelectTab = (tabKey: string) => {
+    setActiveTab(tabKey as Tab);
+  };
+
+  // Per-sub-section permission gates (OR semantics, same as tab visibility).
+  const has = (perm: string) => permissions.includes(perm);
+  const hasAny = (perms: string[]) => perms.some((p) => permissions.includes(p));
+
+  // Sub-sections per tab with their permission gates. Single source of truth
+  // shared by both the `<SettingsMenu>` sub-menu voices and the detail-page
+  // rendering below — so a voice appears in the menu iff its section renders.
+  const sectionsFor = (tab: Tab): { id: SectionId; show: boolean }[] => {
+    switch (tab) {
+      case "profile":
+        return [
+          { id: "personalInfo", show: true },
+          { id: "customInstructions", show: true },
+          { id: "languages", show: has("admin:settings") },
+        ];
+      case "llm":
+        return [
+          { id: "providers", show: hasAny(["provider:read", "provider:write"]) },
+          { id: "llmEmbedding", show: has("admin:settings") },
+        ];
+      case "appearance":
+        return [{ id: "appearance", show: true }];
+      case "security":
+        return [
+          { id: "roles", show: has("admin:roles") },
+          { id: "users", show: has("admin:users") },
+          // Phase 70 D-11 / Pitfall 6: non-admin upload toggle visible to
+          // a settings-only admin. The Security tab itself is visible
+          // because SETTINGS_TAB_PERMISSIONS.security includes admin:settings.
+          { id: "nonAdminUpload", show: has("admin:settings") },
+          { id: "notifications", show: true },
+        ];
+      case "advanced":
+        return [
+          { id: "vectorDB", show: has("admin:settings") },
+          { id: "apiKeys", show: has("admin:settings") },
+          { id: "mcpConnections", show: has("admin:settings") },
+          { id: "maintenance", show: has("admin:settings") },
+          {
+            id: "backups",
+            show: hasAny([
+              "backup:destination:read",
+              "backup:job:read",
+              "backup:log:read",
+            ]),
+          },
+          { id: "dlp", show: has("admin:settings") },
+          { id: "webSearch", show: has("admin:settings") },
+          { id: "agentWatchdog", show: has("admin:settings") },
+          { id: "reranker", show: has("admin:settings") },
+          { id: "vapid", show: has("admin:settings") },
+          { id: "filters", show: has("filters:manage") },
+          { id: "dlpAudit", show: has("admin:settings") },
+          { id: "templates", show: has("admin:settings") },
+          { id: "chatData", show: true },
+          { id: "resetDb", show: has("admin:settings") },
+        ];
+    }
+  };
+
+  // Build the two-level menu: one group per visible tab, each with its
+  // permission-filtered sub-sections as always-expanded sub-menu voices.
+  const menuGroups: SettingsMenuGroup[] = visibleTabs.map((tab) => ({
+    key: tab.key,
+    labelKey: tab.labelKey,
+    sections: sectionsFor(tab.key)
+      .filter((s) => s.show)
+      .map((s) => ({ id: s.id, labelKey: SECTION_LABEL[s.id] })),
+  }));
+
+  // Master-detail UI state (both desktop and mobile share it — only the rail
+  // rendering differs: inline `<aside>` on desktop, left Sheet drawer on
+  // mobile). `detailVoice` = the open page (group OR sub-section); `null`
+  // when the whole rail overview is visible.
+  const [detailVoice, setDetailVoice] = useState<DetailVoice | null>(null);
+  // Rail visibility (desktop): slides away when a voice is opened, slides
+  // back when the detail top-bar toggle is pressed.
+  const [railVisible, setRailVisible] = useState(true);
+  // Detail page scroll target — cleared once the scroll runs.
+  const [detailScroll, setDetailScroll] = useState<string | null>(null);
+
+  // Open a menu voice as a full detail page (rail slides away).
+  const openDetail = (tab: Tab, labelKey: string, sectionId: string | null) => {
+    setDetailVoice({ tab, labelKey, sectionId });
+    setRailVisible(false);
+    setActiveTab(tab);
+  };
+
+  /*
+   * Master-detail layout (UI revision: settings as a console).
+   *
+   *   • DETAIL  — the right-hand settings page. One visible page at a time:
+   *     a group voice renders ALL of that tab's sub-sections stacked; a
+   *     sub-section voice renders just that section. Enters with a
+   *     slide-from-right animation on every voice change (keyed remount).
+   *   • MASTER  — the left rail (`SettingsMenu`) with the full two-level
+   *     menu, always in the DOM. Opening a voice slides it away (CSS
+   *     translate + margin transition, translated off-canvas so
+   *     `overflow-hidden` never clips it); the detail top-bar toggle
+   *     (`PanelLeftOpen`) slides it back. On mobile the rail is a LEFT
+   *     Sheet drawer with its own open/close toggle instead.
+   *
+   * `<Tabs>` stays as the controlled state container so deep-link `?tab=`
+   * wiring, localStorage persistence and the `<TabsContent>` keep-alive are
+   * preserved; the radix tab list/trigger are not rendered — the same
+   * `<SettingsMenu>` (plain-button nav, works inside the Sheet portal)
+   * drives both the desktop rail and the mobile drawer.
+   */
+  const isDetail = detailVoice !== null;
+  const activeGroupLabel = isDetail
+    ? (TAB_KEYS.find((t) => t.key === detailVoice!.tab)?.labelKey ?? null)
+    : null;
+  const detailSlideKey = detailVoice ? `${detailVoice.tab}:${detailVoice.labelKey}` : "none";
+
+  // Scroll the detail page to the targeted sub-section once it is visible
+  // (sub-menu deep links). `block: "start"` + the section's `scroll-mt`
+  // clear the sticky top bar.
+  useEffect(() => {
+    if (!isDetail || !detailScroll) return;
+    const id = detailScroll;
+    const raf = requestAnimationFrame(() => {
+      const el = document.getElementById(settingsSectionAnchor(id));
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      setDetailScroll(null);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isDetail, detailScroll]);
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="px-3 sm:px-6 py-4 border-b border-border">
-        <h2 className="text-xl font-semibold text-foreground">{t("settings.pageTitle")}</h2>
-        <p className="text-sm text-muted-foreground mt-1">{t("settings.pageDescription")}</p>
-      </div>
+      {/* Header — hidden in the embedded (dialog) variant: the dialog already
+          carries the close affordance and the left rail is the navigation. */}
+      {!embedded && (
+        <div className="px-3 sm:px-6 py-4 border-b border-border">
+          <h2 className="text-xl font-semibold text-foreground">{t("settings.pageTitle")}</h2>
+          <p className="text-sm text-muted-foreground mt-1">{t("settings.pageDescription")}</p>
+        </div>
+      )}
 
       {/* Error banner */}
       {error && (
@@ -627,37 +767,98 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/*
-        Feature 7.5 — console-style vertical layout.
-        `<Tabs orientation="vertical">` is kept ONLY as the controlled state
-        container (value/onValueChange) + TabsContent host, so the React 19
-        `Activity` keep-alive, `useViewTransition` cross-fade and deep-link
-        `?tab=` wiring are all preserved. The radix tab list/trigger are dropped —
-        the desktop rail and the mobile Sheet both render `<SettingsMenu>`
-        (plain-button nav), which works inside the Sheet portal that lives
-        outside the `<Tabs>` tree.
-      */}
       <Tabs
         value={activeTab}
         onValueChange={handleSelectTab}
         orientation="vertical"
         className="flex-1 flex min-h-0"
       >
-        {isMobile ? (
+        {/* ── Desktop / embedded (≥768px): inline rail + detail column ── */}
+        {!isMobile && (
           <>
-            {/*
-              Mobile — console-style transparent overlay. The menu trigger is
-              pinned to the top-right as an `absolute` overlay (`pointer-events-
-              none` container, `pointer-events-auto` button with a translucent
-              backdrop). The sections column fills the whole strip and scrolls
-              behind it, so the settings area is covered by content with no
-              divider line — mirroring the ChatPanel title-bar (see ChatPanel
-              ~line 530). The Sheet is anchored right to match the trigger
-              position, symmetric to the chat console Sheet.
-            */}
+            {/* MASTER — the two-level menu rail. Always in the DOM; opening
+                a voice slides it away (translate + margin, never w-0, so
+                the focus ring never clips mid-animation). */}
+            <aside
+              className={cn(
+                "w-60 shrink-0 min-h-0 border-r border-border overflow-hidden bg-background transition-all duration-300 ease-in-out",
+                railVisible ? "settings-rail-open" : "settings-rail-closed",
+              )}
+              aria-hidden={!railVisible}
+              aria-label={t("settings.menuLabel", "Settings sections")}
+            >
+              <div className="h-full overflow-y-auto overflow-x-hidden settings-scroll">
+                <SettingsMenu
+                  groups={menuGroups}
+                  activeVoice={detailVoice}
+                  onSelectTab={(tabKey) => openDetail(tabKey as Tab, labelKeyOf(tabKey as Tab), null)}
+                  onSelectSection={(tabKey, sectionId) => {
+                    openDetail(tabKey as Tab, SECTION_LABEL[sectionId as SectionId] ?? labelKeyOf(tabKey as Tab), sectionId);
+                  }}
+                  className="gap-0"
+                />
+              </div>
+            </aside>
+            {/* DETAIL — the right column. Shows the active tab's full page
+                (all its sub-sections stacked) when the rail is visible, or
+                the focused voice's page after a voice is opened. Slides on
+                every voice change (keyed remount → restart the animation). */}
+            <div className="relative flex-1 min-h-0 min-w-0 flex flex-col">
+              {isDetail ? (
+                <>
+                  {/* Detail top bar: rail toggle + breadcrumb (group › page). */}
+                  <div className="flex items-center gap-2 border-b border-border px-3 py-2 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setRailVisible((o) => !o)}
+                      className="h-9 w-9 shrink-0"
+                      aria-label={railVisible ? t("settings.closeMenu", "Close menu") : t("settings.openTabsMenu", "Open settings menu")}
+                      title={railVisible ? t("settings.closeMenu", "Close menu") : t("settings.openTabsMenu", "Open settings menu")}
+                    >
+                      {railVisible ? (
+                        <PanelLeftClose className="h-5 w-5" />
+                      ) : (
+                        <PanelLeftOpen className="h-5 w-5" />
+                      )}
+                    </Button>
+                    <div className="flex items-center gap-1 min-w-0 text-sm">
+                      <span className="shrink-0 text-muted-foreground">
+                        {activeGroupLabel ? t(activeGroupLabel) : null}
+                      </span>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
+                      <span className="truncate font-medium text-foreground">
+                        {t(detailVoice.labelKey)}
+                      </span>
+                    </div>
+                  </div>
+                  <SettingsSlide slideKey={detailSlideKey}>
+                    {detailVoice.sectionId ? (
+                      <SectionPage id={detailVoice.sectionId as SectionId} />
+                    ) : (
+                      <GroupPage tab={detailVoice.tab} />
+                    )}
+                  </SettingsSlide>
+                </>
+              ) : (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-3 sm:p-6">
+                  <TabsContent value={activeTab} className="mt-0">
+                    <GroupPage tab={activeTab} />
+                  </TabsContent>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ── Mobile (<768px): left drawer (Sheet) + full-area page ── */}
+        {isMobile && (
+          <>
+            {/* MASTER — the two-level menu in a LEFT drawer with its own
+                open/close toggle. */}
             <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-              <SheetContent side="right" className="w-64 p-0" showCloseButton={false}>
-                <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+              <SheetContent side="left" className="w-72 max-w-[85vw] p-0" showCloseButton={false}>
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
                   <SheetTitle>{t("settings.pageTitle")}</SheetTitle>
                   <Button
                     variant="ghost"
@@ -669,53 +870,74 @@ export default function SettingsPage() {
                     <X className="h-5 w-5" />
                   </Button>
                 </div>
-                <SettingsMenu
-                  groups={menuGroups}
-                  activeTab={activeTab}
-                  activeSection={activeSection}
-                  onSelectTab={(v) => {
-                    handleSelectTab(v);
-                    setMobileMenuOpen(false);
-                  }}
-                  onSelectSection={(v, sectionId) => {
-                    handleSelectSection(v, sectionId);
-                    setMobileMenuOpen(false);
-                  }}
-                />
+                {/* The drawer body scrolls vertically; over-wide menu
+                    entries never clip — they scroll within the drawer. */}
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden settings-scroll">
+                  <SettingsMenu
+                    groups={menuGroups}
+                    activeVoice={detailVoice}
+                    onSelectTab={(tabKey) => {
+                      openDetail(tabKey as Tab, labelKeyOf(tabKey as Tab), null);
+                      setMobileMenuOpen(false);
+                    }}
+                    onSelectSection={(tabKey, sectionId) => {
+                      openDetail(tabKey as Tab, SECTION_LABEL[sectionId as SectionId] ?? labelKeyOf(tabKey as Tab), sectionId);
+                      setDetailScroll(sectionId);
+                      setMobileMenuOpen(false);
+                    }}
+                  />
+                </div>
               </SheetContent>
             </Sheet>
-            <div className="relative flex-1 min-h-0 min-w-0">
-              <div className="absolute top-0 inset-x-0 z-30 flex items-center justify-end gap-2 px-3 sm:px-4 py-2 pointer-events-none">
+            {/* DETAIL — fills the whole area with its own vertical scrollbar
+                (horizontal scrolling is delegated to the individual
+                over-wide blocks — tables, forms, code — so each oversized
+                element scrolls within itself instead of stretching the
+                whole page). A top-bar drawer toggle + breadcrumb
+                (group › page) keep the location visible. */}
+            <div className="relative flex-1 min-h-0 min-w-0 flex flex-col">
+              {/* Top bar: drawer toggle + breadcrumb (always visible on
+                  mobile — the drawer trigger must be reachable from any
+                  page). */}
+              <div className="flex items-center gap-2 border-b border-border px-3 py-2 shrink-0">
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => setMobileMenuOpen(true)}
-                  className="pointer-events-auto shrink-0 -mr-1 bg-background/60 backdrop-blur-sm"
-                  aria-label={t("settings.openTabsMenu", "Open settings menu")}
-                  title={t("settings.openTabsMenu", "Open settings menu")}
+                  onClick={() => setMobileMenuOpen((o) => !o)}
+                  className="h-9 w-9 shrink-0"
+                  aria-label={mobileMenuOpen ? t("settings.closeMenu", "Close menu") : t("settings.openTabsMenu", "Open settings menu")}
+                  title={mobileMenuOpen ? t("settings.closeMenu", "Close menu") : t("settings.openTabsMenu", "Open settings menu")}
                 >
-                  <Menu className="h-5 w-5" />
+                  {mobileMenuOpen ? <X className="h-5 w-5" /> : <PanelLeftOpen className="h-5 w-5" />}
                 </Button>
+                <div className="flex items-center gap-1 min-w-0 text-sm">
+                  <span className="shrink-0 text-muted-foreground">
+                    {activeGroupLabel ? t(activeGroupLabel) : null}
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
+                  <span className="truncate font-medium text-foreground">
+                    {detailVoice ? t(detailVoice.labelKey) : t("settings.pageTitle")}
+                  </span>
+                </div>
               </div>
-              {/* Sections — fill the whole area, scroll behind the overlay */}
-              <div className="h-full overflow-y-auto overflow-x-hidden p-3 sm:p-6">{tabContent}</div>
+              {isDetail ? (
+                <SettingsSlide slideKey={detailSlideKey}>
+                  <div className="p-3 sm:p-6 max-w-full">
+                    {detailVoice.sectionId ? (
+                      <SectionPage id={detailVoice.sectionId as SectionId} />
+                    ) : (
+                      <GroupPage tab={detailVoice.tab} />
+                    )}
+                  </div>
+                </SettingsSlide>
+              ) : (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-3 sm:p-6">
+                  <TabsContent value={activeTab} className="mt-0">
+                    <GroupPage tab={activeTab} />
+                  </TabsContent>
+                </div>
+              )}
             </div>
-          </>
-        ) : (
-          <>
-            {/* Desktop 240px rail (w-60 ≈ 240px) */}
-            <aside className="w-60 shrink-0 min-h-0 border-r border-border overflow-y-auto">
-              <SettingsMenu
-                groups={menuGroups}
-                activeTab={activeTab}
-                activeSection={activeSection}
-                onSelectTab={handleSelectTab}
-                onSelectSection={handleSelectSection}
-                className="gap-0"
-              />
-            </aside>
-            {/* Content column */}
-            <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-3 sm:p-6">{tabContent}</div>
           </>
         )}
       </Tabs>

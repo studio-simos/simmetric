@@ -21,12 +21,23 @@ let env: import("../config/env").Env;
 async function setSetupWizardMode(value: string): Promise<void> {
   // Direct DB write — bypasses getSetting's Redis cache (no REDIS_URL in
   // integration tests, so getSetting reads DB anyway). Used by the test
-  // harness to drive the setup_wizard_mode state machine.
-  await prisma.systemConfig.upsert({
-    where: { key: "setup_wizard_mode" },
-    create: { key: "setup_wizard_mode", value },
-    update: { value },
+  // harness to drive the setup_wizard_mode state machine. Phase 183
+  // (SAAS-02, P4): find-first-then-write shape (local 3-line implementation
+  // mirroring upsertSystemConfigRow — the harness runs against real
+  // Postgres where the composite-unique swap makes keyed upserts illegal).
+  const existing = await prisma.systemConfig.findFirst({
+    where: { key: "setup_wizard_mode", organizationId: null },
   });
+  if (existing) {
+    await prisma.systemConfig.update({
+      where: { id: existing.id },
+      data: { value },
+    });
+  } else {
+    await prisma.systemConfig.create({
+      data: { key: "setup_wizard_mode", value, organizationId: null },
+    });
+  }
 }
 
 beforeAll(async () => {
@@ -705,8 +716,10 @@ describe("POST /api/system/initialize — TOCTOU race (G-152-3, CR-02)", () => {
     expect(adminCount).toBe(1);
 
     // The winning transaction flipped setup_wizard_mode to "completed".
-    const mode = await prisma.systemConfig.findUnique({
-      where: { key: "setup_wizard_mode" },
+    // Phase 183 (SAAS-02): findFirst with the explicit null-org filter
+    // (composite-unique-safe read shape).
+    const mode = await prisma.systemConfig.findFirst({
+      where: { key: "setup_wizard_mode", organizationId: null },
     });
     expect(mode?.value).toBe("completed");
   });

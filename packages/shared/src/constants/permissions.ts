@@ -165,6 +165,19 @@ export const CONFIG_DEFAULTS: Record<string, string> = {
   EMBEDDING_PROVIDER: "local",
   EMBEDDING_MODEL: "Xenova/all-MiniLM-L6-v2",
   VECTOR_DB_PROVIDER: "lancedb",
+  // Phase 184 (SAAS-03) — storage provider config. STORAGE_PROVIDER selects
+  // the StorageProvider strategy: "localfs" (default, byte-compatible with
+  // the pre-184 fs behavior) or "s3" (S3-compatible: AWS/MinIO/R2/Wasabi).
+  // The S3_* keys ride getSetting's generic ENV tier (NOT env.ts Zod — same
+  // doctrine as upload_draft_reaper_*); S3_ENDPOINT empty = AWS-native
+  // signing (no forcePathStyle). All resolve per-org via the Phase 183
+  // cascade (getSetting(key, organizationId?) — tenant > global > ENV > default).
+  STORAGE_PROVIDER: "localfs",
+  S3_ENDPOINT: "",
+  S3_BUCKET: "",
+  S3_REGION: "",
+  S3_ACCESS_KEY_ID: "",
+  S3_SECRET_ACCESS_KEY: "",
   SERVER_PORT: "3000",
   COLLECTOR_PORT: "3210",
   SESSION_EXPIRY: "86400000", // 24h in ms

@@ -11,29 +11,28 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
- * SettingsMenu — Feature 7.5 Slice C (extended: sub-section sub-menu).
+ * SettingsMenu — master-detail settings menu (UI revision R-6).
  *
  * Plain-button vertical nav reused by BOTH the desktop settings rail (240px
- * left column) and the mobile Sheet. It is intentionally NOT a Radix
- * TabsTrigger because the mobile Sheet is a portal rendered outside the
- * `<Tabs>` tree, so a TabsTrigger context cannot reach it.
+ * left column) and the mobile left drawer (Sheet). It is intentionally NOT a
+ * Radix TabsTrigger because the mobile Sheet is a portal rendered outside
+ * the `<Tabs>` tree, so a TabsTrigger context cannot reach it.
  *
  * The menu is a two-level tree: each top-level **group** is one settings
  * "page" (tab) and exposes its **sub-sections** as an always-expanded sub-list
  * of indented items. The user request (2026-07-15): every sub-section of every
  * settings page must be a selectable voice in a sub-menu of the current menu,
- * all expanded; clicking a sub-voice navigates to the page and scrolls to the
- * matching section. Groups therefore never collapse — their sub-sections are
- * always visible.
+ * all expanded; clicking a voice opens it as a full detail page (master-detail
+ * — the rail slides away, the page slides in from the right).
  *
  * The active item carries the `settings-menu-item` class plus a
  * `data-active="true"` attribute — the hooks the `.theme-hacker` CSS override
  * in `index.css` targets. The component itself is theme-agnostic: it never
  * imports any theme library or `useTheme` and never hardcodes hacker colors.
  *
- * Keys are typed as plain `string` (not the SettingsPage `Tab` union) to avoid
- * a circular dependency; SettingsPage passes its `Tab`-typed values which are
- * assignable to `string`.
+ * The active voice is passed as `activeVoice` ({ tab, labelKey, sectionId } |
+ * null) rather than a bare tab key, so both group voices and sub-section
+ * voices highlight correctly while a page is open.
  */
 export interface SettingsSubMenuEntry {
   /** Stable anchor id — matched against `settings-section-<id>` in the page. */
@@ -53,20 +52,23 @@ export interface SettingsMenuGroup {
 
 export interface SettingsMenuProps {
   groups: SettingsMenuGroup[];
-  activeTab: string;
-  /** Currently-focused sub-section id (highlights the matching sub-voice). */
-  activeSection?: string | null;
-  /** Called when a group header is clicked (switch tab, scroll to top). */
+  /**
+   * The menu voice currently open as a detail page (master-detail mode):
+   * `{ tab, labelKey, sectionId }` — a group voice when `sectionId` is
+   * null, a sub-section voice otherwise. `null` = the full menu overview
+   * (no voice focused).
+   */
+  activeVoice?: { tab: string; labelKey: string; sectionId: string | null } | null;
+  /** Called when a group header is clicked (opens the group page). */
   onSelectTab: (tabKey: string) => void;
-  /** Called when a sub-section is clicked (switch tab + scroll to section). */
+  /** Called when a sub-section is clicked (opens the section page). */
   onSelectSection: (tabKey: string, sectionId: string) => void;
   className?: string;
 }
 
 export function SettingsMenu({
   groups,
-  activeTab,
-  activeSection = null,
+  activeVoice = null,
   onSelectTab,
   onSelectSection,
   className,
@@ -81,11 +83,14 @@ export function SettingsMenu({
       aria-label={t("settings.menuLabel", "Settings sections")}
     >
       {groups.map((group) => {
-        const isGroupActive = group.key === activeTab;
+        const isGroupActive =
+          activeVoice !== null &&
+          activeVoice.tab === group.key &&
+          activeVoice.sectionId === null;
         return (
           <div key={group.key}>
-            {/* Group header = the settings "page" (tab). Clicking switches the
-                page without targeting a specific section (scrolls to top). */}
+            {/* Group header = the settings "page" (tab). Clicking opens the
+                group page (all its sub-sections) in the detail area. */}
             <Button
               type="button"
               variant="ghost"
@@ -117,7 +122,9 @@ export function SettingsMenu({
               <div className="flex flex-col" role="list">
                 {group.sections.map((section) => {
                   const isSectionActive =
-                    isGroupActive && activeSection === section.id;
+                    activeVoice !== null &&
+                    activeVoice.tab === group.key &&
+                    activeVoice.sectionId === section.id;
                   return (
                         <Button
                           key={section.id}

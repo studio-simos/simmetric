@@ -270,6 +270,15 @@ export function mountMCPServer(app: Express): void {
       return;
     }
 
+    // Phase 185 (D-05/D-08, T-185-08 — BYPASS SURFACE, citeable in the
+    // org-b suite): the MCP principal is platform-level (MCP_API_KEY bearer
+    // or loopback-only — mcpAuthCheck above), never a tenant member. The
+    // sentinel is set ONLY after the auth gate passes (never on open
+    // routes); downstream handlers run with the bypass arm of
+    // tenantContextMiddleware if a slot is ever added, and the absent-store
+    // extension-skip keeps SSE tool queries unscoped today.
+    req.tenantBypass = true;
+
     const server = createMCPServer();
     const transport = new SSEServerTransport("/api/mcp/message", res);
     sseSessions.set(transport.sessionId, { server, transport });
@@ -298,6 +307,10 @@ export function mountMCPServer(app: Express): void {
       res.status(auth.status).json({ error: auth.message });
       return;
     }
+
+    // Phase 185: same D-05 bypass surface as GET /api/mcp/sse above —
+    // platform principal, set only after the auth gate passes.
+    req.tenantBypass = true;
 
     const sessionId =
       (req.query.sessionId as string) ||

@@ -6,9 +6,11 @@
  * D-04: CLI-only (tsx-run). NOT mounted on any Express route.
  * D-06: --dry-run (no-write) + --resume (from marker) flags.
  * D-07: Fail-closed on any undecryptable row — aborts with {table, id, error}.
- * D-08: Resume marker via direct prisma.systemConfig.upsert (NOT the settings
- *       service, which validates against the closed configKeySchema enum and
- *       would reject the marker key). Mirrors seedConfigDefaults() pattern.
+ * D-08: Resume marker via direct find-first-then-write on prisma.systemConfig
+ *       (NOT the settings service, which validates against the closed
+ *       configKeySchema enum and would reject the marker key). Inline shape —
+ *       no settings-service import (standalone tsx CLI layering). Composite-
+ *       unique safe (Plan 183). Mirrors seed.ts's standalone precedent.
  *
  * Strict deploy order (ROADMAP line 124):
  *   1. Deploy multi-key v2 (encryptionService.ts) — Plan 01
@@ -53,7 +55,7 @@ export const ENCRYPTED_COLUMNS = [
 export type EncryptedColumnSpec = (typeof ENCRYPTED_COLUMNS)[number];
 
 // ---------------------------------------------------------------------------
-// Resume marker (D-08 — direct prisma.systemConfig.upsert, NOT the settings service)
+// Resume marker (D-08 — direct find-first-then-write, NOT the settings service)
 // ---------------------------------------------------------------------------
 const MARKER_KEY = "encryption_key_rotation_progress";
 
@@ -71,7 +73,12 @@ export function keyFingerprint(key: Buffer): string {
 }
 
 async function readMarker(): Promise<ResumeMarker | null> {
-  const row = await prisma.systemConfig.findUnique({ where: { key: MARKER_KEY } });
+  // Phase 183 (SAAS-02): findFirst with the explicit null-org filter — the
+  // marker is a global row; a plain `where: { key }` unique read dies after
+  // the composite-unique swap (Plan 03).
+  const row = await prisma.systemConfig.findFirst({
+    where: { key: MARKER_KEY, organizationId: null },
+  });
   if (!row) return null;
   try {
     return JSON.parse(row.value) as ResumeMarker;
@@ -81,11 +88,35 @@ async function readMarker(): Promise<ResumeMarker | null> {
 }
 
 async function writeMarker(m: ResumeMarker): Promise<void> {
-  await prisma.systemConfig.upsert({
-    where: { key: MARKER_KEY },
-    create: { key: MARKER_KEY, value: JSON.stringify(m) },
-    update: { value: JSON.stringify(m) },
+  // Phase 183 (SAAS-02): inline find-first-then-write (id-anchored update /
+  // fresh create) — swap-agnostic; never references the unique key.
+  const serialized = JSON.stringify(m);
+  const existing = await prisma.systemConfig.findFirst({
+    where: { key: MARKER_KEY, organizationId: null },
   });
+  if (existing) {
+    await prisma.systemConfig.update({
+      where: { id: existing.id },
+      data: { value: serialized },
+    });
+  } else {
+    try {
+      await prisma.systemConfig.create({
+        data: { key: MARKER_KEY, value: serialized, organizationId: null },
+      });
+    } catch (err) {
+      // P2002 tolerance (concurrent CLI run): re-check and update the winner.
+      if ((err as { code?: string }).code !== "P2002") throw err;
+      const winner = await prisma.systemConfig.findFirst({
+        where: { key: MARKER_KEY, organizationId: null },
+      });
+      if (!winner) throw err;
+      await prisma.systemConfig.update({
+        where: { id: winner.id },
+        data: { value: serialized },
+      });
+    }
+  }
 }
 
 async function clearMarker(): Promise<void> {

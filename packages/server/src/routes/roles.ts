@@ -5,15 +5,26 @@
 
 import { Router } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import { invalidateAuthCache } from "../services/authService";
 import prisma from "../utils/prisma";
+
+// Phase 185 (T-185-10, Pitfall-2 grep-gate): ALL findUnique/upsert sites in
+// this file target User / Role / UserRole — GLOBAL identity models per the
+// Phase-182 D-01/D-04 verdict (User is identity-pure, Role is global;
+// getEffectivePermissions intact). None are in TENANT_READ_MODELS — exempt
+// from the org-assertion gate by design.
 import { createRoleSchema, updateRoleSchema, menuSectionSchema, roleIdParamSchema } from "@simmetric-chat/shared";
 
 const router = Router();
 
 // Apply auth to all role routes
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 // GET /api/roles/me/menu-sections — get menu sections for current user (any authenticated user)
 router.get("/me/menu-sections", async (req, res) => {

@@ -91,11 +91,34 @@ export function dedupeCitations(citations: SourceCitation[]): SourceCitation[] {
   }
 
   // Pass 2: drop subsumed rag_search citations; keep everything else in order.
-  return citations.filter((c) => {
+  const survivors = citations.filter((c) => {
     // Wiki/tool/web/memory citations are never dropped by this filter.
     if (c.source === "tool" || c.source === "web" || c.source === "memory") return true;
     if (c.documentId && claimed.has(`doc:${c.documentId}`)) return false;
     if (c.pageSlug && claimed.has(`page:${c.pageSlug}`)) return false;
+    return true;
+  });
+
+  // Pass 3 (G-131-loop): exact-duplicate drop. Repeated identical tool calls
+  // (the wiki_query retry-loop pattern) flatMap the SAME citation set once
+  // per call — the incident showed the same page listed twice in "Fonti".
+  // Producer identity (source + documentId + pageSlug + pageNumber) plus the
+  // payload (chunkText) make a deterministic key: identical repeats carry
+  // zero extra signal and are dropped, all but the first occurrence.
+  // Distinct chunks of the same document differ in chunkText/pageNumber and
+  // survive (the per-document cap in filterGroundedCitations still bounds
+  // their noise).
+  const seenExact = new Set<string>();
+  return survivors.filter((c) => {
+    const exactKey = JSON.stringify([
+      c.source ?? null,
+      c.documentId,
+      c.pageSlug ?? null,
+      c.pageNumber ?? null,
+      c.chunkText ?? null,
+    ]);
+    if (seenExact.has(exactKey)) return false;
+    seenExact.add(exactKey);
     return true;
   });
 }

@@ -3,6 +3,14 @@
     "name": "Simmetric Chat",
     "subtitle": "KI-Chatbot für Unternehmen"
   },
+  "nav": {
+    "openMenu": "Navigationsmenü öffnen",
+    "menu": "Menü",
+    "overlayTitle": "Navigation",
+    "overlayDescription": "Zu Seiten navigieren, Projekt und Workspace wechseln",
+    "searchPlaceholder": "Seiten suchen...",
+    "noResults": "Keine Ergebnisse"
+  },
   "breadcrumb": {
     "widgets": "Widgets",
     "home": "Startseite",
@@ -1567,7 +1575,8 @@
       "active": "Aktiv",
       "blocked": "Benachrichtigungen wurden vom Browser blockiert. Ändern Sie die Website-Einstellungen, um sie wieder zu aktivieren.",
       "permissionHint": "Beim Klick auf \"Benachrichtigungen aktivieren\" fragt der Browser nach der Berechtigung."
-    }
+    },
+    "back": "Zurück"
   },
   "upgrade": {
     "title": "Enterprise-Funktion",
@@ -1779,7 +1788,8 @@
     "errorBoundaryDescription": "Beim Rendern der Seite ist ein unerwarteter Fehler aufgetreten. Bitte versuchen Sie es durch Neuladen.",
     "errorDetails": "Fehlerdetails",
     "reloadPage": "Seite neu laden",
-    "unexpectedError": "Etwas ist schiefgelaufen"
+    "unexpectedError": "Etwas ist schiefgelaufen",
+    "back": "Zurück"
   },
   "export": {
     "buttonLabel": "Export",
@@ -2523,6 +2533,8 @@
   "user-dropdown": {
     "language": "Sprache",
     "theme": "Design",
+    "openMenu": "Benutzermenü öffnen",
+    "closeMenu": "Menü schließen",
     "signOut": "Abmelden",
     "version": "Version",
     "license": "Lizenz",

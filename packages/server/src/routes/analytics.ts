@@ -5,12 +5,18 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import prisma from "../utils/prisma";
 
+// Phase 185 (T-185-10, Pitfall-2 grep-gate): the findUnique site(s) in this
+// file target User — a GLOBAL identity model per Phase-182 D-01 (identity-
+// pure, no org column). Not in TENANT_READ_MODELS — exempt from the
+// org-assertion gate by design.
+
 const router = Router();
 
-router.use(authMiddleware, requireAdmin);
+router.use(authMiddleware, tenantContextMiddleware, requireAdmin);
 
 // GET /api/system/analytics/tokens — daily token usage for a date range
 router.get("/tokens", async (req: Request, res: Response) => {

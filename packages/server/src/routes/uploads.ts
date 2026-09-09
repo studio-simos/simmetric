@@ -28,15 +28,18 @@
  */
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import { assertNonAdminUploadAllowed } from "../middleware/uploadGate";
 import { assertArchiveAccess } from "../middleware/archiveAccess";
 import prisma from "../utils/prisma";
 import { getSetting } from "../services/systemConfigService";
-import { getUniqueFilePath } from "../utils/fileUtils";
+import { getStorageProvider } from "../services/storageProvider";
+import { getUniqueFilePath, isDraftStorageKey } from "../utils/fileUtils";
 import { isAdmin } from "../utils/auth";
 import { createUploadDraftSchema, createUploadDraftUrlSchema, assignDraftSchema, renameUploadSchema, sanitizeFileName } from "@simmetric-chat/shared";
 import {
@@ -160,7 +163,7 @@ async function assertWorkspaceAccess(
   req: Request,
   res: Response,
   workspaceId: string,
-): Promise<{ id: string; projectId: string; project?: { createdBy: string | null }; allowMemberUploads: boolean } | null> {
+): Promise<{ id: string; organizationId: string; projectId: string; project?: { createdBy: string | null }; allowMemberUploads: boolean } | null> {
   const workspace = await prisma.workspace.findFirst({
     where: { id: workspaceId, deletedAt: null },
     include: { project: true },
@@ -271,6 +274,8 @@ function serializeDraftPending(d: {
 router.post(
   "/",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission("document:write"),
   upload.single("file"),
   async (req: Request, res: Response) => {
@@ -329,11 +334,18 @@ router.post(
         // KB leg is dispatched immediately — kbEnabled=true, assignedArchiveId
         // set, parseStatus="assigned" (no "unassigned" state for URL drafts).
         // ragEnabled stays false (URL drafts are KB-only by design).
+        //
+        // Phase 184 (SAAS-03, D-05): the URL sentinel also becomes the
+        // storageKey — the M6 backfill's path-as-key doctrine (key = filePath).
+        // isDraftStorageKey(url) is false, so no terminal cleanup path ever
+        // deletes it (matches today's A5-rejects-URL behavior through the
+        // legacy-arm returning false).
         const draft = await prisma.uploadDraft.create({
           data: {
             uploadedBy: req.userId!,
             workspaceId: parsed.data.workspaceId,
             filePath: parsed.data.url,
+            storageKey: parsed.data.url,
             originalName: parsed.data.url,
             fileSize: 0,
             mimeType: "text/url",
@@ -342,6 +354,10 @@ router.post(
             ragEnabled: false,
             assignedArchiveId: parsed.data.archiveId,
             parseStatus: "assigned",
+            // CR-03 (185-05, D-04): explicit org stamp — the assign/retry/
+            // PATCH/DELETE org assertions (uploads.ts:516+) 404 the org-b
+            // user's OWN drafts when the row rides the schema @default.
+            organizationId: req.organizationId!,
           },
         });
 
@@ -405,11 +421,20 @@ router.post(
       const safeDays = Number.isFinite(days) && days > 0 ? days : 30;
       const expiresAt = new Date(Date.now() + safeDays * 86400000);
 
+      // Phase 184 (SAAS-03, D-05): provider key — prefix derived ONLY from the
+      // workspace row's organizationId (row's-org rule, T-184-10: never client
+      // input; TenantContext does not exist until Phase 185). filePath stays
+      // byte-identical (additive policy); new-layout key lands in the same
+      // create (no @default on the column — write sites set it explicitly).
+      // The drafts subpath ({orgId}/uploads/drafts/…) is what the reaper's
+      // isDraftStorageKey prefix-guard arm keys on.
+      const storageKey = `${workspace.organizationId}/uploads/drafts/${crypto.randomUUID()}-${sanitizeFileName(parsed.data.originalName)}`;
       const draft = await prisma.uploadDraft.create({
         data: {
           uploadedBy: req.userId!,
           workspaceId: parsed.data.workspaceId,
           filePath: req.file.path,
+          storageKey,
           // quick 260808-vzm: sanitize the staged name so the stored
           // originalName matches the sanitized disk filename and the name
           // shown in the UI. The URL branch (sourceType === "url") stores a
@@ -418,11 +443,29 @@ router.post(
           fileSize: parsed.data.fileSize,
           mimeType: parsed.data.mimeType,
           expiresAt,
+          // CR-03 (185-05, D-04): explicit org stamp (file branch — same
+          // org-assertion class as the URL branch above).
+          organizationId: req.organizationId!,
           // Prisma defaults: ragEnabled=false, kbEnabled=false,
           // parseStatus="uploaded", ragJobId/kbJobId=null,
           // assignedArchiveId=null
         },
       });
+
+      // Phase 184 (SAAS-03, T-184-06 — mirrors the landed documents.ts seam-1
+      // shape): put AFTER the row lands — an interrupted put leaves a
+      // recoverable uploaded-status draft row (never corrupt), and a retry
+      // writing the SAME key overwrites idempotently (LocalFSProvider
+      // copyFileSync semantics). The multer tmp is an ingress buffer, not
+      // storage: it is unlinked best-effort once the bytes are in the
+      // provider (WR-01 keeps guarding the pre-row rejection paths — D-08).
+      const provider = await getStorageProvider(workspace.organizationId);
+      await provider.put(req.file.path, storageKey);
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch {
+        // Best-effort ingress cleanup — the tmp is a buffer, never storage.
+      }
 
       // D-06 / T-69-e: NEVER include filePath in a response body.
       res.status(201).json(serializeDraftStage(draft));
@@ -453,6 +496,8 @@ router.post(
 router.post(
   "/:id/assign",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission(["document:write", "archive:write"]),
   async (req: Request, res: Response) => {
     try {
@@ -473,7 +518,9 @@ router.post(
       const draft = await prisma.uploadDraft.findUnique({
         where: { id: req.params.id as string },
       });
-      if (!draft || draft.deletedAt !== null) {
+      // T-185-10 org assertion (Pitfall-2 grep-gate, option b): cross-org
+      // draft hides as 404 (D-08 hide-existence), never 403.
+      if (!draft || draft.deletedAt !== null || draft.organizationId !== req.organizationId) {
         res.status(404).json({ error: "Draft not found" });
         return;
       }
@@ -541,7 +588,7 @@ router.post(
       // the 24h reaper remove storage/uploads/drafts/<file> while the DB row
       // stays assignable — before this guard, a stale draft was accepted and
       // the KB leg failed ~30s later in the OCR scheduler ("Draft source
-      // file not found"), silent at the UI click. Cheap fs check runs BEFORE
+      // file not found"), silent at the UI click. Cheap check runs BEFORE
       // the DB archive-access round-trip below (existing "cheap checks
       // first" pattern). Scoped to the KB leg only: kb=false (RAG) is out
       // of scope, and text/url drafts have NO disk file (filePath is a URL)
@@ -552,24 +599,36 @@ router.post(
       // file from the KB leg's persistent OCR copy
       // (storage/ocr-sources/<draftId>_<originalName>). On success the flow
       // proceeds; on failure the 400 below stays byte-identical.
-      if (
-        parsed.data.kb === true &&
-        draft.mimeType !== "text/url" &&
-        !fs.existsSync(path.resolve(draft.filePath))
-      ) {
-        if (tryRestoreDraftFromOcrCopy(draft)) {
-          logger.info("[uploads] assign: draft source file restored from persistent OCR copy", {
-            draftId: draft.id,
-          });
-        } else {
-          logger.warn("[uploads] assign blocked: draft source file missing", {
-            draftId: draft.id,
-          });
-          res.status(400).json({
-            error: "Draft source file no longer exists on disk — re-upload the file to assign it",
-            details: { draftId: draft.id },
-          });
-          return;
+      //
+      // Phase 184 (D-06, Pitfall 1): the existence probe branches on the
+      // ROW's storageKey. New-layout rows (key set, not the legacy
+      // "storage/" path-as-key layout) probe the PROVIDER — fs.existsSync on
+      // an S3-backed row silently returns false (the tmp was unlinked after
+      // put). The restore arm stays LocalFS-only (D-07): for new-layout rows
+      // it returns false (S3-backed restore flagged Parte II), so the 400
+      // stays byte-identical. Legacy rows (storageKey contains "storage/",
+      // the M6 path-as-key backfill) keep the exact fs.existsSync shape —
+      // zero delta.
+      if (parsed.data.kb === true && draft.mimeType !== "text/url") {
+        const isNewLayout = Boolean(draft.storageKey) && !draft.storageKey!.includes("storage/");
+        const sourceMissing = isNewLayout
+          ? !(await (await getStorageProvider(draft.organizationId)).exists(draft.storageKey!))
+          : !fs.existsSync(path.resolve(draft.filePath));
+        if (sourceMissing) {
+          if (tryRestoreDraftFromOcrCopy(draft)) {
+            logger.info("[uploads] assign: draft source file restored from persistent OCR copy", {
+              draftId: draft.id,
+            });
+          } else {
+            logger.warn("[uploads] assign blocked: draft source file missing", {
+              draftId: draft.id,
+            });
+            res.status(400).json({
+              error: "Draft source file no longer exists on disk — re-upload the file to assign it",
+              details: { draftId: draft.id },
+            });
+            return;
+          }
         }
       }
 
@@ -624,6 +683,8 @@ router.post(
 router.post(
   "/:id/retry",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission(["document:write", "archive:write"]),
   async (req: Request, res: Response) => {
     try {
@@ -644,7 +705,9 @@ router.post(
       const draft = await prisma.uploadDraft.findUnique({
         where: { id: req.params.id as string },
       });
-      if (!draft || draft.deletedAt !== null) {
+      // T-185-10 org assertion (Pitfall-2 grep-gate, option b): cross-org
+      // draft hides as 404 (D-08 hide-existence), never 403.
+      if (!draft || draft.deletedAt !== null || draft.organizationId !== req.organizationId) {
         res.status(404).json({ error: "Draft not found" });
         return;
       }
@@ -689,24 +752,38 @@ router.post(
       // file from the KB leg's persistent OCR copy
       // (storage/ocr-sources/<draftId>_<originalName>). On success the flow
       // proceeds; on failure the 400 below stays byte-identical.
+      // 260829-jv7 (D-02): before failing, attempt to restore the staged
+      // file from the KB leg's persistent OCR copy
+      // (storage/ocr-sources/<draftId>_<originalName>). On success the flow
+      // proceeds; on failure the 400 below stays byte-identical.
+      //
+      // Phase 184 (D-06, Pitfall 1): provider-branched existence probe —
+      // same layout test as the /assign guard above (new-layout rows probe
+      // provider.exists; legacy "storage/" rows keep fs.existsSync — zero
+      // delta; the LocalFS-only restore arm is unchanged per D-07).
       if (
         (parsed.data.rag === true || parsed.data.kb === true) &&
-        draft.mimeType !== "text/url" &&
-        !fs.existsSync(path.resolve(draft.filePath))
+        draft.mimeType !== "text/url"
       ) {
-        if (tryRestoreDraftFromOcrCopy(draft)) {
-          logger.info("[uploads] retry: draft source file restored from persistent OCR copy", {
-            draftId: draft.id,
-          });
-        } else {
-          logger.warn("[uploads] retry blocked: draft source file missing", {
-            draftId: draft.id,
-          });
-          res.status(400).json({
-            error: "Draft source file no longer exists on disk — re-upload the file to assign it",
-            details: { draftId: draft.id },
-          });
-          return;
+        const isNewLayout = Boolean(draft.storageKey) && !draft.storageKey!.includes("storage/");
+        const sourceMissing = isNewLayout
+          ? !(await (await getStorageProvider(draft.organizationId)).exists(draft.storageKey!))
+          : !fs.existsSync(path.resolve(draft.filePath));
+        if (sourceMissing) {
+          if (tryRestoreDraftFromOcrCopy(draft)) {
+            logger.info("[uploads] retry: draft source file restored from persistent OCR copy", {
+              draftId: draft.id,
+            });
+          } else {
+            logger.warn("[uploads] retry blocked: draft source file missing", {
+              draftId: draft.id,
+            });
+            res.status(400).json({
+              error: "Draft source file no longer exists on disk — re-upload the file to assign it",
+              details: { draftId: draft.id },
+            });
+            return;
+          }
         }
       }
 
@@ -788,6 +865,8 @@ router.post(
 router.get(
   "/pending",
   authMiddleware,
+  // Phase 185 (D-09): tenant slot — auth → tenant → permission.
+  tenantContextMiddleware,
   requirePermission("document:read"),
   async (req: Request, res: Response) => {
     try {
@@ -856,20 +935,29 @@ router.get(
  * Permission: document:write (NOT document:delete — Pitfall 6: document:delete
  * is admin-only and would break PEND-01 for the User role).
  *
- * T-76-02: A5 prefix guard on fs.unlinkSync — path.resolve(draft.filePath)
- * must start with DRAFTS_BASE. URL drafts (filePath="https://...") and
- * traversal payloads ("../../etc/passwd") are rejected naturally by the
- * guard — NO mimeType special-case (Pitfall 3).
+ * T-76-02 / Phase 184 (D-08): cleanup guard — NEW-LAYOUT storageKeys
+ * ({orgId}/uploads/drafts/…, isDraftStorageKey new-layout arm) delete through
+ * the provider; legacy rows (storageKey contains "storage/" or null — the
+ * M6 path-as-key backfill) keep the A5 prefix guard on fs.unlinkSync —
+ * path.resolve(draft.filePath) must start with DRAFTS_BASE. URL drafts
+ * (filePath="https://...", storageKey = url) and traversal payloads are
+ * rejected naturally by the guards — NO mimeType special-case (Pitfall 3).
  *
  * Response: { message } — no filePath key (T-76-04 / D-06 hardening).
  */
-router.delete("/:id", authMiddleware, requirePermission("document:write"), async (req: Request, res: Response) => {
+router.delete("/:id", authMiddleware, tenantContextMiddleware, requirePermission("document:write"), async (req: Request, res: Response) => {
     try {
       const draft = await prisma.uploadDraft.findUnique({
         where: { id: req.params.id as string },
       });
       // 404 hides existence for missing, soft-deleted, AND non-owner (D-08).
       if (!draft || draft.deletedAt !== null) {
+        res.status(404).json({ error: "Draft not found" });
+        return;
+      }
+      // T-185-10 org assertion (Pitfall-2 grep-gate, option b): cross-org
+      // draft hides as 404 (D-08 hide-existence), never 403.
+      if (draft.organizationId !== req.organizationId) {
         res.status(404).json({ error: "Draft not found" });
         return;
       }
@@ -897,22 +985,47 @@ router.delete("/:id", authMiddleware, requirePermission("document:write"), async
         return;
       }
       // D-01: soft-delete FIRST (reaper ordering — row unselectable even if
-      // the unlink below fails).
+      // the cleanup below fails).
       await prisma.uploadDraft.update({
         where: { id: draft.id },
         data: { deletedAt: new Date() },
       });
-      // D-01 / T-76-02: A5 prefix guard + best-effort unlink. URL drafts and
-      // traversal payloads are skipped naturally (NO mimeType special-case).
-      const resolved = path.resolve(draft.filePath);
-      if (resolved.startsWith(DRAFTS_BASE)) {
+      // D-01 / T-76-02 / Phase 184 (D-08): key-based cleanup contract. The
+      // guard branches on the row's storageKey: NEW-LAYOUT keys (isDraftStorageKey
+      // true via the {orgId}/uploads/drafts/ trailing-sep arm — the A5
+      // sibling-prefix rule reborn in key space) delete through the provider
+      // (row's-org rule — provider resolution via draft.organizationId),
+      // best-effort try/catch-warn. LEGACY rows (backfilled storageKey = the
+      // old path — always contains "storage/", or null storageKey) keep the
+      // exact A5 resolve + fs.unlinkSync — byte-identical AND provider-correct
+      // (legacy bytes are always on local disk per D-05: S3 tenants never
+      // re-upload legacy rows, so their cleanup must never touch the bucket).
+      // URL drafts: isDraftStorageKey(url) is false → no delete (unchanged;
+      // NO mimeType special-case — Pitfall 3).
+      const isNewLayoutKey =
+        Boolean(draft.storageKey) &&
+        isDraftStorageKey(draft.storageKey) &&
+        !draft.storageKey!.includes("storage/");
+      if (isNewLayoutKey) {
         try {
-          fs.unlinkSync(resolved);
+          await (await getStorageProvider(draft.organizationId)).delete(draft.storageKey!);
         } catch (err) {
-          logger.warn("[uploads] delete unlink failed (best-effort)", {
+          logger.warn("[uploads] delete provider cleanup failed (best-effort)", {
             draftId: draft.id,
             error: (err as Error).message,
           });
+        }
+      } else {
+        const resolved = path.resolve(draft.filePath);
+        if (resolved.startsWith(DRAFTS_BASE)) {
+          try {
+            fs.unlinkSync(resolved);
+          } catch (err) {
+            logger.warn("[uploads] delete unlink failed (best-effort)", {
+              draftId: draft.id,
+              error: (err as Error).message,
+            });
+          }
         }
       }
       // T-76-04 / D-06: NEVER include filePath.
@@ -939,7 +1052,7 @@ router.delete("/:id", authMiddleware, requirePermission("document:write"), async
  * Do NOT spread the raw Prisma draft or call a serializer that includes
  * filePath (Pitfall 4).
  */
-router.patch("/:id", authMiddleware, requirePermission("document:write"), async (req: Request, res: Response) => {
+router.patch("/:id", authMiddleware, tenantContextMiddleware, requirePermission("document:write"), async (req: Request, res: Response) => {
     try {
       const parsed = renameUploadSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -954,6 +1067,12 @@ router.patch("/:id", authMiddleware, requirePermission("document:write"), async 
       });
       // 404 hides existence for missing, soft-deleted, AND non-owner (D-08).
       if (!draft || draft.deletedAt !== null) {
+        res.status(404).json({ error: "Draft not found" });
+        return;
+      }
+      // T-185-10 org assertion (Pitfall-2 grep-gate, option b): cross-org
+      // draft hides as 404 (D-08 hide-existence), never 403.
+      if (draft.organizationId !== req.organizationId) {
         res.status(404).json({ error: "Draft not found" });
         return;
       }

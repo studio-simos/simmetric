@@ -7,6 +7,7 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import matter from "gray-matter";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import { wikilinkResolveSchema, mergePagesSchema } from "@simmetric-chat/shared";
 import { resolveWikilinks, redirectWikilinks } from "../services/wikiLinkService";
@@ -21,6 +22,10 @@ const router = Router();
 
 // All endpoints require authentication
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 // ===========================================================================
 // GET /api/wikilinks/maintenance/:archiveId — Proactive maintenance suggestions

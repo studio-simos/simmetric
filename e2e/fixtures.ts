@@ -24,6 +24,24 @@ import { test as base, expect, type Page, type APIRequestContext } from "@playwr
 const WORKSPACE_ID = "9a334821-b880-411b-affc-805664e7fd66"; // "Elegregio" (admin-owned, dev DB)
 const SERVER_BASE = "http://localhost:3000";
 
+// ============================================================
+// Phase 182 (SAAS-01b) — org-b fixture constants (E2E-HARNESS-ONLY)
+// ============================================================
+// These constants identify the second-tenant fixture org seeded by
+// seedOrgBFixture() in ./e2e/globalSetup.ts. They exist ONLY in the E2E
+// harness — never production seed data. Zero-grep gate (threat T-182-15):
+// no ORG_B* symbol may appear under packages/server or packages/collector.
+//
+// TS-04 adjacency: org-b's user (orgbuser / orgbuser@example.com) is
+// globally DISTINCT from every default-org fixture identity (admin,
+// user, widget-service) — two orgs' users never share a login identity.
+export const ORG_B_ID = "00000000-0000-0000-0000-0000000000bb";
+export const ORG_B_WORKSPACE_ID = "00000000-0000-0000-0000-0000000000b1";
+export const ORG_B_USERNAME = "orgbuser";
+export const ORG_B_SLUG = "org-b";
+/** Dedicated org-b user email — globally unique (differs from admin/user). */
+export const ORG_B_USER_EMAIL = "orgbuser@example.com";
+
 /** Shared login + animation-disabled init script. Mirrors the adminPage logic
  *  so the composed fixtures (chatWithRagPage) stay self-contained.
  *

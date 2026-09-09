@@ -2,13 +2,85 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
-import { DEFAULT_ROLE_MENU_SECTIONS, PERMISSION_NAMES, PROVIDER_PRESETS } from "@simmetric-chat/shared";
+import { DEFAULT_ORG_ID, DEFAULT_ROLE_MENU_SECTIONS, PERMISSION_NAMES, PROVIDER_PRESETS } from "@simmetric-chat/shared";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
+
+/**
+ * Phase 182 (SAAS-01a/D-01/Pitfall 4b) — default-org membership helper,
+ * mirrored inline (seed.ts cannot import src/services per repo layering —
+ * 182-RESEARCH Pattern 3 placement rationale). Same shape as
+ * organizationService.ensureDefaultOrgMembership:
+ *   findFirst live guard → tombstone-resurrect → P2002-tolerant create.
+ *
+ * NOT a composite-unique upsert: against the partial unique index
+ * (WHERE deletedAt IS NULL) Postgres rejects ON CONFLICT arbitration with
+ * 42P10 — the resurrect shape is the verified either-branch-safe form.
+ */
+type SeedPrismaClient = PrismaClient;
+async function ensureDefaultOrgMembership(
+  db: SeedPrismaClient,
+  userId: string,
+  roleInOrg: "owner" | "admin" | "member" = "member",
+): Promise<void> {
+  const live = await db.organizationMember.findFirst({
+    where: { organizationId: DEFAULT_ORG_ID, userId, deletedAt: null },
+  });
+  if (live) return;
+
+  const tombstone = await db.organizationMember.findFirst({
+    where: { organizationId: DEFAULT_ORG_ID, userId, deletedAt: { not: null } },
+  });
+  if (tombstone) {
+    try {
+      await db.organizationMember.update({
+        where: { id: tombstone.id },
+        data: { deletedAt: null, roleInOrg }, // re-grant: resurrect honors the caller's role (WR-02/G-182-02)
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code !== "P2002") throw err;
+    }
+    return;
+  }
+
+  try {
+    await db.organizationMember.create({
+      data: { organizationId: DEFAULT_ORG_ID, userId, roleInOrg },
+    });
+  } catch (err) {
+    // P2002 = a concurrent seed/boot raced past its own guard and created or
+    // resurrected the row first — the membership exists either way, so a lost
+    // race is tolerated, never rethrown (boot seeding runs inside a
+    // process.exit(1) try/catch; a rethrow here would crash-loop).
+    if ((err as { code?: string }).code !== "P2002") throw err;
+    const winner = await db.organizationMember.findFirst({
+      where: { organizationId: DEFAULT_ORG_ID, userId, deletedAt: null },
+    });
+    if (!winner) throw err;
+  }
+}
+
+/**
+ * Verify-only default-org check (Phase 182, SAAS-01a single-ownership):
+ * migration M1 owns the organizations row — the seed NEVER inserts it.
+ * A missing row means migrations did not run; log the exact remediation as a
+ * warning (seed failure is tolerated at boot — docker/entrypoint-server.sh
+ * `|| echo WARNING`) but do NOT throw and do NOT upsert.
+ */
+async function verifyDefaultOrgExists(): Promise<void> {
+  const org = await prisma.organization.findUnique({ where: { id: DEFAULT_ORG_ID } });
+  if (!org) {
+    console.warn(
+      `[seed] Default organization row (${DEFAULT_ORG_ID}) NOT found — migrations M1-M4 must run before seeding (prisma migrate deploy). The seed verifies but does NOT create the org (M1 owns the row).`,
+    );
+  } else {
+    console.log("[seed] Default organization verified (M1-owned row present)");
+  }
+}
 
 // KEEP IN SYNC with PERMISSION_NAMES in @simmetric-chat/shared
 // The seed_rbac() SQL procedure is idempotent (ON CONFLICT DO NOTHING on all
@@ -600,6 +672,16 @@ async function seedSystemConfig() {
     EMBEDDING_PROVIDER: "local",
     EMBEDDING_MODEL: "Xenova/all-MiniLM-L6-v2",
     VECTOR_DB_PROVIDER: "lancedb",
+    // Phase 184 (SAAS-03) — storage provider defaults (D-01). Same 6 keys as
+    // CONFIG_DEFAULTS; the inline find-first-then-write loop below handles
+    // idempotency. Do NOT import src/services here (seed runs standalone via
+    // tsx — the 183-02 layering doctrine).
+    STORAGE_PROVIDER: "localfs",
+    S3_ENDPOINT: "",
+    S3_BUCKET: "",
+    S3_REGION: "",
+    S3_ACCESS_KEY_ID: "",
+    S3_SECRET_ACCESS_KEY: "",
     SERVER_PORT: "3000",
     COLLECTOR_PORT: "3210",
     SESSION_EXPIRY: "86400000",
@@ -610,11 +692,25 @@ async function seedSystemConfig() {
   };
 
   for (const [key, value] of Object.entries(defaults)) {
-    await prisma.systemConfig.upsert({
-      where: { key },
-      update: {}, // Don't override user-set values
-      create: { key, value },
+    // Phase 183 (SAAS-02): inline find-first-then-write (no settings-service
+    // import — seed runs standalone via tsx and constructs its own
+    // PrismaClient; the shape is the requirement, mirroring seedConfigDefaults'
+    // create-only-if-missing semantics via the empty-update equivalent:
+    // an existing row is left untouched). Global rows — explicit null-org
+    // filter keeps the read composite-unique-safe (Plan-03 swap).
+    const existing = await prisma.systemConfig.findFirst({
+      where: { key, organizationId: null },
     });
+    if (existing) continue; // Don't override user-set values
+    try {
+      await prisma.systemConfig.create({
+        data: { key, value, organizationId: null },
+      });
+    } catch (err) {
+      // P2002 tolerance (concurrent re-seed): another process won the create
+      // race — the row exists, keep the user-set value.
+      if ((err as { code?: string }).code !== "P2002") throw err;
+    }
   }
 
   console.log(`[seed] Seeded ${Object.keys(defaults).length} default config entries`);
@@ -630,6 +726,8 @@ async function seedServiceAccount() {
     },
   });
   if (existing) {
+    // WR-01/G-182-01 self-heal: idempotent — repairs a crashed create→membership window.
+    await ensureDefaultOrgMembership(prisma, existing.id, "member");
     console.log("[seed] Service account already exists, skipping");
     return;
   }
@@ -652,6 +750,9 @@ async function seedServiceAccount() {
     },
   });
 
+  // Phase 182 (Pitfall 4b): service account gets default-org membership at creation.
+  await ensureDefaultOrgMembership(prisma, user.id, "member");
+
   console.log(`[seed] Created service account: ${user.email}`);
 }
 
@@ -665,6 +766,16 @@ async function seedAdminUser() {
     },
   });
   if (existing) {
+    // WR-01/G-182-01 self-heal: idempotent — repairs a crashed create→membership
+    // window. The handle match (email OR username) can also catch an unrelated
+    // account, so never promote blindly: grant "admin" only when the user
+    // actually holds the admin role (matches the create-path grant); any other
+    // handle holder heals as a plain member — mirrors seedService.ts's
+    // deliberately conservative handle-taken choice (182-REVIEW WR-01).
+    const holdsAdminRole = await prisma.userRole.findFirst({
+      where: { userId: existing.id, role: { name: "admin" } },
+    });
+    await ensureDefaultOrgMembership(prisma, existing.id, holdsAdminRole ? "admin" : "member");
     console.log("[seed] Admin user already exists, skipping");
     return;
   }
@@ -696,6 +807,10 @@ async function seedAdminUser() {
     },
   });
 
+  // Phase 182 (Pitfall 4b): admin gets default-org membership (role admin —
+  // matches the seeded admin role; owner assignment is Phase 185 provisioning).
+  await ensureDefaultOrgMembership(prisma, user.id, "admin");
+
   console.log(
     '[seed] Created admin user (username: "admin", password: "admin123") — mustChangePassword=true, rotation forced at first login',
   );
@@ -711,6 +826,8 @@ async function seedUserUser() {
     },
   });
   if (existing) {
+    // WR-01/G-182-01 self-heal: idempotent — repairs a crashed create→membership window.
+    await ensureDefaultOrgMembership(prisma, existing.id, "member");
     console.log("[seed] Demo user already exists, skipping");
     return;
   }
@@ -741,6 +858,9 @@ async function seedUserUser() {
     },
   });
 
+  // Phase 182 (Pitfall 4b): demo user gets default-org membership at creation.
+  await ensureDefaultOrgMembership(prisma, user.id, "member");
+
   console.log('[seed] Created demo user (username: "user", password: "user123")');
 }
 
@@ -748,6 +868,8 @@ export async function main() {
   console.log("[seed] Starting database seed...");
 
   await seedRbac();
+  // Phase 182 (SAAS-01a single-ownership): verify — never insert — the M1-owned org row.
+  await verifyDefaultOrgExists();
   await seedMenuSections();
   await seedCatalogEntries();
   await seedProviderPresets();

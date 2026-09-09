@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission, requireWorkspaceAccess } from "../middleware/rbac";
 import prisma, { withSoftDelete } from "../utils/prisma";
 import { renameChatSchema, updateChatModelSchema, moveChatSchema, editMessageSchema, linkArchiveSchema } from "@simmetric-chat/shared";
@@ -14,6 +15,10 @@ import { parseMetadata } from "../utils/parseMetadata";
 
 const router = Router();
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 // PUT /api/workspaces/:workspaceId/chats/:chatId — rename a chat
 router.put("/:workspaceId/chats/:chatId", requireWorkspaceAccess, async (req: Request, res: Response) => {
@@ -147,7 +152,9 @@ router.delete("/:workspaceId/chats/:chatId/messages/:messageId", requireWorkspac
       where: { id: messageId },
     });
 
-    if (!message || message.chatId !== chatId) {
+    // T-185-10 org assertion (Pitfall-2 grep-gate, option b): cross-org
+    // message hides as 404 — fail-closed.
+    if (!message || message.chatId !== chatId || message.organizationId !== req.organizationId) {
       res.status(404).json({ error: "Message not found" });
       return;
     }
@@ -180,7 +187,9 @@ router.put("/:workspaceId/chats/:chatId/messages/:messageId", requireWorkspaceAc
     const message = await prisma.chatMessage.findUnique({
       where: { id: messageId },
     });
-    if (!message || message.chatId !== chatId) {
+    // T-185-10 org assertion (Pitfall-2 grep-gate, option b): cross-org
+    // message hides as 404 — fail-closed.
+    if (!message || message.chatId !== chatId || message.organizationId !== req.organizationId) {
       res.status(404).json({ error: "Message not found" });
       return;
     }

@@ -4,14 +4,16 @@
 // See LICENSE and NOTICE at the repository root for full terms.
 
 /**
- * SettingsMenu primitive tests — Feature 7.5 Slice C (7.5 settings laterale),
- * extended with always-expanded sub-section sub-menus (2026-07-15).
+ * SettingsMenu primitive tests — master-detail settings menu (UI revision
+ * R-6).
  *
  * The SettingsMenu is a plain-button two-level vertical nav reused by the
- * desktop settings rail and the mobile Sheet: each group (settings "page"/tab)
- * is a clickable header, and its sub-sections are an always-expanded indented
- * sub-list. It is theme-agnostic (the hacker neon override is pure CSS via
- * `.settings-menu-item[data-active]`).
+ * desktop settings rail and the mobile left drawer: each group (settings
+ * "page"/tab) is a clickable header, and its sub-sections are an
+ * always-expanded indented sub-list. It is theme-agnostic (the hacker neon
+ * override is pure CSS via `.settings-menu-item[data-active]`). The active
+ * voice is the OPEN detail page (`activeVoice: { tab, labelKey, sectionId }`),
+ * not a bare tab key.
  */
 import "@testing-library/jest-dom";
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -50,7 +52,7 @@ describe("SettingsMenu", () => {
     render(
       <SettingsMenu
         groups={GROUPS}
-        activeTab="security"
+        activeVoice={{ tab: "security", labelKey: "settings.tabs.security", sectionId: null }}
         onSelectTab={jest.fn()}
         onSelectSection={jest.fn()}
       />,
@@ -70,7 +72,7 @@ describe("SettingsMenu", () => {
     render(
       <SettingsMenu
         groups={GROUPS}
-        activeTab="security"
+        activeVoice={{ tab: "security", labelKey: "settings.tabs.security", sectionId: null }}
         onSelectTab={jest.fn()}
         onSelectSection={jest.fn()}
       />,
@@ -96,8 +98,7 @@ describe("SettingsMenu", () => {
     render(
       <SettingsMenu
         groups={GROUPS}
-        activeTab="security"
-        activeSection="roles"
+        activeVoice={{ tab: "security", labelKey: "settings.subSections.roles", sectionId: "roles" }}
         onSelectTab={jest.fn()}
         onSelectSection={jest.fn()}
       />,
@@ -124,7 +125,7 @@ describe("SettingsMenu", () => {
     render(
       <SettingsMenu
         groups={GROUPS}
-        activeTab="security"
+        activeVoice={{ tab: "security", labelKey: "settings.tabs.security", sectionId: null }}
         onSelectTab={onSelectTab}
         onSelectSection={jest.fn()}
       />,
@@ -140,7 +141,7 @@ describe("SettingsMenu", () => {
     render(
       <SettingsMenu
         groups={GROUPS}
-        activeTab="general"
+        activeVoice={{ tab: "general", labelKey: "settings.subSections.profile", sectionId: "profile" }}
         onSelectTab={jest.fn()}
         onSelectSection={onSelectSection}
       />,
@@ -155,7 +156,7 @@ describe("SettingsMenu", () => {
     const { container } = render(
       <SettingsMenu
         groups={[]}
-        activeTab="general"
+        activeVoice={null}
         onSelectTab={jest.fn()}
         onSelectSection={jest.fn()}
       />,
@@ -168,7 +169,7 @@ describe("SettingsMenu", () => {
     render(
       <SettingsMenu
         groups={GROUPS}
-        activeTab="general"
+        activeVoice={null}
         onSelectTab={jest.fn()}
         onSelectSection={jest.fn()}
       />,
@@ -185,5 +186,20 @@ describe("SettingsMenu", () => {
       .closest("button")!;
     expect(profileVoice).toHaveAttribute("type", "button");
     expect(profileVoice).toHaveAttribute("aria-label", "settings.subSections.profile");
+  });
+
+  it("does NOT mark any voice active when activeVoice is null (overview mode)", () => {
+    render(
+      <SettingsMenu
+        groups={GROUPS}
+        activeVoice={null}
+        onSelectTab={jest.fn()}
+        onSelectSection={jest.fn()}
+      />,
+    );
+
+    expect(
+      document.querySelector('.settings-menu-item[data-active="true"]'),
+    ).toBeNull();
   });
 });

@@ -13,6 +13,7 @@ import {
   ocrPreferencesSchema,
 } from "@simmetric-chat/shared";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import { verifyToken, getUserWithRoles } from "../services/authService";
 import { isTokenRevoked } from "../services/tokenRevocation";
@@ -24,8 +25,9 @@ import {
 } from "../services/ocrJobService";
 import { logger } from "../utils/logger";
 import prisma from "../utils/prisma";
+import { isAdmin } from "../utils/auth";
 import { logEvent } from "../services/eventLogService";
-import { getSetting } from "../services/systemConfigService";
+import { getSetting, upsertSystemConfigRow } from "../services/systemConfigService";
 import { resolveModelConfig, type OcrModelConfig } from "../ocr/modelRegistry";
 import {
   buildDeepseekOcrPrompt,
@@ -56,6 +58,26 @@ imageRouter.get(
       if (!job || job.archiveId !== archiveId) {
         res.status(404).json({ error: "Job not found" });
         return;
+      }
+
+      // CR-06 (185-05, T-185-22): the ?token= auth tier resolves WHO the
+      // requester is, but pre-fix nothing asserted WHICH org the job belongs
+      // to — any valid JWT could enumerate any org's OCR page images
+      // (potential PHI). Assert the org: resolve the requester's org with
+      // the D-01 membership shape and require job.organizationId ===
+      // requesterOrg; platform admins keep global visibility. Mismatch →
+      // the same 404 "Job not found" shape (existence hidden).
+      if (!isAdmin(req.user)) {
+        const membership = await prisma.organizationMember.findFirst({
+          where: { userId: req.userId, deletedAt: null },
+          orderBy: { joinedAt: "asc" },
+          select: { organizationId: true },
+        });
+        const requesterOrg = membership?.organizationId;
+        if (!requesterOrg || (job as { organizationId?: string | null }).organizationId !== requesterOrg) {
+          res.status(404).json({ error: "Job not found" });
+          return;
+        }
       }
 
       const result = parseOcrJobResult(job.result);
@@ -90,6 +112,17 @@ imageRouter.get(
 router.use(imageRouter);
 
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate. NOTE: the imageRouter
+// above runs BEFORE auth via queryTokenAuth (?token= JWT variant) — it stays
+// outside the tenant slot by design (asset-serving auth-tier exception).
+// CR-06 (185-05): the ?token= surface is no longer UNASSERTED — the handler
+// above carries an explicit org assertion (job.organizationId vs the
+// requester's D-01 membership org, admins global). The ?token= auth tier
+// (asset-serving <img> tags cannot send an Authorization header) remains the
+// ONLY exception aspect; the ocrCatalogRouter below gets its own slot.
+router.use(tenantContextMiddleware);
 
 /**
  * Lightweight auth for routes that can't send Authorization header (e.g., <img> tags).
@@ -125,6 +158,9 @@ async function queryTokenAuth(req: Request, res: Response, next: NextFunction) {
 // --- Catalog Router (mounted separately at /api/ocr) ---
 const ocrCatalogRouter = Router();
 ocrCatalogRouter.use(authMiddleware);
+// Phase 185 (D-09): tenant slot for the separately-mounted catalog router
+// (same auth → tenant order as the main router above).
+ocrCatalogRouter.use(tenantContextMiddleware);
 
 let catalogCache: { data: OcrModelConfig[]; timestamp: number } | null = null;
 const CATALOG_CACHE_TTL_MS = 60_000;
@@ -256,7 +292,11 @@ ocrCatalogRouter.get("/preferences", requirePermission("archive:read"), async (r
   try {
     const workspaceId = String(req.query.workspaceId || "");
     const key = `ocr_prefs_${req.userId}`;
-    const config = await prisma.systemConfig.findUnique({ where: { key } });
+    // Phase 183 (SAAS-02): findFirst with explicit null-org filter — global
+    // per-user blob, composite-unique-safe read shape.
+    const config = await prisma.systemConfig.findFirst({
+      where: { key, organizationId: null },
+    });
     const allPrefs = config ? JSON.parse(config.value) : {};
     res.json(allPrefs[workspaceId] || {});
   } catch (err: unknown) {
@@ -304,7 +344,11 @@ ocrCatalogRouter.post("/preferences", requirePermission("archive:write"), async 
 
     const { workspaceId, model, ocrMode, customInstructions } = parsed.data;
     const key = `ocr_prefs_${req.userId}`;
-    const existing = await prisma.systemConfig.findUnique({ where: { key } });
+    // Phase 183 (SAAS-02): findFirst with explicit null-org filter — global
+    // per-user blob, composite-unique-safe read shape.
+    const existing = await prisma.systemConfig.findFirst({
+      where: { key, organizationId: null },
+    });
     const allPrefs = existing ? JSON.parse(existing.value) : {};
 
     const workspacePrefs: Record<string, unknown> = {};
@@ -314,11 +358,9 @@ ocrCatalogRouter.post("/preferences", requirePermission("archive:write"), async 
 
     allPrefs[workspaceId] = workspacePrefs;
 
-    await prisma.systemConfig.upsert({
-      where: { key },
-      create: { key, value: JSON.stringify(allPrefs) },
-      update: { value: JSON.stringify(allPrefs) },
-    });
+    // Phase 183 (SAAS-02): helper-mediated find-first-then-write — global
+    // row (per-user blob keys stay global-only, P3).
+    await upsertSystemConfigRow(prisma, { key, value: JSON.stringify(allPrefs) });
 
     res.json({ message: "Preferences saved" });
   } catch (err: unknown) {

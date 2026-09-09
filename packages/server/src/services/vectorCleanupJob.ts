@@ -30,6 +30,18 @@ import { getEnv } from "../config/env";
 import { logger } from "../utils/logger";
 import { getBoss, createQueue, schedule } from "./jobQueue";
 
+// Phase 185 D-09: jobs run OUTSIDE the request ALS — org is resolved FROM THE
+// ROW (never the ambient tenant-context read); ambient reads in jobs are bugs (Pitfall 8).
+// Disposition: PLATFORM-LEVEL CROSS-ORG BY DESIGN with ROW-DERIVED routing —
+// the cycle sweeps ALL orgs' soft-deleted documents pending vector purge.
+// The collector DELETE is addressed by the ROW's own workspaceId
+// (doc.workspaceId in the purge URL), never ambient context; no
+// getStorageProvider call exists here (vector bytes live in the collector,
+// not the org's storage provider). Document rows carry organizationId
+// (Phase 182); if a future org-scoped operation is added, read it from the
+// row's select — the findMany/update runs OUTSIDE ALS so the scoped
+// extension skips it (absent-store semantics, 185-01 spike probe 9).
+
 // ─── Retry bounds (IN-02) ──────────────────────────────────────────────────
 //
 // A document whose collector purge persistently fails (e.g. collector

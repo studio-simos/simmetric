@@ -6,6 +6,7 @@
 import { Router, type Request, type Response } from "express";
 import { Prisma } from "@prisma/client";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import {
   synthesisApproveRejectSchema,
@@ -24,6 +25,10 @@ const router = Router();
 
 // All synthesis endpoints require authentication
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 // ===========================================================================
 // GET /api/synthesis/status
@@ -111,6 +116,8 @@ router.post(
           // D-11: computed default name so the run row is readable in the UI
           // before the user renames it.
           name: defaultRunName({ name: archive.name }, new Date()),
+          // CR-03 (185-05, D-04): explicit org stamp (graph-wiki trigger).
+          organizationId: req.organizationId!,
         },
       });
 

@@ -12,7 +12,8 @@
  * Both routes require `authMiddleware` + `requirePermission("filters:manage")`
  * (D-09: admin + superuser only; the 31st permission, seeded in seed.ts).
  *
- * PATCH writes directly to `prisma.systemConfig.upsert` with key
+ * PATCH writes directly to SystemConfig via upsertSystemConfigRow (the
+ * find-first-then-write helper) with key
  * `filter_<name>_enabled` — NOT via `updateSettings()`, because dynamic
  * filter keys are not in `configKeySchema` (Pitfall 6). The in-memory
  * `plugin.enabled` flag is mutated so the running registry reflects the
@@ -24,17 +25,19 @@
  */
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import { updateFilterSchema } from "@simmetric-chat/shared";
 import { getAllFilters, getFilter } from "../filters/filterRegistry";
 import { logEvent } from "../services/eventLogService";
+import { upsertSystemConfigRow } from "../services/systemConfigService";
 import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
 
 const router = Router();
 
 // Both routes require auth + filters:manage (D-09: admin + superuser only).
-router.use(authMiddleware, requirePermission("filters:manage"));
+router.use(authMiddleware, tenantContextMiddleware, requirePermission("filters:manage"));
 
 /**
  * @openapi
@@ -139,14 +142,15 @@ router.patch("/:name", async (req: Request, res: Response) => {
     }
 
     const { enabled } = parsed.data;
-    // Pitfall 6: write directly to prisma.systemConfig.upsert — dynamic
-    // `filter_<name>_enabled` keys are NOT in configKeySchema, so
-    // updateSettings() would reject them. Direct upsert bypasses that gate.
+    // Pitfall 6: write directly to SystemConfig via upsertSystemConfigRow
+    // (find-first-then-write) — dynamic `filter_<name>_enabled` keys are NOT
+    // in configKeySchema, so updateSettings() would reject them. Direct
+    // writes bypass that gate (global row — dynamic keys are not
+    // tenant-overridable, Phase-183 P3).
     const configKey = `filter_${name}_enabled`;
-    await prisma.systemConfig.upsert({
-      where: { key: configKey },
-      update: { value: enabled.toString() },
-      create: { key: configKey, value: enabled.toString() },
+    await upsertSystemConfigRow(prisma, {
+      key: configKey,
+      value: enabled.toString(),
     });
 
     // Mutate the in-memory registry flag so the running chain reflects the

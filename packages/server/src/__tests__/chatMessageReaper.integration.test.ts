@@ -99,13 +99,24 @@ afterAll(async () => {
 
 // --- helpers ---------------------------------------------------------------
 
-/** Set the retention config directly in the worker DB (bypasses the route). */
+/** Set the retention config directly in the worker DB (bypasses the route).
+ * Phase 183 (SAAS-02, P4): find-first-then-write against real Postgres —
+ * the same local shape as the system.integration harness (composite-unique
+ * safe; no keyed upsert). */
 async function setRetention(value: string): Promise<void> {
-  await prisma.systemConfig.upsert({
-    where: { key: "chat_message_retention_days" },
-    create: { key: "chat_message_retention_days", value },
-    update: { value },
+  const existing = await prisma.systemConfig.findFirst({
+    where: { key: "chat_message_retention_days", organizationId: null },
   });
+  if (existing) {
+    await prisma.systemConfig.update({
+      where: { id: existing.id },
+      data: { value },
+    });
+  } else {
+    await prisma.systemConfig.create({
+      data: { key: "chat_message_retention_days", value, organizationId: null },
+    });
+  }
 }
 
 /** Fetch the latest reaper audit event. */

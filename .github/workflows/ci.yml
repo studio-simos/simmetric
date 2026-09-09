@@ -65,6 +65,24 @@ jobs:
   test-unit:
     runs-on: ubuntu-latest
     needs: lint-and-typecheck
+    # Phase 184 (SAAS-03, D-09): the StorageProvider conformance suite's S3
+    # arm runs ALWAYS in CI against this MinIO service container (D-02
+    # checksum landmine + multipart verified against a real S3-compatible
+    # endpoint — never mocked). Local runs skip loudly when S3_AVAILABLE is
+    # unset; in CI the env export below turns the arm on unconditionally.
+    services:
+      minio:
+        image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+        env:
+          MINIO_ROOT_USER: simmetricchat
+          MINIO_ROOT_PASSWORD: simmetricchat
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd="mc ready local"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4 (annotated tag — dereferenced to commit, Pitfall P1)
@@ -78,6 +96,13 @@ jobs:
       - run: pnpm db:generate
       - name: Verify @prisma/client resolvable (Prisma 7 + pnpm symlink check)
         run: pnpm --filter server exec node -e "const { PrismaClient } = require('@prisma/client'); if (typeof PrismaClient !== 'function') process.exit(1); console.log('PrismaClient OK');"
+      - name: Create conformance bucket in MinIO service container
+        # D-09: the bucket must exist before the S3 conformance arm runs.
+        # Uses the minio/mc image against the job's service container over
+        # the default job network (service hostname = the service name).
+        run: |
+          docker run --rm --network ${{ job.container-network || 'github_network_test-unit' }} \
+            minio/mc sh -c "mc alias set ci http://minio:9000 simmetricchat simmetricchat && mc mb --ignore-existing ci/simmetricchat"
       - run: pnpm test
       - name: Air-gap grep gate (no outbound HTTP from license service)
         # Phase 148 SC-2 / D-04 / D-06: the license service MUST be phone-home-free.
@@ -135,6 +160,16 @@ jobs:
       COLLECTOR_SECRET: ci-test-collector-secret
       NODE_ENV: test
       NODE_OPTIONS: --max-old-space-size=4096
+      # Phase 184 (SAAS-03, D-09): the S3 conformance arm runs ALWAYS in CI —
+      # the service container + bucket step above provision MinIO, these vars
+      # arm the gated describe (S3_AVAILABLE is the suite's explicit gate;
+      # a broken container fails the job visibly instead of skipping).
+      S3_AVAILABLE: "true"
+      S3_ENDPOINT: http://localhost:9000
+      S3_BUCKET: simmetricchat
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY_ID: simmetricchat
+      S3_SECRET_ACCESS_KEY: simmetricchat
 
   test-airgap:
     # Phase 148 SC-2 / D-05: runtime air-gap proof. Runs the unit suite with

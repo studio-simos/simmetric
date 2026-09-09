@@ -6,6 +6,7 @@
 import { Router, type Request, type Response } from "express";
 import { Prisma } from "@prisma/client";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import {
   installMcpServerSchema,
@@ -22,7 +23,7 @@ import { unregisterSkillsForConnection } from "../agent/skills";
 const router = Router();
 
 // GET / — List all catalog entries (auth only; any authenticated user can browse)
-router.get("/", authMiddleware, async (req: Request, res: Response) => {
+router.get("/", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const workspaceId = req.query.workspaceId as string | undefined;
 
@@ -58,7 +59,7 @@ router.get("/", authMiddleware, async (req: Request, res: Response) => {
 });
 
 // GET /:id — Get single catalog entry detail (auth only; any authenticated user can browse)
-router.get("/:entryId", authMiddleware, async (req: Request, res: Response) => {
+router.get("/:entryId", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const paramResult = mcpCatalogEntryIdParamSchema.safeParse(req.params);
     if (!paramResult.success) {
@@ -70,6 +71,10 @@ router.get("/:entryId", authMiddleware, async (req: Request, res: Response) => {
     }
     const { entryId } = paramResult.data;
 
+    // T-185-10 disposition (Pitfall-2 grep-gate): exempt model —
+    // McpCatalogEntry is the GLOBAL marketplace catalog (no org column,
+    // not in TENANT_READ_MODELS); the org-owning resource is the
+    // MCPConnection the install creates.
     const entry = await prisma.mcpCatalogEntry.findUnique({
       where: { id: entryId },
     });
@@ -88,7 +93,10 @@ router.get("/:entryId", authMiddleware, async (req: Request, res: Response) => {
 });
 
 // All other marketplace operations require admin access
-router.use(authMiddleware, requireAdmin);
+// Phase 185 (D-09): tenant slot between the gates — auth → tenant → admin.
+// McpCatalogEntry reads here are org-agnostic catalog rows; the slot keeps
+// the ALS store open for the downstream Tier-A MCPConnection installs.
+router.use(authMiddleware, tenantContextMiddleware, requireAdmin);
 
 // POST / — Create a catalog entry (admin only, used by E2E tests and admin panel)
 router.post("/", async (req: Request, res: Response) => {
@@ -187,6 +195,7 @@ router.post("/:entryId/install", async (req: Request, res: Response) => {
     }
 
     // 3. Find catalog entry -- 404 if not found
+    // T-185-10 disposition: exempt global catalog model (rationale above).
     const catalogEntry = await prisma.mcpCatalogEntry.findUnique({
       where: { id: entryId },
     });
@@ -225,6 +234,9 @@ router.post("/:entryId/install", async (req: Request, res: Response) => {
       enabled: true,
       catalogEntryId: entryId,
       source: "marketplace",
+      // CR-03 (185-05, D-04): explicit org stamp (Tier-A model — same
+      // self-visibility class as the mcp.ts create).
+      organizationId: req.organizationId!,
     };
 
     if (overrideHeaders) {

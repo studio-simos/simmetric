@@ -205,40 +205,24 @@ describe("TopBar", () => {
     expect(screen.getByLabelText("topbar.renameProject")).toBeDisabled();
   });
 
-  it("renders the avatar initials when no avatar URL is provided", () => {
-    setup();
-    // initials("Jane", "Doe") → "JD"
-    expect(screen.getByText("JD")).toBeInTheDocument();
-  });
-
   it("renders the current section label", () => {
     setup({ currentSection: "Documents" });
     expect(screen.getByText("Documents")).toBeInTheDocument();
   });
 
-  it("mounts the TokenCounterWidget and UserDropdown children", () => {
+  it("mounts the TokenCounterWidget child", () => {
     setup();
-    // ThemeToggle is no longer in TopBar (Feature 7.4 moved theme into UserDropdown).
-    // UserDropdown renders the trigger with the same aria-label.
-    expect(screen.getByLabelText("topbar.userMenu")).toBeInTheDocument();
-    // The widget renders its aria-label regardless of data.
+    // The user menu left the bar in R-5 (sidebar UserMenuDialog) — the bar
+    // renders only the token widget (its aria-label regardless of data).
+    expect(screen.queryByLabelText("topbar.userMenu")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Session token usage")).toBeInTheDocument();
   });
 
-  describe("user menu", () => {
-    it("navigates to /settings when Settings is clicked", () => {
-      setup();
-      // The mocked dropdown renders items inline; the trigger keeps its aria-label.
-      expect(screen.getByLabelText("topbar.userMenu")).toBeInTheDocument();
-      fireEvent.click(screen.getByText("menu.settings"));
-      expect(mockNavigate).toHaveBeenCalledWith("/settings");
-    });
-
-    it("calls onLogout when Sign Out is clicked", () => {
-      const onLogout = jest.fn();
-      setup({ onLogout });
-      fireEvent.click(screen.getByText("user-dropdown.signOut"));
-      expect(onLogout).toHaveBeenCalledTimes(1);
-    });
+  it("renders no user menu and no sign-out affordance (moved to the sidebar dialog)", () => {
+    setup();
+    // UI revision R-5: the consolidated user menu lives in the sidebar's
+    // UserMenuDialog — the bar must not duplicate it.
+    expect(screen.queryByText("menu.settings")).not.toBeInTheDocument();
+    expect(screen.queryByText("user-dropdown.signOut")).not.toBeInTheDocument();
   });
 });

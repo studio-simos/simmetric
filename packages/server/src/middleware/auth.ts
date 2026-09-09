@@ -67,9 +67,9 @@ export async function apiKeyMiddleware(req: Request, res: Response, next: NextFu
     return;
   }
 
-  let createdBy: string | null;
+  let keyPrincipal: { createdBy: string; organizationId: string } | null;
   try {
-    createdBy = await validateApiKey(apiKeyHeader);
+    keyPrincipal = await validateApiKey(apiKeyHeader);
   } catch {
     // Fail-loud on misconfiguration (missing/invalid API_KEY_HMAC_SECRET).
     // 500, NOT 401 — hiding misconfiguration as "invalid key" is a spoofing vector.
@@ -77,18 +77,24 @@ export async function apiKeyMiddleware(req: Request, res: Response, next: NextFu
     return;
   }
 
-  if (!createdBy) {
+  if (!keyPrincipal) {
     res.status(401).json({ error: "Invalid API key" });
     return;
   }
 
-  const user = await getCachedUserWithRoles(createdBy);
+  const user = await getCachedUserWithRoles(keyPrincipal.createdBy);
   if (!user) {
     res.status(401).json({ error: "API key owner not found" });
     return;
   }
 
-  req.userId = createdBy;
+  req.userId = keyPrincipal.createdBy;
   req.user = user;
+  // Phase 185 (SAAS-04a, D-08/D-09): seed the mint-time-pinned org candidate
+  // BEFORE next() — tenantContextMiddleware consumes it WITHOUT a membership
+  // lookup (the key's own organizationId column IS the resolution). This is
+  // the D-09 contract: auth variants populate org data before the chain
+  // proceeds; requirePermission runs downstream of the tenant slot.
+  req.tenantOrgCandidate = keyPrincipal.organizationId;
   next();
 }

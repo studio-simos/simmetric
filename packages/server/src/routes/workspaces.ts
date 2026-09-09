@@ -5,6 +5,8 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
+import { scopeToOrg } from "../utils/tenantContext";
 import { requireWorkspaceAccess, requirePermission, requireAdmin } from "../middleware/rbac";
 import { requireFeatureLimit } from "../middleware/license";
 import prisma, { withSoftDelete } from "../utils/prisma";
@@ -15,6 +17,11 @@ import { isAdmin } from "../utils/auth";
 const router = Router();
 
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId from the FIRST live membership
+// (D-01) and opens the ALS tenant run before any rbac/license gate — the
+// tracer slot; the full router sweep is Plan 02.
+router.use(tenantContextMiddleware);
 
 /**
  * @openapi
@@ -127,9 +134,13 @@ router.post("/", requirePermission("workspace:create"), requireFeatureLimit("max
     let enabledSkills: string | undefined;
 
     if (validated.templateId) {
-      const template = await prisma.workspaceTemplate.findUnique({
-        where: { id: validated.templateId },
-      });
+      // T-185-10 (Pitfall-2 grep-gate): PK-keyed template lookup restructured
+      // to a scoped findFirst — a cross-org templateId resolves null and the
+      // create proceeds with defaults (byte-identical to the not-found arm;
+      // template was optional before, fail-soft semantics preserved).
+      const template = await prisma.workspaceTemplate.findFirst(
+        { where: scopeToOrg(req.organizationId!, { id: validated.templateId }) },
+      );
 
       if (template) {
         // Template's embeddingModel overrides the default if set
@@ -162,10 +173,18 @@ router.post("/", requirePermission("workspace:create"), requireFeatureLimit("max
         templateId: validated.templateId || null,
         allowMemberUploads: validated.allowMemberUploads,
         icon: validated.icon || null,
+        // CR-03 (185-05, D-04): explicit org stamp — non-default-org rows
+        // must be self-visible and license-counted per-org (the @default
+        // alone lands every create in the DEFAULT org, making org-b rows
+        // self-invisible and max_workspaces fail-open).
+        organizationId: req.organizationId!,
       },
     });
 
     // Create agent config with resolved configuration
+    // T-185-10 disposition (Pitfall-2 grep-gate): parent-verified — the
+    // workspace row was created by THIS request (org assigned at create,
+    // D-04), so the child upsert cannot cross orgs.
     await prisma.workspaceAgentConfig.upsert({
       where: { workspaceId: workspace.id },
       update: {},
@@ -256,6 +275,10 @@ router.put("/:workspaceId", requireWorkspaceAccess, async (req: Request, res: Re
       if (constraints !== undefined) agentConfigData.constraints = JSON.stringify(constraints);
       if (parsingConfig !== undefined) agentConfigData.parsingConfig = JSON.stringify(parsingConfig);
 
+      // T-185-10 disposition (Pitfall-2 grep-gate): parent-verified — the
+      // route chain runs requireWorkspaceAccess on the SAME workspaceId
+      // param (scopeToOrg'd workspace read upstream), so the child upsert
+      // is org-safe.
       await prisma.workspaceAgentConfig.upsert({
         where: { workspaceId: req.params.workspaceId as string },
         update: agentConfigData,
@@ -373,6 +396,11 @@ router.post("/:workspaceId/access", requireWorkspaceAccess, async (req: Request,
     const validated = grantWorkspaceAccessSchema.parse(req.body);
     const workspaceId = req.params.workspaceId as string;
 
+    // T-185-10 disposition (Pitfall-2 grep-gate): parent-verified —
+    // requireWorkspaceAccess proved the grantor's access to workspaceId;
+    // the composite-unique upsert keys (userId, workspaceId), both of
+    // which are access-checked parameters (no org column on the composite
+    // beyond the inherited parent org at create).
     await prisma.workspaceAccess.upsert({
       where: {
         userId_workspaceId: { userId: validated.userId, workspaceId },
@@ -408,7 +436,13 @@ router.post("/:workspaceId/folders", requireWorkspaceAccess, async (req: Request
   try {
     const validated = createFolderSchema.parse(req.body);
     const folder = await prisma.chatFolder.create({
-      data: { workspaceId, name: validated.name },
+      data: {
+        workspaceId,
+        name: validated.name,
+        // CR-03 (185-05, D-04): explicit org stamp (ChatFolder is in
+        // TENANT_READ_MODELS) — same self-visibility class as the workspace.
+        organizationId: req.organizationId!,
+      },
     });
     res.status(201).json(folder);
   } catch (err: unknown) {

@@ -6,6 +6,7 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import {
   wikiWritePreviewSchema,
@@ -28,6 +29,10 @@ const router = Router();
 
 // All wiki-write endpoints require authentication
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 // ---------------------------------------------------------------------------
 // Iterative Summarization Helpers

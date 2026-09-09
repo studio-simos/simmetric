@@ -30,7 +30,11 @@ jest.mock("../middleware/auth", () => ({
     const authHeader = req.headers?.authorization as string | undefined;
     if (!authHeader?.startsWith("Bearer ")) {
       req.user = undefined;
-      return next();
+      // Phase 185: the REAL authMiddleware 401s here — the mock must too,
+      // otherwise tenantContextMiddleware (D-02 fail-closed) 404s before
+      // requireAdmin can produce the expected 401.
+      _res.status(401).json({ error: "Missing or invalid authorization header" });
+      return;
     }
     const token = authHeader.substring(7);
     // Admin fixture: Bearer token literally "admin-token" → admin user
@@ -42,6 +46,11 @@ jest.mock("../middleware/auth", () => ({
     } else {
       req.user = { id: "user-1", roles: [] };
     }
+    // Phase 185: the route chain now includes tenantContextMiddleware
+    // (auth → tenant → admin, D-09) — seed the org candidate the middleware
+    // consumes without a membership query (this suite stubs authMiddleware
+    // directly, so apiKeyMiddleware's seeding never runs).
+    req.tenantOrgCandidate = "org-default";
     next();
   }),
 }));
@@ -63,6 +72,12 @@ jest.mock("../config/env", () => {
 jest.mock("../utils/prisma", () => ({
   __esModule: true,
   default: {
+    // Phase 185 (185-02): tenantContextMiddleware (D-09) resolves the org via
+    // organizationMember.findFirst — live default-org membership keeps the
+    // single-org suite responses byte-identical.
+    organizationMember: {
+      findFirst: jest.fn().mockResolvedValue({ organizationId: "org-default" }),
+    },
     backupLog: {
       findFirst: jest.fn(),
       updateMany: jest.fn(),

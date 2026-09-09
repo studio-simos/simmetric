@@ -10,6 +10,21 @@ import { logEvent } from "./eventLogService";
 import fs from "fs/promises";
 import path from "path";
 
+// Phase 185 D-09: jobs run OUTSIDE the request ALS — org is resolved FROM THE
+// ROW (never the ambient tenant-context read); ambient ALS reads in jobs are
+// bugs (Pitfall 8).
+// Disposition: OcrJob rows carry organizationId (Phase 182); the pipeline's
+// file IO is archive-local (storage/archives/<archiveId>) and its model/config
+// resolution is global getSetting — no org-scoped provider call exists today,
+// so no per-row org consumption is needed. When one is added, read
+// row.organizationId (the full-row loads here already carry it) — never the
+// ambient store. resetStaleJobs/getActiveJobCount/getNextPendingJob/
+// cleanupOrphanedRawFiles operate platform-level across ALL orgs by design
+// (orphan recovery + concurrency limiting + disk reclamation — absent ALS
+// store semantics, 185-01 spike probe 9: the scoped extension skips absent
+// stores, so these updateMany/count/findFirst queries are NOT silently
+// narrowed).
+
 // ---------------------------------------------------------------------------
 // Result shape helpers — reduces `as any` proliferation on Prisma JsonValue
 // ---------------------------------------------------------------------------

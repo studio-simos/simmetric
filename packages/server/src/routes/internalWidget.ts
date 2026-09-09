@@ -3,7 +3,7 @@
 // This file is part of the Simmetric Chat community build.
 // See LICENSE and NOTICE at the repository root for full terms.
 
-import { Router, type Request, type Response } from "express";
+import { Router, type Request, type Response, type NextFunction } from "express";
 import crypto from "crypto";
 import { z } from "zod";
 import { apiKeyMiddleware } from "../middleware/auth";
@@ -14,6 +14,7 @@ import { hybridSearchWithRerank } from "../services/hybridSearchService";
 import { linkArchive } from "../services/chatArchiveService";
 import { isFeatureEnabled } from "../services/licenseService";
 import prisma from "../utils/prisma";
+import { runInTenant } from "../utils/tenantContext";
 import { logger } from "../utils/logger";
 import { handleChatStream } from "./chat";
 
@@ -39,6 +40,199 @@ router.use(apiKeyMiddleware);
 // the WHOLE internal router: 402 { error, feature: "widget_enabled", tier }
 // on every route when the flag is off.
 router.use(requireFeature("widget_enabled"));
+
+// Phase 185 (SAAS-04a, D-08 / T-185-07; CR-01 gap-closure 185-05): widget-row
+// org resolution — ROUTER-LEVEL tenant slot for the non-JWT widget principal.
+//
+// The org comes from the WIDGET ROW via its WidgetWorkspace whitelist →
+// workspace.organizationId — NEVER from the widget-service account's
+// membership (Pitfall 5: two independent identity dimensions; the service
+// account's API key carries the DEFAULT org, so deriving org from
+// req.user's membership would scope every widget chat to the default org).
+// Client input NEVER supplies the org (T-185-09): the identity field only
+// ever SELECTS the widget row; the org is read from the DB chain behind it.
+//
+// CR-01 (185-REVIEW): the widget CLIENT sends X-Widget-Id on exactly one
+// call (POST /chat/stream) — the widget service itself carries the widget
+// identity for every other endpoint in its body/path. The slot therefore
+// resolves the widget row from the IDENTITY SOURCE EACH ENDPOINT NATURALLY
+// CARRIES (identity-per-endpoint), keeping the widget package byte-identical:
+//   1. X-Widget-Id header          → POST /chat/stream
+//   2. req.body.widgetId           → POST /search, POST /session, POST /lead
+//   3. path param (/:id/config)    → GET /:id/config
+//   4. WidgetSession by token      → GET /session/:token,
+//                                    PATCH /session/:token/increment,
+//                                    PATCH /session/:token/chat/archive
+// A request carrying NO resolvable identity for its endpoint passes through
+// UNRESOLVED — the handler's own validation then produces the byte-identical
+// 400/401 (those arms touch no tenant data). Once identity IS resolvable,
+// unknown/inactive widget → 404 and empty whitelist → 404, fail-closed
+// (D-02), with the byte-identical shapes.
+//
+// The resolved row is STASHED on req.tenantWidget and ALL handlers consume
+// the stash instead of re-running the identical findFirst (WR-05: one
+// resolution per request, one identity source per endpoint — the
+// header-vs-body divergence concern is structurally closed).
+//
+// Error shapes are byte-identical to the per-route widget resolution the
+// handlers already ran (400 missing header on /chat/stream / 404
+// unknown-inactive widget / 404 empty whitelist). Widget response payloads
+// stay byte-identical — the org NEVER appears in any widget response.
+
+/** The widget row shape the handlers consume from the req.tenantWidget stash. */
+interface WidgetWithWhitelist {
+  id: string;
+  isActive: boolean;
+  leadCaptureEnabled: boolean;
+  archiveId: string | null;
+  responseProviderId: string | null;
+  responseModel: string | null;
+  workspaces: Array<{ workspaceId: string }>;
+  // The config handler passes ~20 further columns through to res.json
+  // verbatim (branding/triggers/localization) — index signature keeps the
+  // stash structurally compatible with the full Prisma row + test mocks.
+  [key: string]: unknown;
+}
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      /** Widget row resolved ONCE by widgetTenantContext (185-05 CR-01/WR-05) — handlers consume the stash, never re-query. */
+      tenantWidget?: WidgetWithWhitelist;
+    }
+  }
+}
+
+/**
+ * Identity source per endpoint (CR-01): returns the field that SELECTS the
+ * widget row for this request's route, or null when the endpoint's natural
+ * identity is absent (handler-owned 400/401 arms stay byte-identical).
+ * Mirrors the router's registration order (/:id/config before /session/:token).
+ */
+function resolveWidgetIdentity(req: Request): { widgetId: string } | { sessionToken: string } | null {
+  const method = req.method.toUpperCase();
+  const path = req.path;
+  const segs = path.split("/").filter(Boolean);
+
+  // (1) POST /chat/stream — the one endpoint whose identity rides the header.
+  if (method === "POST" && path === "/chat/stream") {
+    const widgetId = req.headers["x-widget-id"] as string | undefined;
+    return widgetId ? { widgetId } : null;
+  }
+  // (2) POST /search | /session | /lead — body.widgetId (express.json has
+  // run before routing, so the parsed body is readable here).
+  if (
+    method === "POST" &&
+    (path === "/search" || path === "/session" || path === "/lead")
+  ) {
+    const widgetId = (req.body as Record<string, unknown> | undefined)?.widgetId;
+    return typeof widgetId === "string" && widgetId.length > 0 ? { widgetId } : null;
+  }
+  // (3) GET /:id/config — path-param identity (registration order: this
+  // pattern matches before /session/:token, so it is checked first).
+  if (method === "GET" && segs.length === 2 && segs[1] === "config") {
+    return { widgetId: segs[0]! };
+  }
+  // (4) Session-token routes — the WidgetSession row (by token) carries the
+  // widgetId. GET /session/:token (2 segs) + both PATCH arms (3-4 segs).
+  if (method === "GET" && segs.length === 2 && segs[0] === "session") {
+    return { sessionToken: segs[1]! };
+  }
+  if (method === "PATCH" && segs[0] === "session" && segs.length >= 2) {
+    return { sessionToken: segs[1]! };
+  }
+  // No matching route on this router → no resolvable identity; the request
+  // falls through to whatever mounts after this router.
+  return null;
+}
+
+async function widgetTenantContext(req: Request, res: Response, next: NextFunction) {
+  try {
+    const identity = resolveWidgetIdentity(req);
+    if (!identity) {
+      if (req.method.toUpperCase() === "POST" && req.path === "/chat/stream") {
+        // The header IS this endpoint's identity source — a missing one keeps
+        // the byte-identical 400 shape (CR-01 contract).
+        res.status(400).json({ error: "X-Widget-Id header is required" });
+        return;
+      }
+      // No resolvable identity for this endpoint's natural source → pass
+      // through unresolved; the handler's own validation fires the
+      // byte-identical 400/401 (those arms touch no tenant data).
+      next();
+      return;
+    }
+
+    // Session-token arm: the WidgetSession row carries the widgetId (the
+    // session is the principal's proof-of-widget). Missing session → the
+    // handler's own 401 "Invalid or expired session" (byte-identical).
+    let widgetId: string;
+    if ("sessionToken" in identity) {
+      // T-185-10 disposition (Pitfall-2 grep-gate): exempt model —
+      // WidgetSession has NO organizationId column; the row only SELECTS the
+      // widget (same class exemption as the handlers' own session reads).
+      const session = await prisma.widgetSession.findUnique({
+        where: { sessionToken: identity.sessionToken },
+      });
+      if (!session) {
+        next();
+        return;
+      }
+      widgetId = session.widgetId;
+    } else {
+      widgetId = identity.widgetId;
+    }
+
+    // Same findFirst shape the per-route sites ran (IDOR-safe: the
+    // whitelist is the ONLY source of truth for the target workspace).
+    const widget = await prisma.widget.findFirst({
+      where: { id: widgetId, deletedAt: null, isActive: true },
+      include: { workspaces: { select: { workspaceId: true } } },
+    });
+
+    if (!widget) {
+      res.status(404).json({ error: "Widget not found or inactive" });
+      return;
+    }
+
+    const workspaceIds = widget.workspaces.map((w) => w.workspaceId);
+    if (workspaceIds.length === 0) {
+      res.status(404).json({ error: "Widget has no linked workspaces" });
+      return;
+    }
+
+    // D-08 chain: Widget row → WidgetWorkspace whitelist → Workspace org.
+    const workspace = await prisma.workspace.findFirst({
+      where: { id: workspaceIds[0], deletedAt: null },
+      select: { organizationId: true },
+    });
+    if (!workspace) {
+      // Whitelisted workspace tombstoned — fail-closed cross-tenant shape.
+      res.status(404).json({ error: "Widget has no linked workspaces" });
+      return;
+    }
+
+    // WR-05: stash ONCE — every handler consumes req.tenantWidget instead of
+    // re-running this identical findFirst (single resolution per request).
+    req.tenantWidget = widget as WidgetWithWhitelist;
+    req.organizationId = workspace.organizationId;
+    // Open the ALS tenant run for the whole downstream chain (handlers
+    // attach their first await inside the window — 185-01 semantics).
+    runInTenant({ organizationId: workspace.organizationId, bypass: false }, () => next());
+  } catch (err: unknown) {
+    // WR-02 (widget arm): fail-closed stays (D-02/D-07 shape), but the
+    // swallowed error is now logged — a DB outage must not present as a
+    // silent flood of 404s with no server-side signal.
+    logger.warn("[internalWidget] widget resolution failed — failing closed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    res.status(404).json({ error: "Widget not found or inactive" });
+  }
+}
+
+// D-09 chain order for the widget principal: apiKeyAuth → feature → tenant.
+router.use(widgetTenantContext);
 
 // Body schema for POST /chat/stream (260809-tuw). Composed locally from the
 // shared widgetChatRequestSchema (message, chatId, locale) + the two optional
@@ -88,23 +282,10 @@ router.post("/chat/stream", async (req: Request, res: Response) => {
     delete body.providerId;
     delete body.model;
 
-    const widgetId = req.headers["x-widget-id"] as string | undefined;
-    if (!widgetId) {
-      res.status(400).json({ error: "X-Widget-Id header is required" });
-      return;
-    }
-
-    // Resolve the widget and its linked workspaces from DB (IDOR-safe: the
-    // whitelist is the ONLY source of truth for the target workspace).
-    const widget = await prisma.widget.findFirst({
-      where: { id: widgetId, deletedAt: null, isActive: true },
-      include: { workspaces: { select: { workspaceId: true } } },
-    });
-
-    if (!widget) {
-      res.status(404).json({ error: "Widget not found or inactive" });
-      return;
-    }
+    // WR-05 (185-05): consume the widget row stashed by widgetTenantContext —
+    // the header resolution ALREADY ran in the slot (this endpoint's identity
+    // source is the header), so no second findFirst here.
+    const widget = req.tenantWidget!;
 
     const workspaceIds = widget.workspaces.map(w => w.workspaceId);
 
@@ -118,13 +299,13 @@ router.post("/chat/stream", async (req: Request, res: Response) => {
     // length === 0 check above guarantees this element exists.
     const targetWorkspaceId = workspaceIds[0]!;
 
-    // Delegate to the shared stream-handler core. It reads req.userId (set
-    // by apiKeyMiddleware to the widget-service account), req.body (already
-    // parsed above) and the X-Widget-Id / X-Widget-Session-Id headers for
-    // widget analytics. The handler catches stream errors itself (emits SSE
-    // error events); this catch is defensive only. The archiveId comes from
-    // the DB row resolved via X-Widget-Id, NEVER from the request body
-    // (IDOR-safe; the composed body schema strips unknown keys).
+    // The delegate reads req.userId (set by apiKeyMiddleware to the
+    // widget-service account), req.body (already parsed above) and the
+    // X-Widget-Id / X-Widget-Session-Id headers for widget analytics. The
+    // handler catches stream errors itself (emits SSE error events); this
+    // catch is defensive only. The archiveId comes from the DB row resolved
+    // in the tenant slot, NEVER from the request body (IDOR-safe; the
+    // composed body schema strips unknown keys).
     // 131-07 (G-131-19): the visitor locale is threaded as the 5th arg so
     // the orchestrator can localize the no-results sentence.
     // 260831-hgy: the per-widget response model pin is threaded as the 6th
@@ -154,16 +335,12 @@ router.post("/search", async (req: Request, res: Response) => {
     }
     const { query, widgetId, limit } = parsed.data;
 
-    // Resolve the widget and its linked workspaces from DB
-    const widget = await prisma.widget.findFirst({
-      where: { id: widgetId, deletedAt: null, isActive: true },
-      include: { workspaces: { select: { workspaceId: true } } },
-    });
-
-    if (!widget) {
-      res.status(404).json({ error: "Widget not found or inactive" });
-      return;
-    }
+    // WR-05 (185-05): the slot stashed the row resolved from this endpoint's
+    // identity source — req.body.widgetId IS the resolution source here
+    // (identity-per-endpoint), so no header/body assertion is needed and no
+    // second findFirst runs; the org ALWAYS derives from the acted-on row
+    // itself (the CR-01 repair).
+    const widget = req.tenantWidget!;
 
     // Server resolves workspaceIds from the widget's whitelist -- client cannot override
     const workspaceIds = widget.workspaces.map(w => w.workspaceId);
@@ -216,14 +393,9 @@ router.post("/lead", widgetLeadLimiter, async (req: Request, res: Response) => {
       return;
     }
 
-    const widget = await prisma.widget.findFirst({
-      where: { id: widgetId, deletedAt: null, isActive: true },
-    });
-
-    if (!widget) {
-      res.status(404).json({ error: "Widget not found or inactive" });
-      return;
-    }
+    // WR-05 (185-05): the slot stashed the row resolved from body.widgetId
+    // (this endpoint's identity source) — consume the stash.
+    const widget = req.tenantWidget!;
 
     // Check lead capture is enabled for this widget (ADM-04)
     if (!widget.leadCaptureEnabled) {
@@ -257,15 +429,11 @@ router.post("/lead", widgetLeadLimiter, async (req: Request, res: Response) => {
 // Returns widget config for the widget service to use (D-13)
 router.get("/:id/config", async (req: Request, res: Response) => {
   try {
-    const widget = await prisma.widget.findFirst({
-      where: { id: req.params.id as string, deletedAt: null },
-      include: { workspaces: true },
-    });
-
-    if (!widget || !widget.isActive) {
-      res.status(404).json({ error: "Widget not found" });
-      return;
-    }
+    // WR-05 (185-05): the slot stashed the row resolved from the path param
+    // (this endpoint's identity source) — consume the stash. The config
+    // route has no separate isActive check below because the slot only
+    // stashes ACTIVE widgets (unknown/inactive already 404ed there).
+    const widget = req.tenantWidget!;
 
     const workspaceIds = widget.workspaces.map(w => w.workspaceId);
     const primaryWorkspaceId = workspaceIds.length > 0 ? workspaceIds[0] : null;
@@ -329,6 +497,13 @@ router.get("/:id/config", async (req: Request, res: Response) => {
 router.get("/session/:token", async (req: Request, res: Response) => {
   try {
     const token = req.params.token as string;
+    // T-185-10 disposition (Pitfall-2 grep-gate): exempt model —
+    // WidgetSession has NO organizationId column (scopedPrisma.ts doc-comment:
+    // excluded from TENANT_READ_MODELS); tenant safety rides the widget row
+    // resolution (widgetTenantContext, D-08), not the session row.
+    // WR-05 (185-05): the slot ALSO resolved this session by token to derive
+    // the widget identity — this read stays the handler's own session load
+    // (its 401/response contract), unchanged.
     const session = await prisma.widgetSession.findUnique({
       where: { sessionToken: token },
     });
@@ -419,6 +594,13 @@ router.patch("/session/:token/increment", async (req: Request, res: Response) =>
     }
     const { field } = parsed.data;
 
+    // T-185-10 disposition (Pitfall-2 grep-gate): exempt model —
+    // WidgetSession has NO organizationId column (scopedPrisma.ts doc-comment:
+    // excluded from TENANT_READ_MODELS); tenant safety rides the widget row
+    // resolution (widgetTenantContext, D-08), not the session row.
+    // WR-05 (185-05): the slot ALSO resolved this session by token to derive
+    // the widget identity — this read stays the handler's own session load
+    // (its 401/429 contract), unchanged.
     const session = await prisma.widgetSession.findUnique({
       where: { sessionToken: token },
     });
@@ -487,6 +669,13 @@ router.patch("/session/:token/chat/archive", async (req: Request, res: Response)
 
     // Resolve session token (mirrors GET /session/:token + PATCH .../increment)
     const token = req.params.token as string;
+    // T-185-10 disposition (Pitfall-2 grep-gate): exempt model —
+    // WidgetSession has NO organizationId column (scopedPrisma.ts doc-comment:
+    // excluded from TENANT_READ_MODELS); tenant safety rides the widget row
+    // resolution (widgetTenantContext, D-08), not the session row.
+    // WR-05 (185-05): the slot ALSO resolved this session by token to derive
+    // the widget identity — this read stays the handler's own session load
+    // (its 401 contract), unchanged.
     const session = await prisma.widgetSession.findUnique({
       where: { sessionToken: token },
     });
@@ -495,15 +684,10 @@ router.patch("/session/:token/chat/archive", async (req: Request, res: Response)
       return;
     }
 
-    // Resolve widget → whitelisted workspaceIds (mirrors POST /search IDOR pattern)
-    const widget = await prisma.widget.findFirst({
-      where: { id: session.widgetId, deletedAt: null, isActive: true },
-      include: { workspaces: { select: { workspaceId: true } } },
-    });
-    if (!widget) {
-      res.status(404).json({ error: "Widget not found" });
-      return;
-    }
+    // WR-05 (185-05): consume the widget row stashed by the tenant slot (it
+    // resolved this endpoint's identity from session.widgetId → Widget row)
+    // — no second findFirst. The whitelist scope below stays handler-owned.
+    const widget = req.tenantWidget!;
     const workspaceIds = widget.workspaces.map(w => w.workspaceId);
 
     // Widget-side session-IDOR: chat must belong to a whitelisted workspace.

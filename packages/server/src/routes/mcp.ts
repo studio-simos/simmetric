@@ -5,6 +5,11 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+// Phase 185 (T-185-10): the CRUD router's findUnique sites below are
+// post-fetch-org-asserted (Pitfall-2 grep-gate option b — the row is
+// PK-keyed by connectionId and immediately updated, so a scoped findFirst
+// would need a second query; the 404-hide assertion is equivalent).
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import { createMcpConnectionSchema, updateMcpConnectionSchema, toggleMcpConnectionSchema, mcpConnectionIdParamSchema, mcpHeadersSchema } from "@simmetric-chat/shared";
 import prisma from "../utils/prisma";
@@ -16,7 +21,7 @@ import { logEvent } from "../services/eventLogService";
 const router = Router();
 
 // All MCP connection management requires admin access
-router.use(authMiddleware, requireAdmin);
+router.use(authMiddleware, tenantContextMiddleware, requireAdmin);
 
 // Route 1: GET / — List all MCP connections
 router.get("/", async (_req: Request, res: Response) => {
@@ -98,6 +103,10 @@ router.post("/", async (req: Request, res: Response) => {
         workspaceId: workspaceId ?? null,
         headers: headers ? JSON.stringify(headers) : "{}",
         enabled: enabled ?? true,
+        // CR-03 (185-05, D-04): explicit org stamp (MCPConnection is Tier-A —
+        // cross-org reads hide as 404 via the post-fetch assertion; the row
+        // itself must carry the creator's org to be self-visible).
+        organizationId: req.organizationId!,
       },
     });
 
@@ -147,7 +156,8 @@ router.put("/:connectionId", async (req: Request, res: Response) => {
     }
 
     const existing = await prisma.mCPConnection.findUnique({ where: { id: connectionId } });
-    if (!existing) {
+    // T-185-10 org assertion: cross-org connection hides as 404 (fail-closed).
+    if (!existing || existing.organizationId !== req.organizationId) {
       res.status(404).json({ error: "Connection not found" });
       return;
     }
@@ -219,7 +229,8 @@ router.delete("/:connectionId", async (req: Request, res: Response) => {
     const { connectionId } = paramResult.data;
 
     const connection = await prisma.mCPConnection.findUnique({ where: { id: connectionId } });
-    if (!connection) {
+    // T-185-10 org assertion: cross-org connection hides as 404 (fail-closed).
+    if (!connection || connection.organizationId !== req.organizationId) {
       res.status(404).json({ error: "Connection not found" });
       return;
     }
@@ -265,7 +276,8 @@ router.post("/:connectionId/toggle", async (req: Request, res: Response) => {
     const { enabled: newEnabled } = parsed.data;
 
     const connection = await prisma.mCPConnection.findUnique({ where: { id: connectionId } });
-    if (!connection) {
+    // T-185-10 org assertion: cross-org connection hides as 404 (fail-closed).
+    if (!connection || connection.organizationId !== req.organizationId) {
       res.status(404).json({ error: "Connection not found" });
       return;
     }
@@ -311,7 +323,8 @@ router.post("/:connectionId/test", async (req: Request, res: Response) => {
     const { connectionId } = paramResult.data;
 
     const connection = await prisma.mCPConnection.findUnique({ where: { id: connectionId } });
-    if (!connection) {
+    // T-185-10 org assertion: cross-org connection hides as 404 (fail-closed).
+    if (!connection || connection.organizationId !== req.organizationId) {
       res.status(404).json({ error: "Connection not found" });
       return;
     }

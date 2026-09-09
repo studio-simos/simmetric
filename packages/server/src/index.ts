@@ -5,11 +5,14 @@
 
 import path from "path";
 import fs from "fs";
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import swaggerUi from "swagger-ui-express";
+import { AVATAR_SIZES } from "./services/avatarService";
+import { getStorageProvider } from "./services/storageProvider";
+import { DEFAULT_ORG_ID } from "@simmetric-chat/shared";
 import { apiRateLimiter } from "./middleware/rateLimit";
 import { getEnv } from "./config/env";
 import { swaggerSpec } from "./config/swagger";
@@ -18,6 +21,9 @@ import prisma from "./utils/prisma";
 
 // Phase 140 (EPA-01) — enterprise plugin loader + shutdown seam.
 import { loadEnterprisePlugin, shutdownEnterprisePlugin } from "./services/enterpriseLoader";
+// Phase 186 (SAAS-05, D-08): SaaS plugin loader + shutdown seam — shares the
+// pluginLoaderCore machinery (fail-loud semantics verbatim, D-09).
+import { loadSaaSPlugin, shutdownSaaSPlugin } from "./services/saasLoader";
 
 // Phase 164 (SCALE-04, Q-01/Q-04): pg-boss job-queue singleton lifecycle.
 // startJobQueue has its own internal try/catch (D-05 graceful degradation) and
@@ -305,6 +311,222 @@ export async function initFidelitySamplingScheduler(): Promise<void> {
 }
 
 /**
+ * Phase 184 (D-03) — shared response arms for the /avatars + /branding
+ * download handlers. Cache headers mirror the removed static mounts'
+ * default behavior (no cache-control set by the old mounts; ETag via
+ * content identity — here a plain ETag on the key) and the 404 shape
+ * matches the plain 404 the static mounts served (no JSON body).
+ */
+function sendAvatarBytes(res: Response, bytes: Buffer, etagSeed: string): void {
+  res.status(200);
+  res.setHeader("Content-Type", "image/webp");
+  res.setHeader("ETag", `"${etagSeed}"`);
+  res.send(bytes);
+}
+
+function sendNotFound(res: Response): void {
+  res.status(404).end();
+}
+
+/**
+ * Extract the userId from an avatar filename ({userId}-{timestamp}.webp
+ * naming — avatarService). User ids are UUIDs (dashes), so the id is
+ * everything BEFORE the trailing timestamp segment, mirroring
+ * avatarService.extractUserIdFromFilename (Rule 1: a first-dash split
+ * would truncate UUID ids). Returns null for foreign name shapes.
+ */
+function extractUserIdFromAvatarFilename(filename: string): string | null {
+  const match = /^(.+)-(\d+)\.webp$/.exec(filename);
+  return match?.[1] ?? null;
+}
+
+/**
+ * Best-effort fs read of a legacy avatar/branding file — the PERMANENT
+ * fallback arm (D-03 coexistence + rollback aid). Returns null when the
+ * file is missing; never throws.
+ */
+function readLegacyFile(...segments: string[]): Buffer | null {
+  try {
+    const resolved = path.resolve(...segments);
+    if (!fs.existsSync(resolved)) return null;
+    return fs.readFileSync(resolved);
+  } catch (err) {
+    logger.debug("[static-serving] legacy fs arm failed", {
+      target: segments.join("/"),
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/**
+ * Phase 184 (D-03) — GET /avatars/:size/:file
+ *
+ * Provider-first with a permanent fs fallback:
+ *   1. Validate :size against AVATAR_SIZES and :file against basename +
+ *      ".."/"/" rejection BEFORE any resolution (T-184-14 traversal defense).
+ *   2. Extract the userId from the filename prefix → resolve the org from
+ *      the user's LIVE OrganizationMember row (User is identity-pure,
+ *      Phase 182 D-01) → key {orgId}/avatars/{size}/{file} — the key prefix
+ *      always comes from the LOOKED-UP row, never the request (T-184-15
+ *      row's-org rule).
+ *   3. provider.exists → provider.get → serve. Provider miss/error OR
+ *      provider-resolution failure falls through to the legacy fs arm —
+ *      serving NEVER 500s on provider unavailability (T-184-16; the static
+ *      mount never 500'd). Both arms miss → 404 (static 404 shape).
+ */
+async function avatarDownloadHandler(req: Request, res: Response): Promise<void> {
+  try {
+    const size = Number(req.params.size as string);
+    if (!AVATAR_SIZES.includes(size as (typeof AVATAR_SIZES)[number])) {
+      res.status(400).json({ error: "Invalid avatar size" });
+      return;
+    }
+    const file = path.basename(req.params.file as string);
+    if (file.includes("..") || file.includes("/") || file.includes("\\")) {
+      res.status(400).json({ error: "Invalid avatar filename" });
+      return;
+    }
+
+    const userId = extractUserIdFromAvatarFilename(file);
+    // Provider arm: only for recognizable avatar names (URL → key mapping).
+    // Anything else falls straight to the legacy fs arm.
+    if (userId) {
+      try {
+        const membership = await prisma.organizationMember.findFirst({
+          where: { userId, deletedAt: null },
+          select: { organizationId: true },
+        });
+        const orgId = membership?.organizationId ?? DEFAULT_ORG_ID;
+        const key = `${orgId}/avatars/${size}/${file}`;
+        const provider = await getStorageProvider(orgId);
+        if (await provider.exists(key)) {
+          const bytes = await provider.get(key);
+          sendAvatarBytes(res, bytes, key);
+          return;
+        }
+      } catch (err) {
+        // T-184-16: provider unavailability (s3 configured but down /
+        // incomplete config) degrades to the fs arm — never a 500.
+        logger.debug("[static-serving] avatar provider arm failed — falling back to fs", {
+          file,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Legacy fs arm — pre-phase avatars keep serving byte-identically.
+    const legacy = readLegacyFile("storage/uploads/avatars", String(size), file);
+    if (legacy) {
+      sendAvatarBytes(res, legacy, `legacy-${size}-${file}`);
+      return;
+    }
+    sendNotFound(res);
+  } catch (err) {
+    // Belt-and-braces: this handler never 500s on serving-path failures.
+    logger.error("[static-serving] avatar handler unexpected error", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    sendNotFound(res);
+  }
+}
+
+/**
+ * Extension-mapped content types for branding files (Rule 1 parity with the
+ * removed static mounts — the enterprise upload route writes
+ * app-icon.{png,svg,ico,webp}, and the frontend renders them via <img>,
+ * which ignores octet-stream payloads). Unknown extensions keep a
+ * conservative binary default.
+ */
+const BRANDING_MIME: Record<string, string> = {
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".webp": "image/webp",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+};
+
+function brandingContentType(file: string): string {
+  return BRANDING_MIME[path.extname(file).toLowerCase()] ?? "application/octet-stream";
+}
+
+/**
+ * Phase 184 (D-04) — GET /branding/:file
+ *
+ * Same shape as the avatar handler: key {orgId}/branding/{file} (org from
+ * the requesting user's live membership when authenticated, else the
+ * default-org global arm — getStorageProvider(undefined)) → provider read;
+ * miss/error → legacy fs arm on storage/branding (today's static target);
+ * both miss → 404. NO upload endpoint exists (operator-managed per the
+ * D-04 runbook — the operator uploads app-icon.png to the bucket when
+ * STORAGE_PROVIDER=s3); BRANDING_APP_ICON_URL config stays untouched.
+ * :file is validated against basename + ".."/"/" rejection (T-184-14).
+ */
+async function brandingDownloadHandler(req: Request, res: Response): Promise<void> {
+  try {
+    const file = path.basename(req.params.file as string);
+    if (file.includes("..") || file.includes("/") || file.includes("\\")) {
+      res.status(400).json({ error: "Invalid branding filename" });
+      return;
+    }
+
+    // Org resolution: authenticated requester's live membership, else the
+    // default-org global arm (public read before login — the branding icon
+    // renders on the login page). A missing/deleted user falls back too.
+    let orgId: string | undefined;
+    if (req.userId) {
+      try {
+        const membership = await prisma.organizationMember.findFirst({
+          where: { userId: req.userId, deletedAt: null },
+          select: { organizationId: true },
+        });
+        orgId = membership?.organizationId ?? DEFAULT_ORG_ID;
+      } catch {
+        orgId = DEFAULT_ORG_ID;
+      }
+    }
+
+    try {
+      const provider = await getStorageProvider(orgId);
+      const key = `${orgId ?? DEFAULT_ORG_ID}/branding/${file}`;
+      if (await provider.exists(key)) {
+        const bytes = await provider.get(key);
+        res.status(200);
+        res.setHeader("ETag", `"${key}"`);
+        res.setHeader("Content-Type", brandingContentType(file));
+        res.send(bytes);
+        return;
+      }
+    } catch (err) {
+      // T-184-16: provider unavailability degrades to the fs arm.
+      logger.debug("[static-serving] branding provider arm failed — falling back to fs", {
+        file,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // Legacy fs arm — storage/branding is the operator's physical upload
+    // target (stays LocalFS per D-04; only SERVING moved to the provider).
+    const legacy = readLegacyFile("storage/branding", file);
+    if (legacy) {
+      res.status(200);
+      res.setHeader("ETag", `"legacy-branding-${file}"`);
+      res.setHeader("Content-Type", brandingContentType(file));
+      res.send(legacy);
+      return;
+    }
+    sendNotFound(res);
+  } catch (err) {
+    logger.error("[static-serving] branding handler unexpected error", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    sendNotFound(res);
+  }
+}
+
+/**
  * Creates the Express app with all middleware, routes, and error handlers.
  * Used by supertest in integration tests without triggering app.listen() or DB init.
  */
@@ -343,13 +565,66 @@ export function createApp(): Express {
   app.use(cookieParser(getEnv().JWT_SECRET));
   app.use(apiRateLimiter);
 
-  // Serve avatar files
-  app.use("/avatars", express.static("storage/uploads/avatars"));
-  // Serve branding assets (app icon) — mirrors /avatars (public static read)
-  app.use("/branding", express.static(path.resolve("storage/branding")));
+  // Phase 184 (D-03/D-04): /avatars + /branding serving moved from the
+  // removed static mounts to provider-first download handlers with a
+  // PERMANENT fs fallback arm. The fallback is both the legacy coexistence
+  // mechanism (pre-phase avatar files never break) and the D-03
+  // costly-rollback aid — it stays even in steady state (research Pattern 4
+  // / OQ-2). These routes were public static reads and REMAIN public reads
+  // (URL-is-capability — the auth surface is byte-identical to the old
+  // static mounts, T-184-15b).
+  app.get("/avatars/:size/:file", avatarDownloadHandler);
+  // Serve branding assets (app icon) — mirrors /avatars (public static read);
+  // provider-served when the operator uploads app-icon.png to the bucket
+  // (D-04 — no branding upload endpoint exists, the runbook documents it).
+  app.get("/branding/:file", brandingDownloadHandler);
 
   // Dynamic CORS for widget embed routes — validates origin against widget allowlist
   app.use("/api/internal/widget", widgetCors);
+
+  // =========================================================================
+  // Phase 185 (SAAS-04a) — AUTH-TIER EXCEPTION INVENTORY (D-02/D-05/D-09).
+  //
+  // Every authenticated JWT router carries tenantContextMiddleware in the
+  // chain (auth → tenant → permission, D-09) — enforced per-file by the
+  // Plan-02 sweep grep gate. The surfaces BELOW are the documented
+  // exceptions that deliberately run OUTSIDE tenant scoping:
+  //
+  //  1. Health (app.use("/", healthRoutes)) — unauthenticated liveness.
+  //  2. /api/auth login/register/sso-status flows — auth tier per D-02
+  //     (principal does not exist yet); change-password/set-initial-password/
+  //     admin-register/admin-reset-password/GET /users (admin) are JWT
+  //     per-route slots INSIDE the auth router, but /me and avatar-self are
+  //     the documented auth-tier exceptions (D-02: bootstrap endpoints).
+  //  3. /api-docs swagger — documentation surface.
+  //  4. /api/__tests__ e2e helpers — dev/test-only process-spawn gate
+  //     (404 in production).
+  //  5. system.ts wizard-public block (POST /wizard/*, ~:365 comment) —
+  //     bootstrap setup, no principal exists yet (D-02).
+  //  6. Collector-callback sub-routes (PUT /api/documents/:id/status,
+  //     PUT /api/archives/import/:jobId/callback) — X-Collector-Secret
+  //     service-to-service, NO principal; run with the bypass sentinel
+  //     set (req.tenantBypass, D-05 — citeable in the org-b suite).
+  //  7. MCP SSE stream + message (agent/mcpServer.ts mountMCPServer) —
+  //     admin/loopback platform surface (D-05 bypass, citeable in the
+  //     org-b suite). The /api/mcp-connections CRUD router DOES get the
+  //     tenant slot (MCPConnection is Tier-A).
+  //  8. ocr.ts imageRouter (GET /:id/jobs/:jobId/pages/:page/image) —
+  //     queryTokenAuth (?token= JWT variant for <img> tags) asset-serving;
+  //     the ?token= auth tier is the ONLY exception aspect — CR-06 (185-05)
+  //     added the explicit org assertion (job.organizationId vs the
+  //     requester's D-01 membership org; platform admins keep global
+  //     visibility), replacing the pre-185 "mirrors avatar-self D-02"
+  //     rationale (which was factually wrong — avatar-self enforces
+  //     targetId === requesterId || isAdmin, the image route asserted
+  //     nothing). The ocr catalog router carries its own tenant slot.
+  //
+  // Non-JWT principals (D-08): apiKeyMiddleware seeds req.tenantOrgCandidate
+  // from ApiKey.organizationId (validateApiKey extended return — NO
+  // membership query); the widget router resolves org from the Widget row
+  // via WidgetWorkspace → workspace.organizationId (widgetTenantContext in
+  // routes/internalWidget.ts — NEVER the service account's membership).
+  // =========================================================================
 
   // Swagger API documentation — JSON endpoint before UI middleware
   app.get("/api-docs/json", (_req, res) => {
@@ -544,7 +819,7 @@ if (isMainModule) {
       try {
         fs.mkdirSync(path.resolve("storage/branding"), { recursive: true });
       } catch {
-        // ignore — express.static will 404 if missing
+        // ignore — the /branding download handler's fs arm will 404 if missing
       }
 
       // Seed MCP marketplace catalog entries
@@ -622,9 +897,19 @@ if (isMainModule) {
     // enforced by src/__tests__/bootOrder.test.ts.
     await loadEnterprisePlugin(app);
 
+    // Phase 186 (SAAS-05, D-10): SaaS plugin loads AFTER enterprise — boot
+    // order pinned by bootOrder.test.ts. Register-throw is fail-loud
+    // (process.exit(1), D-09) and CANNOT continue on to the catch-all mount
+    // below (sequential awaited step — no half-mounted route surface,
+    // T-186-08). Community builds (no @simmetric-chat/saas installed) log an
+    // info-level no-op and continue (SC-4).
+    await loadSaaSPlugin(app);
+
     // Mount the 404 + error catch-all handlers AFTER loadEnterprisePlugin so
     // enterprise routes are registered before the catch-all and are reachable.
     // (createApp() deliberately omits the catch-all — see its comment.)
+    // Phase 186 (D-10/T-186-06): BOTH plugin loads precede the catch-alls —
+    // they stay the LAST mount.
     mountCatchAlls(app);
 
     // Refresh all Ollama provider models so the model list matches the current runtime
@@ -716,6 +1001,9 @@ if (isMainModule) {
         // Phase 140 (EPA-01): stop plugin schedulers + invoke onShutdown
         // callbacks BEFORE prisma.$disconnect() so plugin teardown can
         // still hit the DB. Enforced by bootOrder.test.ts.
+        // Phase 186 (SAAS-05, D-10): REVERSE load order — SaaS stops BEFORE
+        // enterprise. Both before prisma.$disconnect().
+        await shutdownSaaSPlugin();
         await shutdownEnterprisePlugin();
         await prisma.$disconnect();
       })();

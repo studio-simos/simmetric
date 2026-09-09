@@ -5,6 +5,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireWorkspaceAccess } from "../middleware/rbac";
 import { runAgent, runAgentStreaming } from "../agent/orchestrator";
 import prisma from "../utils/prisma";
@@ -40,6 +41,10 @@ const TOKEN_THRESHOLD = 100000;
 
 const router = Router();
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 // ---------------------------------------------------------------------------
 // SSE pub/sub fan-out (SCALE-02, D-03)
@@ -235,6 +240,9 @@ router.post("/:workspaceId/chat", requireWorkspaceAccess, async (req: Request, r
           name: message.substring(0, 50),
           ...(providerId && { providerId }),
           ...(model && { model }),
+          // CR-03 (185-05, D-04): explicit org stamp (JWT path — the tenant
+          // slot populated req.organizationId upstream).
+          organizationId: req.organizationId!,
         },
       });
     }
@@ -246,6 +254,8 @@ router.post("/:workspaceId/chat", requireWorkspaceAccess, async (req: Request, r
         role: "user",
         content: message,
         ...(attachedDocumentId && { attachedDocumentId: attachedDocumentId as string }),
+        // CR-03 (185-05, D-04): explicit org stamp.
+        organizationId: req.organizationId!,
       },
     });
 
@@ -344,6 +354,8 @@ router.post("/:workspaceId/chat", requireWorkspaceAccess, async (req: Request, r
           modelUsed: result.resolvedModel ?? null,
           modelProvider: result.providerType ?? null,
         }),
+        // CR-03 (185-05, D-04): explicit org stamp.
+        organizationId: req.organizationId!,
       },
     });
 
@@ -541,6 +553,10 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
           // string only; null/undefined omit the key (JWT route passes no
           // 4th arg → behavior byte-identical).
           ...(archiveId && { archiveId }),
+          // CR-03 (185-05, D-04): explicit org stamp (widget stream path —
+          // widgetTenantContext populated req.organizationId from the
+          // widget row's whitelist chain).
+          organizationId: req.organizationId!,
         },
       });
     }
@@ -564,6 +580,8 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
           role: "user",
           content: message,
           ...(attachedDocumentId && { attachedDocumentId: attachedDocumentId as string }),
+          // CR-03 (185-05, D-04): explicit org stamp (widget stream path).
+          organizationId: req.organizationId!,
         },
       });
     }
@@ -881,6 +899,8 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
               modelProvider: result.providerType ?? null,
               dlpMatches: finalDlpMatches.length > 0 ? finalDlpMatches : undefined,
             }),
+            // CR-03 (185-05, D-04): explicit org stamp.
+            organizationId: req.organizationId!,
           },
         });
       } catch (err: unknown) {

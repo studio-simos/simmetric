@@ -5,13 +5,14 @@
 
 import { Router } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission, requireAdmin } from "../middleware/rbac";
 import { listTemplates, getTemplate, createTemplate, applyTemplate } from "../services/archiveSchemaTemplatesService";
 import { archiveSchemaTemplateSchema } from "@simmetric-chat/shared";
 
 const router = Router();
 
-router.get("/", authMiddleware, requirePermission("archive:read"), async (req, res) => {
+router.get("/", authMiddleware, tenantContextMiddleware, requirePermission("archive:read"), async (req, res) => {
   try {
     const templates = await listTemplates(req.query.archiveId as string | undefined);
     return res.json(templates);
@@ -21,7 +22,7 @@ router.get("/", authMiddleware, requirePermission("archive:read"), async (req, r
   }
 });
 
-router.get("/:id", authMiddleware, requirePermission("archive:read"), async (req, res) => {
+router.get("/:id", authMiddleware, tenantContextMiddleware, requirePermission("archive:read"), async (req, res) => {
   try {
     const templateId = req.params.id as string;
     const template = await getTemplate(templateId);
@@ -33,7 +34,7 @@ router.get("/:id", authMiddleware, requirePermission("archive:read"), async (req
   }
 });
 
-router.post("/", authMiddleware, requireAdmin, async (req, res) => {
+router.post("/", authMiddleware, tenantContextMiddleware, requireAdmin, async (req, res) => {
   try {
     const parsed = archiveSchemaTemplateSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -47,7 +48,7 @@ router.post("/", authMiddleware, requireAdmin, async (req, res) => {
   }
 });
 
-router.post("/:id/apply", authMiddleware, requirePermission("archive:write"), async (req, res) => {
+router.post("/:id/apply", authMiddleware, tenantContextMiddleware, requirePermission("archive:write"), async (req, res) => {
   try {
     const { archiveId } = req.body;
     if (!archiveId || typeof archiveId !== "string") {

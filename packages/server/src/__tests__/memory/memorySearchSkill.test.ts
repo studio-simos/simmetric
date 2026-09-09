@@ -28,7 +28,8 @@ jest.mock("../../utils/prisma", () => ({
   default: {
     workspace: { findUnique: jest.fn() },
     document: { findMany: jest.fn().mockResolvedValue([]) },
-    systemConfig: { upsert: jest.fn(), findUnique: jest.fn() },
+    // 183-02: find-first surface (keyed upsert/findUnique dropped from the inventory)
+    systemConfig: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
     user: { findUnique: jest.fn() },
     archivePage: { findFirst: jest.fn() },
   },

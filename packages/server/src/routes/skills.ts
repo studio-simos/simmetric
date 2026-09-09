@@ -5,11 +5,16 @@
 
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { getAllBuiltinSkills } from "../agent/skills";
 import "../agent/builtinSkills"; // Ensure skills are registered
 
 const router = Router();
 router.use(authMiddleware);
+// Phase 185 (D-09): chain order auth → tenant → permission. The tenant
+// middleware resolves req.organizationId (D-01 membership lookup) and opens
+// the ALS tenant run before any rbac/license gate.
+router.use(tenantContextMiddleware);
 
 // GET /api/agent/skills — list all available skills
 router.get("/skills", (_req: Request, res: Response) => {

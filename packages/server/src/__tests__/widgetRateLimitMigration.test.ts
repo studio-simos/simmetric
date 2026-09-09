@@ -239,6 +239,12 @@ describe("GET /api/internal/widget/:id/config includes rateLimitPerMinute", () =
     // requireFeature("widget_enabled") — the license mock here defaults to
     // false (Community), so these route tests must flip the flag ON.
     (isFeatureEnabled as jest.Mock).mockReturnValue(true);
+    // Phase 185 (185-05 CR-01): widgetTenantContext resolves the org from
+    // the path param (identity-per-endpoint) — NO X-Widget-Id header needed.
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (prisma.workspace.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "org-widget-default",
+    });
   });
 
   it("includes rateLimitPerMinute in the config response when set", async () => {

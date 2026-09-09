@@ -24,6 +24,22 @@
  *  - D-10/D-11 (Phase 144): auditLog is a typed `AuditLog` contract +
  *    `registerAuditLogWriter(fn)` hook (replaces the Phase 140 throwing stub)
  *  - overrideFeatureLimit is a stub until Phase 147
+ *
+ * Phase 186 (SAAS-05) — contract v2 (additive bump, D-01):
+ *  - API_VERSION 1 → 2 (the SAAS gate; enterprise acceptance stays
+ *    loader-side per D-03)
+ *  - `SaaSPluginContext extends PluginContext` — additive interface, NOT
+ *    optional props scattered into the base (D-01): 4 hook-registration
+ *    methods + `issueTenantLicense`. The stub BODIES (throwing) live in
+ *    the ctx BUILD (pluginLoaderCore.ts / D-02) — the interface is the
+ *    contract only.
+ *  - `BillingProvider` / `QuotaEnforcer` / `PlanResolver` /
+ *    `TenantProvisioner`: minimal Part I hook interfaces (the
+ *    `ConfigKeyValidator` call-signature pattern); Parte II widens
+ *    additively.
+ *  - `SaaSPlugin`: mirrors EnterprisePlugin with `apiVersion: 2`.
+ *  - NO signing surface (D-04): no LICENSE_PRIVATE_KEY, no signing code —
+ *    the real tenant-license implementation is Parte II plugin infra.
  */
 
 import type { EntityType, LicenseInfo } from "../types";
@@ -73,10 +89,17 @@ export interface ConfigKeyValidator {
 
 /**
  * Plugin API version. Bumped only on breaking contract changes.
- * The loader checks `plugin.apiVersion === API_VERSION` at boot and
- * fails loud (process.exit(1)) on mismatch (D-03).
+ * The loader checks the plugin's `apiVersion` at boot and fails loud
+ * (process.exit(1)) on mismatch (D-03).
+ *
+ * Phase 186 (SAAS-05): per-loader acceptance (D-03). The constant is the
+ * SAAS gate — `saasLoader` requires `[2]`; `enterpriseLoader` keeps its
+ * HARDCODED `[1]` acceptance (EnterprisePlugin.apiVersion stays the
+ * literal 1 — enterprise acceptance is loader-side, not const-side; a
+ * loader comparing against this const post-bump would exit(1) every real
+ * enterprise install, Pitfall 1).
  */
-export const API_VERSION = 1 as const;
+export const API_VERSION = 2 as const;
 
 /**
  * Structural subset of `@prisma/client`'s `PrismaClient` that the plugin
@@ -283,4 +306,118 @@ export interface EnterprisePlugin {
    * calls `process.exit(1)` (D-07 fail-loud).
    */
   register(ctx: PluginContext): void | Promise<void>;
+}
+
+/**
+ * Phase 186 (SAAS-05) — minimal Part I hook interfaces.
+ *
+ * Each follows the `ConfigKeyValidator` call-signature pattern (:60-72):
+ * a minimal Part I shape, widened ADDITIVELY by the Parte II SaaS plugin
+ * fork (CONTEXT.md Discretion). They are structural type contracts only —
+ * no runtime behavior in shared.
+ */
+
+/**
+ * D-07 (186): billing hook — minimal empty marker in Part I. Parte II
+ * (LemonSqueezy integration) widens it additively with checkout /
+ * subscription management call signatures. Empty marker interface on
+ * purpose (no-op-member placeholder) — eslint no-empty-object-type
+ * suppressed with allowInterfaces semantics.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- minimal Part I marker; Parte II widens additively
+export interface BillingProvider {}
+
+/**
+ * D-06 (186): quota enforcer consulted by `requireFeatureLimit` (Phase 185
+ * org-scoped counters) when core passes. The verdict may be sync or async
+ * (A4); `current`/`limit` are optional overrides the enforcer supplies for
+ * the 402 body (185 D-06 frozen shape). Precedence is core-deny-wins
+ * (enforced in middleware/license.ts — a plugin cannot widen a core deny).
+ */
+export interface QuotaEnforcer {
+  (input: { organizationId: string; flag: string; current: number }):
+    | Promise<{ allowed: boolean; current?: number; limit?: number }>
+    | { allowed: boolean; current?: number; limit?: number };
+}
+
+/**
+ * D-07 (186): plan resolver hook — minimal empty marker in Part I. Parte II
+ * (plan definitions) widens it additively.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- minimal Part I marker; Parte II widens additively
+export interface PlanResolver {}
+
+/**
+ * D-07 (186): tenant provisioner hook — minimal empty marker in Part I.
+ * Parte II (org provisioning at checkout) widens it additively.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- minimal Part I marker; Parte II widens additively
+export interface TenantProvisioner {}
+
+/**
+ * Phase 186 (SAAS-05 — D-01): the v2 plugin context. ADDITIVE interface
+ * extending PluginContext — the SaaS plugin receives the FULL shared
+ * surface (both loaders call the SAME `buildPluginContext` factory, D-02)
+ * plus these five v2 members.
+ *
+ * Stub semantics (D-02/D-07): the 4 hook-registration methods and
+ * `issueTenantLicense` THROW "not wired until Parte II" — the throwing
+ * stubs live in the ctx BUILD, not here (the interface is the contract;
+ * the bodies arrive with Parte II). The ONE real forward is
+ * `registerQuotaEnforcer` (D-06 — the enforcer is consumed by
+ * `requireFeatureLimit` this phase).
+ */
+export interface SaaSPluginContext extends PluginContext {
+  /**
+   * D-07 (186): registry-style stub — throws "not wired until Parte II".
+   * No core consumption this phase; runtime consumption arrives with
+   * Parte II (billing).
+   */
+  registerBillingProvider(provider: BillingProvider): void;
+  /**
+   * D-06 (186): the one REAL forward. Registers the quota enforcer into
+   * the middleware/license.ts single-slot registry (`setQuotaEnforcer`,
+   * alias-imported — Pitfall 3); `requireFeatureLimit` consults it when
+   * the core count passes (core deny always wins).
+   */
+  registerQuotaEnforcer(enforcer: QuotaEnforcer): void;
+  /**
+   * D-07 (186): registry-style stub — throws "not wired until Parte II".
+   */
+  registerPlanResolver(resolver: PlanResolver): void;
+  /**
+   * D-07 (186): registry-style stub — throws "not wired until Parte II".
+   */
+  registerTenantProvisioner(provisioner: TenantProvisioner): void;
+  /**
+   * D-04 (186): tenant-license issuance stub — throws "not wired until
+   * Parte II". The REAL implementation (RS256 signing with the
+   * operator-only LICENSE_PRIVATE_KEY, kid rotation per the
+   * simmetric-license-tool registry, revocation) is Parte II plugin
+   * infra; the core NEVER signs (only verifies with the embedded public
+   * key, D-05).
+   */
+  issueTenantLicense(organizationId: string, plan: string, expiresAt: Date): Promise<string>;
+}
+
+/**
+ * Phase 186 (SAAS-05 — D-03): the contract a SaaS plugin package
+ * (`@simmetric-chat/saas`) must export as its default export. `apiVersion`
+ * is a literal `2` — the SAAS contract exists only in v2; the saasLoader
+ * rejects any other value at boot (per-loader acceptance, downgrade guard
+ * cuts both ways).
+ */
+export interface SaaSPlugin {
+  /** Must equal `API_VERSION` (2) — the SAAS gate. Literal type — not `number`. */
+  apiVersion: 2;
+  /** Optional human-readable plugin name (e.g. "@simmetric-chat/saas"). */
+  name?: string;
+  /** Optional plugin version string (e.g. "1.0.0"). */
+  version?: string;
+  /**
+   * Register the plugin against the provided context. May be async. If
+   * this throws, the loader calls `process.exit(1)` (D-09 fail-loud,
+   * verbatim enterprise semantics).
+   */
+  register(ctx: SaaSPluginContext): void | Promise<void>;
 }

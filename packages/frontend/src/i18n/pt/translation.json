@@ -3,6 +3,14 @@
     "name": "Simmetric Chat",
     "subtitle": "Chatbot corporativo com IA"
   },
+  "nav": {
+    "openMenu": "Abrir menu de navegação",
+    "menu": "Menu",
+    "overlayTitle": "Navegação",
+    "overlayDescription": "Ir para páginas, trocar projeto e workspace",
+    "searchPlaceholder": "Pesquisar páginas...",
+    "noResults": "Sem resultados"
+  },
   "breadcrumb": {
     "widgets": "Widgets",
     "home": "Início",
@@ -1455,7 +1463,8 @@
       "active": "Ativas",
       "blocked": "As notificações foram bloqueadas pelo navegador. Altere as configurações do site para reativá-las.",
       "permissionHint": "Clicar em \"Ativar notificações\" solicitará permissão ao navegador."
-    }
+    },
+    "back": "Voltar"
   },
   "upgrade": {
     "title": "Recurso Enterprise",
@@ -1667,7 +1676,8 @@
     "unexpectedError": "Algo deu errado",
     "errorBoundaryDescription": "Ocorreu um erro inesperado ao renderizar a página. Tente recarregar.",
     "errorDetails": "Detalhes do erro",
-    "reloadPage": "Recarregar página"
+    "reloadPage": "Recarregar página",
+    "back": "Voltar"
   },
   "export": {
     "buttonLabel": "Exportar",
@@ -2523,6 +2533,8 @@
   "user-dropdown": {
     "language": "Idioma",
     "theme": "Tema",
+    "openMenu": "Abrir menu do utilizador",
+    "closeMenu": "Fechar menu",
     "signOut": "Sair",
     "version": "Versão",
     "license": "Licença",

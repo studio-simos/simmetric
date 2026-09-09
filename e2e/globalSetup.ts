@@ -41,8 +41,35 @@
 import { request as pwRequest, type APIRequestContext } from "@playwright/test";
 import crypto from "node:crypto";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { makeE2ePrisma } from "./lib/prisma";
 import type { PrismaClient } from "@prisma/client";
+import {
+  ORG_B_ID,
+  ORG_B_WORKSPACE_ID,
+  ORG_B_USERNAME,
+  ORG_B_SLUG,
+  ORG_B_USER_EMAIL,
+} from "./fixtures";
+
+// bcryptjs + @simmetric-chat/shared are packages/server(-reachable) deps —
+// pnpm strict isolation does NOT hoist them into the root node_modules, and
+// the e2e/ directory has no tsconfig of its own, so bare ESM imports fail to
+// resolve at runtime. Same resolution seam as makeE2ePrisma (createRequire
+// from packages/server). Keeps ONE definition of DEFAULT_ORG_ID (shared) —
+// the literal-UUID fixture allowance applies only to ORG_B_* constants.
+const requireFromServer = createRequire(path.resolve("packages/server"));
+const bcrypt = requireFromServer("bcryptjs") as typeof import("bcryptjs");
+const { DEFAULT_ORG_ID } = requireFromServer("@simmetric-chat/shared") as typeof import("@simmetric-chat/shared");
+
+// TS-04 adjacency guard (182-PLAN-04 must_haves): the org-b fixture org must
+// NEVER equal the default org — two orgs' rows never merge. Fail loudly here
+// rather than seeding a fixture that silently aliases the default tenant.
+if (ORG_B_ID === DEFAULT_ORG_ID) {
+  throw new Error(
+    "[globalSetup] ORG_B_ID collides with DEFAULT_ORG_ID — org-b fixture misconfiguration",
+  );
+}
 
 const E2E_WIDGET_NAME = "E2E Test Widget";
 const SERVER_URL = process.env.E2E_SERVER_URL ?? "http://localhost:3000";
@@ -62,15 +89,28 @@ const WIDGET_API_KEY_PREFIX = WIDGET_API_KEY_PLAINTEXT.substring(0, 8); // "sk-c
 /** Best-effort dotenv load so the Prisma fallback can find DATABASE_URL (and
  *  the seedApiKey HMAC path can find API_KEY_HMAC_SECRET). */
 async function loadDatabaseUrl(): Promise<string | undefined> {
-  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  // Dotenv load FIRST, before the DATABASE_URL short-circuit (182-04 Task 2
+  // Rule 1 fix): playwright.config.ts injects DATABASE_URL into process.env
+  // before globalSetup runs, so the old "return early when DATABASE_URL is
+  // set" branch skipped the dotenv load entirely — and with it
+  // API_KEY_HMAC_SECRET, which seedApiKey's HMAC path reads from the same
+  // root .env (the fixture chain then aborted before org-b could seed).
+  // dotenv never overrides keys already in process.env, so an unconditional
+  // load is order-safe.
   try {
     const dotenv = (await import("dotenv")).default;
     const envPath = path.resolve(process.cwd(), ".env");
     dotenv.config({ path: envPath });
-    if (process.env.DATABASE_URL) {
-      return process.env.DATABASE_URL;
-    }
+  } catch {
+    // dotenv unresolvable from this context — process.env may still carry
+    // DATABASE_URL (playwright config injects it); the fs fallback below covers it.
+  }
+  if (process.env.DATABASE_URL) {
+    return process.env.DATABASE_URL;
+  }
+  try {
     const fs = await import("node:fs");
+    const envPath = path.resolve(process.cwd(), ".env");
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, "utf-8");
       const match = content.match(/^DATABASE_URL=(.+)$/m);
@@ -195,27 +235,75 @@ async function seedViaPrisma(): Promise<string | null> {
  * Idempotent: check-then-create at every step (same pattern as widget seeding).
  */
 async function seedWorkspaceAndChat(prisma: PrismaClient, adminId: string): Promise<void> {
-  // 1. Find or create a Project for the admin
+  // 1. Find or create a Project for the admin. Tombstone-aware (Rule 3,
+  //    182-04 execution): projects_createdBy_name_key is a PLAIN unique
+  //    (D-06 kept it non-partial), so a soft-deleted "E2E Test Project"
+  //    row permanently blocks re-create with P2002 — the create-project-
+  //    sidebar spec soft-deletes its projects (cleanup), and a tombstoned
+  //    shared fixture name once aborted this whole chain. Revive the
+  //    tombstone (deletedAt: null) — the same D-05 either-branch-safe
+  //    resurrect shape every Phase 182 write path uses. The revive is a
+  //    no-op when a live row already exists.
   let project = await prisma.project.findFirst({
     where: { name: "E2E Test Project", deletedAt: null },
     select: { id: true },
   });
   if (!project) {
-    project = await prisma.project.create({
-      data: { name: "E2E Test Project", createdBy: adminId },
+    const tombstone = await prisma.project.findFirst({
+      where: { name: "E2E Test Project", deletedAt: { not: null } },
       select: { id: true },
     });
-    console.log(`[globalSetup] Seeded E2E Test Project id=${project.id}`);
+    if (tombstone) {
+      await prisma.project.update({
+        where: { id: tombstone.id },
+        data: { deletedAt: null },
+      });
+      project = { id: tombstone.id };
+      console.log(`[globalSetup] Revived tombstoned E2E Test Project id=${project.id}`);
+    }
+  }
+  if (!project) {
+    try {
+      project = await prisma.project.create({
+        data: { name: "E2E Test Project", createdBy: adminId },
+        select: { id: true },
+      });
+      console.log(`[globalSetup] Seeded E2E Test Project id=${project.id}`);
+    } catch (err) {
+      // P2002 race tolerance: a concurrent seeder created the row between
+      // our findFirst and create (TOCTOU window) — re-read and continue.
+      if ((err as { code?: string }).code !== "P2002") throw err;
+      const winner = await prisma.project.findFirst({
+        where: { name: "E2E Test Project", deletedAt: null },
+        select: { id: true },
+      });
+      if (!winner) throw err;
+      project = winner;
+      console.log(`[globalSetup] E2E Test Project created concurrently, re-read id=${project.id}`);
+    }
   }
 
   // 2. Ensure the hardcoded workspace exists. Do NOT pass createdBy —
   //    Workspace has no such field (schema.prisma lines 169-198).
+  //    Tombstone-resurrect (Rule 1/3, 182-04 Task 2): the workspace row can be
+  //    soft-deleted between runs (operator UI action — the E2E dev DB carried a
+  //    2026-08-30 tombstone on 9a334821 that 404'd every upload/chat spec
+  //    because documents.ts/chat routes filter deletedAt: null). findUnique
+  //    sees the row regardless of deletedAt (no $extends soft-delete filter on
+  //    the raw client), so "exists" alone is not enough — clear the tombstone
+  //    the same D-05 either-branch-safe way the project lookup above does.
   const existingWs = await prisma.workspace.findUnique({ where: { id: WORKSPACE_ID } });
   if (!existingWs) {
     await prisma.workspace.create({
       data: { id: WORKSPACE_ID, projectId: project.id, name: "Elegregio" },
     });
     console.log(`[globalSetup] Seeded workspace ${WORKSPACE_ID} ("Elegregio")`);
+  } else if (existingWs.deletedAt !== null) {
+    await prisma.workspace.update({
+      where: { id: WORKSPACE_ID },
+      data: { deletedAt: null },
+    });
+    console.log(`[globalSetup] Revived tombstoned workspace ${WORKSPACE_ID} ("Elegregio")`);
   }
 
   // 3. Ensure admin has workspace access. CRITICAL: WorkspaceAccess has NO
@@ -336,6 +424,236 @@ async function seedApiKey(prisma: PrismaClient, adminId: string): Promise<void> 
 }
 
 /**
+ * Phase 185 (185-05 CR-01 e2e repair): the widgetTenantContext slot (185-02)
+ * fail-closes 404 "Widget has no linked workspaces" when the Widget's
+ * WidgetWorkspace whitelist is empty — the D-08 "org per principal, never
+ * null" doctrine. The 182-era internal widget session-create route had NO
+ * whitelist check, so the shared dev DB drifted to 0 widget_workspaces rows
+ * without ever breaking the 182 UAT (the E2E intercepts browser→:3211
+ * chat/stream, the loader catches config-fetch 404s, and session-create
+ * skipped whitelists entirely). Against the 185 build the empty whitelist
+ * 404s the fixture's own POST :3211/api/sessions → the whole widget-embed
+ * suite fails at fixture setup.
+ *
+ * Heal: ensure the E2E Test Widget whitelists the seeded default-org
+ * workspace (WORKSPACE_ID). Idempotent find-first → create — repeated runs
+ * are no-ops. Harness-only (e2e/); zero production paths.
+ */
+async function seedWidgetWhitelist(prisma: PrismaClient): Promise<void> {
+  const widget = await prisma.widget.findFirst({
+    where: { name: E2E_WIDGET_NAME, deletedAt: null },
+    select: { id: true },
+  });
+  if (!widget) {
+    // No E2E widget (creation failed upstream) — nothing to whitelist.
+    return;
+  }
+  const existing = await prisma.widgetWorkspace.findFirst({
+    where: { widgetId: widget.id, workspaceId: WORKSPACE_ID },
+    select: { widgetId: true },
+  });
+  if (existing) {
+    return;
+  }
+  await prisma.widgetWorkspace.create({
+    data: {
+      widgetId: widget.id,
+      workspaceId: WORKSPACE_ID,
+      // WidgetWorkspace.organizationId is NOT NULL (M4) — derive from the
+      // widget row per the D-08 chain (the row is default-org in this
+      // harness; explicit DEFAULT fallback mirrors widgets.ts's createMany).
+      organizationId: DEFAULT_ORG_ID,
+    },
+  });
+  console.log(`[globalSetup] Seeded WidgetWorkspace whitelist (E2E widget → ${WORKSPACE_ID}) — the 185-02 tenant slot fail-closes on an empty whitelist`);
+}
+
+/**
+ * Phase 182 (SAAS-01b, 182-PLAN-04 Task 1) — org-b fixture: the second-tenant
+ * E2E harness seed. Pitfall 12 half-b: fixtures assuming one implicit org are
+ * the classic post-migration failure — the Phase 185 leak-detector suites
+ * depend on a second org existing NOW. Purely ADDITIVE: existing specs stay
+ * default-org (their rows inherit DEFAULT_ORG_ID via the M4 column default)
+ * and are untouched by this function.
+ *
+ * Every step is idempotent (upsert keyed on the stable fixture identity) so
+ * repeated `pnpm test:e2e` runs are no-ops:
+ *  1. Organization  — slug-keyed upsert ("org-b", fixture UUID …00bb).
+ *  2. User          — username-keyed upsert (orgbuser / orgbuser@example.com).
+ *                     TS-04 global uniqueness: email + username DIFFER from
+ *                     every default-org fixture identity (admin, user,
+ *                     widget-service) — two orgs' users never share a login
+ *                     identity by construction.
+ *  3. Membership    — find-first → tombstone-resurrect → create-with-P2002-
+ *                     catch chain (182-PLAN-03 Rule 1 deviation: the partial
+ *                     unique index organization_members_organizationId_userId_key
+ *                     WHERE deletedAt IS NULL CANNOT arbitrate a composite-
+ *                     unique upsert — Postgres 42P10). The resurrect arm
+ *                     revives soft-deleted rows AND persists roleInOrg=owner
+ *                     (WR-02 — removal downgrades, re-add re-grants) and works
+ *                     with OR without the partial index (D-05 either-branch-
+ *                     safe shape). roleInOrg "owner" is org-b's OWN owner —
+ *                     the default org keeps having no owner (Phase 185
+ *                     provisioning concern).
+ *  4. Project       — org-b's OWN "OrgB Test Project" (organizationId ORG_B_ID,
+ *                     createdBy orgbUser; tombstone-resurrect + P2002 tolerance;
+ *                     NOT the default-org E2E Test Project — WR-03/G-182-03).
+ *  5. Workspace     — id-keyed upsert (…00b1, "OrgB Workspace") — the Phase
+ *                     185 cross-tenant leak target. organizationId is supplied
+ *                     EXPLICITLY (org-b's own org, NOT the default), and the
+ *                     update arm re-parents projectId on every run (WR-03 heal:
+ *                     re-runs repair rows seeded by the pre-fix fixture that
+ *                     still parent to the default-org project). The workspace
+ *                     parent is org-b-owned so org resolution via
+ *                     workspace→project yields org-b on every path.
+ *
+ * The default-org equivalence reference (DEFAULT_ORG_ID from
+ * @simmetric-chat/shared) is imported for the Phase 185 adjacency probe:
+ * ORG_B_ID is deliberately distinct from it — two orgs' rows never merge.
+ *
+ * E2E-relevant DB writes may use literal fixture UUIDs (test-fixture
+ * allowance per the debt-table rule); the constants live in ./fixtures so
+ * Phase 185 suites import the same single definitions.
+ *
+ * Zero production-path leak (threat T-182-15): this function and the ORG_B
+ * constants exist ONLY under e2e/ — no seed.ts/seedService reference.
+ */
+async function seedOrgBFixture(prisma: PrismaClient): Promise<void> {
+  // 1. Org B — slug-keyed upsert; a re-run hits the update arm (no-op).
+  //    Safe to re-run: the create arm fires only when the slug is absent.
+  await prisma.organization.upsert({
+    where: { slug: ORG_B_SLUG },
+    update: {},
+    create: { id: ORG_B_ID, name: "Org B (E2E)", slug: ORG_B_SLUG },
+  });
+  console.log(`[globalSetup] org-b: organization ensured (id=${ORG_B_ID}, slug=${ORG_B_SLUG})`);
+
+  // 2. Dedicated org-b user — username-keyed upsert. Email/username are
+  //    globally unique and DIFFER from admin (admin@simmetric-chat.local /
+  //    admin@example.com) and every other fixture identity (TS-04). Safe to
+  //    re-run: existing user returns unchanged (password untouched).
+  const orgbUser = await prisma.user.upsert({
+    where: { username: ORG_B_USERNAME },
+    update: {},
+    create: {
+      username: ORG_B_USERNAME,
+      email: ORG_B_USER_EMAIL,
+      passwordHash: await bcrypt.hash("orgbpass123", 10),
+      salt: "e2e-orgb-salt",
+    },
+  });
+  console.log(`[globalSetup] org-b: user ensured (id=${orgbUser.id}, username=${ORG_B_USERNAME})`);
+
+  // 3. Membership — org-b's own owner. Composite-unique idempotency via the
+  //    find-first → resurrect → create-with-P2002-catch chain (NOT upsert —
+  //    the partial unique index forbids ON CONFLICT arbitration, Postgres
+  //    42P10; see ensureDefaultOrgMembership in organizationService.ts for
+  //    the full semantics + the e2e-layering note: globalSetup runs OUTSIDE
+  //    the server bundle, so the helper is mirrored here rather than
+  //    imported — same reasoning as the inline hmacSha256 copy above).
+  //    The update arm resurrects tombstones (deletedAt: null) — works with
+  //    OR without the partial index.
+  const existingMembership = await prisma.organizationMember.findFirst({
+    where: { organizationId: ORG_B_ID, userId: orgbUser.id, deletedAt: null },
+  });
+  if (!existingMembership) {
+    const tombstone = await prisma.organizationMember.findFirst({
+      where: { organizationId: ORG_B_ID, userId: orgbUser.id, deletedAt: { not: null } },
+    });
+    if (tombstone) {
+      // Tombstone resurrect: flip deletedAt back to null AND persist
+      // roleInOrg=owner (WR-02/G-182-02 — removal must downgrade; re-add
+      // re-grants). P2002 here = a concurrent caller won — their row is
+      // live, the outcome we want.
+      try {
+        await prisma.organizationMember.update({
+          where: { id: tombstone.id },
+          data: { deletedAt: null, roleInOrg: "owner" },
+        });
+      } catch (err) {
+        if ((err as { code?: string }).code !== "P2002") throw err;
+      }
+    } else {
+      try {
+        await prisma.organizationMember.create({
+          data: { organizationId: ORG_B_ID, userId: orgbUser.id, roleInOrg: "owner" },
+        });
+      } catch (err) {
+        // P2002 race tolerance (D-05 TOCTOU window): a concurrent seeder
+        // created/resurrected the row — re-check and continue normally.
+        if ((err as { code?: string }).code !== "P2002") throw err;
+        const winner = await prisma.organizationMember.findFirst({
+          where: { organizationId: ORG_B_ID, userId: orgbUser.id, deletedAt: null },
+        });
+        if (!winner) throw err;
+      }
+    }
+    console.log(`[globalSetup] org-b: membership ensured (roleInOrg=owner)`);
+  }
+
+  // 4. Org-b's OWN project (WR-03/G-182-03): the workspace parent must live in
+  //    org-b — the previous fixture reused the default-org "E2E Test Project",
+  //    embedding the exact cross-org parent/child inconsistency the Phase 185
+  //    leak-detectors exist to catch (workspaces.organizationId=…00bb under
+  //    projects.organizationId=…0000). Tombstone-aware resurrect + P2002 race
+  //    tolerance, same D-05 either-branch-safe shape as seedWorkspaceAndChat
+  //    (projects_createdBy_name_key is a PLAIN unique — a soft-deleted row
+  //    permanently blocks re-create). Lookup keys on BOTH createdBy and name —
+  //    the same pair the plain unique arbitrates.
+  const ORG_B_PROJECT_NAME = "OrgB Test Project";
+  let project = await prisma.project.findFirst({
+    where: { name: ORG_B_PROJECT_NAME, createdBy: orgbUser.id, deletedAt: null },
+    select: { id: true },
+  });
+  if (!project) {
+    const tombstone = await prisma.project.findFirst({
+      where: { name: ORG_B_PROJECT_NAME, createdBy: orgbUser.id, deletedAt: { not: null } },
+      select: { id: true },
+    });
+    if (tombstone) {
+      await prisma.project.update({
+        where: { id: tombstone.id },
+        data: { deletedAt: null },
+      });
+      project = { id: tombstone.id };
+      console.log(`[globalSetup] org-b: revived tombstoned OrgB Test Project id=${project.id}`);
+    }
+  }
+  if (!project) {
+    try {
+      project = await prisma.project.create({
+        data: { name: ORG_B_PROJECT_NAME, createdBy: orgbUser.id, organizationId: ORG_B_ID },
+        select: { id: true },
+      });
+      console.log(`[globalSetup] org-b: created OrgB Test Project id=${project.id}`);
+    } catch (err) {
+      // P2002 race tolerance: a concurrent seeder created the row between our
+      // findFirst and create (TOCTOU window) — re-read and continue.
+      if ((err as { code?: string }).code !== "P2002") throw err;
+      const winner = await prisma.project.findFirst({
+        where: { name: ORG_B_PROJECT_NAME, createdBy: orgbUser.id, deletedAt: null },
+        select: { id: true },
+      });
+      if (!winner) throw err;
+      project = winner;
+      console.log(`[globalSetup] org-b: OrgB Test Project created concurrently, re-read id=${project.id}`);
+    }
+  }
+  await prisma.workspace.upsert({
+    where: { id: ORG_B_WORKSPACE_ID },
+    update: { projectId: project.id },
+    create: {
+      id: ORG_B_WORKSPACE_ID,
+      organizationId: ORG_B_ID,
+      projectId: project.id,
+      name: "OrgB Workspace",
+    },
+  });
+  console.log(`[globalSetup] org-b: workspace ensured (id=${ORG_B_WORKSPACE_ID}, org=${ORG_B_ID}, project=${project.id})`);
+  console.log(`[globalSetup] org-b: workspace re-parent heal applied (WR-03: update arm sets projectId — re-runs repair rows seeded by the pre-fix fixture)`);
+}
+
+/**
  * D-03: Clear admin mustChangePassword flag so the force-change modal never
  *  blocks spec navigation. Idempotent — updateMany is a no-op if no rows
  *  match (flag already cleared). Do NOT filter by deletedAt — User has no
@@ -367,8 +685,36 @@ async function seedE2eFixtures(prisma: PrismaClient): Promise<void> {
     console.error("[globalSetup] No admin user found — skipping E2E fixture seeding");
     return;
   }
+  // Wizard-mode heal (Rule 1, 182-04 Task 2): the frontend renders the Setup
+  // Wizard INSTEAD of the login page whenever
+  // /api/system/is-initialized returns setupWizardMode="active" (App.tsx
+  // wizard-vs-login gate) — even when an admin user exists. The shared dev
+  // DB can carry a stale mode="active" row (operator/integration residue —
+  // ensureSetupWizardMode never overwrites a non-empty value at boot), which
+  // 404-proofed every adminPage fixture: the login form never mounts, so
+  // button[type=submit] never appears (18 spec failures in the 182-04
+  // first E2E attempt). State-machine invariant: admin exists ⇒ initialized
+  // ⇒ mode MUST be "completed". Healing here mirrors the tombstone-resurrect
+  // arms above — idempotent, either-branch-safe, harness-only.
+  const wizardMode = await prisma.systemConfig.findUnique({
+    where: { key: "setup_wizard_mode" },
+    select: { value: true },
+  });
+  if (!wizardMode || wizardMode.value !== "completed") {
+    await prisma.systemConfig.upsert({
+      where: { key: "setup_wizard_mode" },
+      create: { key: "setup_wizard_mode", value: "completed" },
+      update: { value: "completed" },
+    });
+    console.log("[globalSetup] Healed setup_wizard_mode → completed (admin exists; stale/missing value was blocking the E2E login surface)");
+  }
   await seedWorkspaceAndChat(prisma, admin.id);
   await seedApiKey(prisma, admin.id);
+  await seedWidgetWhitelist(prisma);
+  // Phase 182 (182-PLAN-04 Task 1): org-b fixture — additive second-tenant
+  // seed for the Phase 185 leak-detector suites (Pitfall 12 half-b). Runs on
+  // all three REST-path branches via seedE2eFixturesViaFreshClient.
+  await seedOrgBFixture(prisma);
   await clearMustChangePassword(prisma);
 }
 

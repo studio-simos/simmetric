@@ -142,6 +142,10 @@ const mockModels = [
 describe("Provider Routes", () => {
   beforeEach(() => {
     jest.resetAllMocks();
+    // Phase 185 (185-02): tenantContextMiddleware (D-09) resolves the org via
+    // organizationMember.findFirst — resetAllMocks wipes the factory default,
+    // so re-seed a live default-org membership each test.
+    (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({ organizationId: "org-default" });
     // resetAllMocks clears the env mock's implementation; restore it so
     // runOllamaLogin can read OLLAMA_CONTAINER_NAME.
     (getEnv as jest.Mock).mockReturnValue({

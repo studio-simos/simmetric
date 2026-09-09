@@ -118,6 +118,12 @@ const mockMessage = {
 describe("Chat Organization API", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Phase 185 (185-01 tracer): workspaceRoutes mounts tenantContextMiddleware
+    // for the whole /api/workspaces prefix — seed a live membership so the
+    // JWT arm resolves and the chain proceeds.
+    (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      organizationId: "00000000-0000-0000-0000-000000000000",
+    });
   });
 
   // ─── Folders ────────────────────────────────────────────────────────

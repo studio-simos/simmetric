@@ -6,6 +6,7 @@
 import { Router, type Request, type Response } from "express";
 import matter from "gray-matter";
 import { authMiddleware } from "../middleware/auth";
+import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requirePermission } from "../middleware/rbac";
 import {
   createPageSchema,
@@ -22,7 +23,7 @@ import { getArchiveConfig } from "../services/archiveConfigService";
 const router = Router();
 
 // GET /:archiveId/pages — List pages in an archive
-router.get("/:archiveId/pages", authMiddleware, async (req: Request, res: Response) => {
+router.get("/:archiveId/pages", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const archiveId = req.params.archiveId as string;
 
@@ -74,7 +75,7 @@ router.get("/:archiveId/pages", authMiddleware, async (req: Request, res: Respon
 });
 
 // POST /:archiveId/pages — Create a new page
-router.post("/:archiveId/pages", authMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
+router.post("/:archiveId/pages", authMiddleware, tenantContextMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
   try {
     const archiveId = req.params.archiveId as string;
 
@@ -142,7 +143,7 @@ router.post("/:archiveId/pages", authMiddleware, requirePermission("archive:writ
 });
 
 // GET /:archiveId/pages/:slug — Get a single page
-router.get("/:archiveId/pages/:slug", authMiddleware, async (req: Request, res: Response) => {
+router.get("/:archiveId/pages/:slug", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
   try {
     const archiveId = req.params.archiveId as string;
     const slug = req.params.slug as string;
@@ -181,7 +182,7 @@ router.get("/:archiveId/pages/:slug", authMiddleware, async (req: Request, res: 
 });
 
 // PUT /:archiveId/pages/:slug — Update a page
-router.put("/:archiveId/pages/:slug", authMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
+router.put("/:archiveId/pages/:slug", authMiddleware, tenantContextMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
   try {
     const archiveId = req.params.archiveId as string;
     const slug = req.params.slug as string;
@@ -306,7 +307,7 @@ router.put("/:archiveId/pages/:slug", authMiddleware, requirePermission("archive
 });
 
 // DELETE /:archiveId/pages/:slug — Soft-delete a page
-router.delete("/:archiveId/pages/:slug", authMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
+router.delete("/:archiveId/pages/:slug", authMiddleware, tenantContextMiddleware, requirePermission("archive:write"), async (req: Request, res: Response) => {
   try {
     const archiveId = req.params.archiveId as string;
     const slug = req.params.slug as string;
