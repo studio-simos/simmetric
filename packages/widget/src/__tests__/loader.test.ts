@@ -462,6 +462,28 @@ describe("GET /widget/:widgetId.js (loader JS)", () => {
     expect(res.text).toContain("window.open(u, '_blank', 'noopener')");
   });
 
+  // 260917-mz6: the creditsOpen allowlist widens to mailto: so the contact
+  // card's owner-email entry opens the visitor's mail client FROM THE HOST
+  // page (the sandboxed iframe cannot navigate). javascript:/data: stay
+  // rejected (T-Q03 mitigation — the prefix allowlist shape is preserved).
+  it("accepts mailto: URLs in the creditsOpen branch (260917-mz6)", async () => {
+    const res = await request(app).get("/widget/widget-1.js");
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("u.indexOf('mailto:') === 0");
+  });
+
+  it("still rejects javascript:/data: — the allowlist is http/https/mailto ONLY (260917-mz6)", async () => {
+    const res = await request(app).get("/widget/widget-1.js");
+
+    expect(res.status).toBe(200);
+    // The guard literal is the three-prefix OR — no generic scheme pass-through.
+    expect(res.text).toMatch(/u\.indexOf\('http:\/\/'\) === 0 \|\| u\.indexOf\('https:\/\/'\) === 0 \|\| u\.indexOf\('mailto:'\) === 0/);
+    // No data:/javascript: acceptance anywhere in the branch.
+    expect(res.text).not.toContain("u.indexOf('data:') === 0");
+    expect(res.text).not.toContain("u.indexOf('javascript:') === 0");
+  });
+
   it("the simmetric:creditsOpen branch lives inside the WR-01-guarded relay listener (130-01, T-130-01)", async () => {
     const res = await request(app).get("/widget/widget-1.js");
 
@@ -473,6 +495,30 @@ describe("GET /widget/:widgetId.js (loader JS)", () => {
     const branchIndex = res.text.indexOf("simmetric:creditsOpen");
     expect(guardIndex).toBeGreaterThanOrEqual(0);
     expect(branchIndex).toBeGreaterThan(guardIndex);
+  });
+
+  // 260917-mz6: embed misconfigurations (missing container / missing
+  // data-widget-id) must be visible in the host page console — the silent
+  // early-returns left the widget invisibly absent. The guards KEEP the
+  // early-return structure; they add console.warn naming the missing piece.
+  it("warns on a missing embed container but preserves the early-return guard (260917-mz6)", async () => {
+    const res = await request(app).get("/widget/widget-1.js");
+
+    expect(res.status).toBe(200);
+    // The warn string names the widget namespace + the culprit attribute.
+    expect(res.text).toContain('[SimmetricChatWidget] Embed target container not found');
+    expect(res.text).toContain("data-target");
+    // Guard structure preserved: the warn sits INSIDE the early-return branch.
+    expect(res.text).toMatch(/if \(!container\) \{[^}]*console\.warn[^}]*return;/s);
+  });
+
+  it("warns on a missing data-widget-id but preserves the early-return guard (260917-mz6)", async () => {
+    const res = await request(app).get("/widget/widget-1.js");
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('[SimmetricChatWidget] Embed container is missing the data-widget-id attribute');
+    // Guard structure preserved: warn + return inside the !widgetId branch.
+    expect(res.text).toMatch(/if \(!widgetId\) \{[^}]*console\.warn[^}]*return;/s);
   });
 });
 
@@ -654,6 +700,34 @@ describe("GET /widget/:widgetId (iframe HTML)", () => {
     expect(block.whiteLabel).toBe(false);
   });
 
+  // 260917-mz6: contact options + lead timing in the block.
+  it("Test MZ6-A (260917-mz6): blockConfig carries contactConfig + leadCaptureTiming + leadCaptureTimeoutSeconds from the API response", async () => {
+    mockedGetWidgetConfig.mockResolvedValue({
+      ...baseFixture,
+      contactConfig: { formUrl: "https://example.com/contact", email: "owner@example.com" },
+      leadCaptureTiming: "timeout",
+      leadCaptureTimeoutSeconds: 45,
+    });
+    const res = await request(app).get("/widget/widget-1");
+
+    expect(res.status).toBe(200);
+    const block = JSON.parse(extractBlock(res.text));
+    expect(block.contactConfig).toEqual({ formUrl: "https://example.com/contact", email: "owner@example.com" });
+    expect(block.leadCaptureTiming).toBe("timeout");
+    expect(block.leadCaptureTimeoutSeconds).toBe(45);
+  });
+
+  it("Test MZ6-B (260917-mz6): defensive fallbacks when the API response lacks the fields (null / 'end' / null)", async () => {
+    mockedGetWidgetConfig.mockResolvedValue({ ...baseFixture });
+    const res = await request(app).get("/widget/widget-1");
+
+    expect(res.status).toBe(200);
+    const block = JSON.parse(extractBlock(res.text));
+    expect(block.contactConfig).toBeNull();
+    expect(block.leadCaptureTiming).toBe("end");
+    expect(block.leadCaptureTimeoutSeconds).toBeNull();
+  });
+
   // ── Quick 260826-p0d: query overrides for the two new trigger params ──────
   // Query > DB priority (D-03); absent query falls back to DB config (D-05,
   // Pitfall 3). The wire format for autoOpenUrlPatterns is the raw JSON-encoded
@@ -786,5 +860,56 @@ describe("GET /widget/:widgetId (iframe HTML)", () => {
 
     expect(res.status).toBe(200);
     expect(res.text).toContain('script.src.split("?")[0]');
+  });
+
+  // ── 188-03 (WGTA-02, D-11): product favicon in the iframe <head> + the
+  // TRACKED static asset route. The <link> is belt-and-suspenders (the
+  // sandboxed opaque-origin iframe favicon behavior is MEDIUM-confidence by
+  // design — real-browser proof is Plan 188-04's job); the contract here is
+  // structural: the iframe HTML carries the link and /widget/favicon.svg is
+  // served by the static middleware mounted before the loader routes.
+
+  it("Test Y (188-03, D-11): iframe HTML <head> carries the favicon <link> to /widget/favicon.svg", async () => {
+    const res = await request(app).get("/widget/widget-1");
+
+    expect(res.status).toBe(200);
+    // The favicon link lives inside <head>, before </head>
+    const headMatch = res.text.match(/<head>([\s\S]*?)<\/head>/);
+    expect(headMatch).not.toBeNull();
+    expect(headMatch![1]).toMatch(/<link\s+rel="icon"\s+type="image\/svg\+xml"\s+href="\/widget\/favicon\.svg"\s*\/?>/);
+  });
+
+  it("Test Z (188-03, D-11): GET /widget/favicon.svg serves the tracked asset as image/svg+xml", async () => {
+    const res = await request(app).get("/widget/favicon.svg");
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/image\/svg\+xml/);
+    // superagent routes image/* MIME types through its binary parser — the
+    // body arrives as a Buffer and res.text is never populated. Assert the
+    // SVG content on the raw body instead.
+    const svg = (res.body as Buffer).toString("utf-8");
+    expect(svg).toContain("<svg");
+  });
+
+  // 260917-qoh: the per-widget privacy URL in the block.
+  it("Test QOH-A (260917-qoh): blockConfig carries privacyUrl from the API response", async () => {
+    mockedGetWidgetConfig.mockResolvedValue({
+      ...baseFixture,
+      privacyUrl: "https://example.com/privacy",
+    });
+    const res = await request(app).get("/widget/widget-1");
+
+    expect(res.status).toBe(200);
+    const block = JSON.parse(extractBlock(res.text));
+    expect(block.privacyUrl).toBe("https://example.com/privacy");
+  });
+
+  it("Test QOH-B (260917-qoh): defensive fallback — blockConfig.privacyUrl is null when the API response lacks the field", async () => {
+    mockedGetWidgetConfig.mockResolvedValue({ ...baseFixture });
+    const res = await request(app).get("/widget/widget-1");
+
+    expect(res.status).toBe(200);
+    const block = JSON.parse(extractBlock(res.text));
+    expect(block.privacyUrl).toBeNull();
   });
 });

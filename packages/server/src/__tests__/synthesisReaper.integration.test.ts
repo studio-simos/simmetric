@@ -27,7 +27,7 @@
 import bcrypt from "bcryptjs";
 import fs from "fs";
 import path from "path";
-
+import { ensureOrgMembership } from "../../jest.setup.integration";
 // Phase 165 (Q-02): mock the jobQueue seam so Test 6 can assert pg-boss
 // registration (createQueue + schedule + boss.work). The cycle-body tests
 // (1-5) use real prisma and do not touch jobQueue.
@@ -67,6 +67,7 @@ beforeAll(async () => {
       data: { userId: admin.id, roleId: adminRole.id },
     });
   }
+  await ensureOrgMembership(prisma, admin.id);
 
   // Seed an archive so SynthesisRun.archiveId FK is valid
   const archive = await prisma.archive.create({
@@ -170,11 +171,11 @@ describe("KB-04 / D-14 — SynthesisRun.expiresAt + reaper", () => {
   });
 
   it("Test 5: runSynthesisPipeline manual-create path sets expiresAt: Date.now() + 2h", async () => {
-    // Source-string assertion: synthesisService.ts PROCESSING-create path
-    // must set expiresAt to ~2 hours from now. We verify the source includes
-    // the expiresAt field in prisma.synthesisRun.create's data object with
-    // the 2-hour expression.
-    const sourcePath = path.resolve(__dirname, "../services/synthesisService.ts");
+    // Source-string assertion: the PROCESSING-create path (MOD-04 Phase 88
+    // split moved the pipeline body into synthesis/synthesisStages.ts) must
+    // set expiresAt to ~2 hours from now in prisma.synthesisRun.create's
+    // data object.
+    const sourcePath = path.resolve(__dirname, "../services/synthesis/synthesisStages.ts");
     const source = fs.readFileSync(sourcePath, "utf-8");
     expect(source).toContain("expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000)");
   });

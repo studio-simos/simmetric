@@ -190,7 +190,10 @@ describe("PUT /api/documents/:id/status — draft-file callback guard (260829-jv
     const res = await request(app)
       .put("/api/documents/doc-1/status")
       .set({ "x-collector-secret": COLLECTOR_SECRET })
-      .send({ status: "processing" });
+      // quick 260918-p3h: "processing" is now a LEGAL callback status
+      // (progress-notify arm) — use a genuinely invalid enum value to pin
+      // the 400 contract-validation path.
+      .send({ status: "definitely-not-a-status" });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("Invalid ingest status callback");

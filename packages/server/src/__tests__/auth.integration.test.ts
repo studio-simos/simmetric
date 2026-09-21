@@ -13,7 +13,7 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import request from "supertest";
-
+import { ensureOrgMembership } from "../../jest.setup.integration";
 let app: ReturnType<typeof import("../index").createApp>;
 let prisma: import("@prisma/client").PrismaClient;
 let env: import("../config/env").Env;
@@ -56,6 +56,7 @@ beforeAll(async () => {
       data: { userId: admin.id, roleId: adminRole.id },
     });
   }
+  await ensureOrgMembership(prisma, admin.id);
 
   const regular = await prisma.user.create({
     data: {
@@ -72,6 +73,7 @@ beforeAll(async () => {
       data: { userId: regular.id, roleId: userRole.id },
     });
   }
+  await ensureOrgMembership(prisma, regular.id);
 });
 
 afterAll(async () => {
@@ -189,9 +191,9 @@ describe("GET /api/auth/users", () => {
 // ─── GET /api/health ──────────────────────────────────────────────
 
 describe("GET /api/health", () => {
-  it("returns ok status", async () => {
+  it("returns 200 with the database arm ok (host-native jest has no collector on :3210 — the collector arm's ok-verdict is pinned by the live-stack e2e)", async () => {
     const res = await request(app).get("/api/health");
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe("ok");
+    expect(res.body.checks.database).toBe(true);
   });
 });

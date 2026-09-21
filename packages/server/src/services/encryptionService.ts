@@ -171,10 +171,21 @@ export function decrypt(encoded: string): string {
       // try next key in chain
     }
   }
+  // Guided failure (T-QT-01): the message discloses only the chain LENGTH
+  // (a count) plus env-var NAMES and the runbook pointer — never a key value,
+  // fingerprint, IV, auth tag, or ciphertext fragment. The literal prefix
+  // "Unable to decrypt (no key in chain matched)" is load-bearing (existing
+  // tests + runbook cross-references match on it); guidance is appended after
+  // it and the raw Node GCM error stays last for low-level diagnosis.
   throw new Error(
-    `Unable to decrypt (no key in chain matched). Last error: ${
-      lastErr instanceof Error ? lastErr.message : String(lastErr)
-    }`,
+    `Unable to decrypt (no key in chain matched). Tried ${chain.length} key(s). ` +
+      "The blob was likely encrypted with a key that is no longer in the decrypt " +
+      "chain — typical after an ENCRYPTION_KEY change or a restore from a " +
+      "different environment. Recovery: set the backup-era key in " +
+      "LEGACY_PREVIOUS_ENCRYPTION_KEYS (comma-separated base64 keys) or restore " +
+      "the previous ENCRYPTION_KEY, then restart the server. " +
+      'See docs/ENCRYPTION_KEY_ROTATION.md ("Backup restore dry-run fails" section). ' +
+      `Last error: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`,
   );
 }
 

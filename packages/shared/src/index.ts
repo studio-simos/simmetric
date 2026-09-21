@@ -16,6 +16,12 @@ export * from "./schemas";
 // Constants
 export * from "./constants/index";
 
+// Phase 192 (DLP) — entity-class vocabulary is a constant consumed by
+// server/frontend; re-exported explicitly so the class list has exactly one
+// canonical entry point alongside the schemas barrel.
+export { DLP_ENTITY_CLASSES } from "./schemas/dlpDocumentScan.schema";
+export type { DlpEntityClass } from "./schemas/dlpDocumentScan.schema";
+
 // Utils
 export * from "./utils/fileName";
 

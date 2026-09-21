@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import { WIDGET_LOCALES } from "./widget.schema";
+import { skillCallSchema } from "./skill.schema";
 
 // ===== Chat Schemas =====
 
@@ -47,6 +48,27 @@ export const chatRequestSchema = z.object({
   // (same path the widget uses). Existing callers that omit it are byte-
   // identical (undefined normalizes to null at the route boundary).
   archiveId: z.string().uuid("Invalid archive ID").nullable().optional(),
+  // Phase 190 (SKIL-02 D-11): explicit /slug-skill invocation transport.
+  // Additive-optional — existing callers are byte-identical (undefined =
+  // absent; the server only resolves a skill when the field is present).
+  // The widget path STRUCTURALLY cannot invoke skills: the widget proxy
+  // composes its upstream body from widgetChatRequestSchema, which strips
+  // unknown keys, so a client-sent skillCall never survives the proxy
+  // re-parse (Pitfall 6). Phase 191 adds attachedArchiveIds to this same seam.
+  skillCall: skillCallSchema.optional(),
+  // Phase 191 (KNOW-01 D-01/D-07): chat-attached wiki-archive knowledge —
+  // additive-optional uuid array riding the same seam Phase 190 extended
+  // with skillCall (lands AFTER it per D-07 sequencing). Wire-invisible for
+  // existing callers (undefined = absent). The 5-cap (D-01) bounds the
+  // rag_search fan-out: each attached archive adds one parallel hybridSearch
+  // leg. The widget path STRUCTURALLY cannot attach archives — the D-08
+  // invariant holds at BOTH hops: the widget proxy composes its upstream
+  // body from widgetChatRequestSchema, which strips unknown keys (so a
+  // client-sent attachedArchiveIds never survives the proxy re-parse,
+  // Pitfall 6), AND the internal widget route deletes it from the raw body
+  // it forwards (its core re-parse via THIS schema would otherwise accept
+  // it — CR-01 review fix, defense-in-depth against a leaked API key).
+  attachedArchiveIds: z.array(z.string().uuid("Invalid archive ID")).max(5).optional(),
 });
 
 export const updateChatSchema = z.object({

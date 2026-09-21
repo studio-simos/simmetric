@@ -79,10 +79,18 @@ jest.mock("../services/providerService", () => ({
   resolveProviderConfig: jest.fn().mockResolvedValue(null),
 }));
 
-jest.mock("../services/archiveConfigService", () => ({
-  getSynthesisOverrides: jest.fn().mockResolvedValue(null),
-  getArchiveConfig: jest.fn().mockResolvedValue(null),
-}));
+// Phase 187: Pass 4 (decision stage) now calls buildSchemaPromptBlock(synthConfig)
+// from archiveConfigService. The mock factory must expose the REAL pure helper
+// (requireActual) so the Pass 4 → Pass 4b chain keeps running — only the DB
+// reads are mocked (Rule-3 mock-seam fix; no behavioral assertion changed).
+jest.mock("../services/archiveConfigService", () => {
+  const actual = jest.requireActual("../services/archiveConfigService");
+  return {
+    ...actual,
+    getSynthesisOverrides: jest.fn().mockResolvedValue(null),
+    getArchiveConfig: jest.fn().mockResolvedValue(null),
+  };
+});
 
 jest.mock("../services/systemConfigService", () => ({
   getSetting: jest.fn().mockResolvedValue({ value: "" }),

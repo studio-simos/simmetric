@@ -1,0 +1,107 @@
+{
+  "files": [
+    {
+      "file": "01-anagrafica-cliente.txt",
+      "entities": [
+        {
+          "text": "RSSMRA85M01A001X",
+          "entityClass": "GOV_ID"
+        },
+        {
+          "text": "Marco Rossi",
+          "entityClass": "PERSON"
+        }
+      ]
+    },
+    {
+      "file": "02-contratto-fornitore.txt",
+      "entities": [
+        {
+          "text": "00743110157",
+          "entityClass": "GOV_ID"
+        },
+        {
+          "text": "Bianchi S.r.l.",
+          "entityClass": "FINANCIAL"
+        },
+        {
+          "text": "Laura Bianchi",
+          "entityClass": "PERSON"
+        },
+        {
+          "text": "Via Garibaldi 4, 40121 Bologna",
+          "entityClass": "ADDRESS"
+        }
+      ]
+    },
+    {
+      "file": "03-bilancio.txt",
+      "entities": [
+        {
+          "text": "87.400 EUR",
+          "entityClass": "FINANCIAL"
+        },
+        {
+          "text": "Carlo Verdi",
+          "entityClass": "PERSON"
+        }
+      ]
+    },
+    {
+      "file": "04-iban-bonifico.txt",
+      "entities": [
+        {
+          "text": "IT60X0542811101000000123456",
+          "entityClass": "GOV_ID"
+        },
+        {
+          "text": "45.600 EUR",
+          "entityClass": "FINANCIAL"
+        }
+      ]
+    },
+    {
+      "file": "05-omocodia-cf.txt",
+      "entities": [
+        {
+          "text": "Giorgia Nemni",
+          "entityClass": "PERSON"
+        }
+      ]
+    },
+    {
+      "file": "06-documento-pulito.txt",
+      "entities": []
+    },
+    {
+      "file": "07-rubrica-contatti.txt",
+      "entities": [
+        {
+          "text": "+39 02 1234567",
+          "entityClass": "CONTACT"
+        },
+        {
+          "text": "m.rossi.ufficio@example.net",
+          "entityClass": "CONTACT"
+        }
+      ]
+    },
+    {
+      "file": "08-verbale.txt",
+      "entities": [
+        {
+          "text": "Giulia Ferri",
+          "entityClass": "PERSON"
+        },
+        {
+          "text": "Antonio Martini",
+          "entityClass": "PERSON"
+        },
+        {
+          "text": "Roberto Dati",
+          "entityClass": "PERSON"
+        }
+      ]
+    }
+  ]
+}

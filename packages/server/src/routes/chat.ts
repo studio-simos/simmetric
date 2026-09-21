@@ -6,11 +6,22 @@
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { tenantContextMiddleware } from "../middleware/tenantContext";
-import { requireWorkspaceAccess } from "../middleware/rbac";
+// Phase 189 (D-13, Plan 04 gate swap): requireWorkspaceWriteAccess is the SOLE
+// enforcement gate on the chat mutates (the binary gate retired at the flip —
+// flag persisted "true"). Chat GETs in chatTokens.ts/mcpPins.ts stay binary on
+// requireWorkspaceAccess (D-11 read half, v1.5 debt unchanged).
+import { requireWorkspaceWriteAccess } from "../middleware/rbac";
 import { runAgent, runAgentStreaming } from "../agent/orchestrator";
 import prisma from "../utils/prisma";
 import { logEvent } from "../services/eventLogService";
 import { scanContentAsync, progressiveDLPFlush } from "../services/dlpFilter";
+// Phase 192 (D-08/D-09): stream-end DLP re-composition (plan 03) — imports
+// buildPlaceholderRegex from dlpEntityService (plan 04 owns that export;
+// asserted by dlpRecompose.test.ts).
+import {
+  recomposeForUser,
+  extractCitedDocumentIds,
+} from "../services/dlpRecomposeService";
 import { getAndClearDlpMatches, getDlpBypassRoles } from "../filters/plugins/dlp";
 import { getSetting } from "../services/systemConfigService";
 import { runInlet, runOutlet } from "../filters/filterChain";
@@ -26,6 +37,14 @@ import { generateAutoTitle, generateTagsAndFollowUps, generateBatchedTitleTagsAn
 import { getRedis } from "../services/redisService";
 import type Redis from "ioredis";
 import "../agent/builtinSkills"; // Ensure skills are registered
+// Phase 190 (SKIL-04, D-13): explicit skillCall handling — the compiled prompt
+// is built SERVER-SIDE (the frontend never compiles; D-11) from the DB row
+// resolved through the D-05 scope filter (IDOR guard, Pattern 3b) and rides
+// AgentRunParams.skillCall into BOTH orchestrator loops.
+import * as skillService from "../services/skillService";
+// Phase 191 (KNOW-01 D-03/D-05): org-scoped archive attachment resolver +
+// per-chat mirror (silent filter, never a 4xx oracle).
+import { resolveAttachedArchives, syncChatAttachment } from "../services/archiveAttachmentService";
 
 // Phase 154 (CSW-02): chat route file map — each sub-file owns one domain.
 // chat.ts ← chatCrud.ts — rename/move/edit-message/link-archive mutations on chats.
@@ -177,6 +196,99 @@ export async function setupSSESubscriber(
   return sub;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 190 (SKIL-04): explicit skillCall handling (D-11/D-13/D-09)
+// ---------------------------------------------------------------------------
+// The compiled prompt is built SERVER-SIDE in the route (D-11 — the frontend
+// never compiles) through the mask → compile → spotlight pipeline:
+//   1. resolveInvocableSkill re-resolves the slug with the D-05 scope filter
+//      (IDOR guard T-190-15 — never trust the client's palette query); an
+//      unresolvable/disabled/deleted slug surfaces a chat-level error notice
+//      (SSE error on the stream arm, 400 on the non-stream arm — never a
+//      500, never silent; D-09 explicit-invocation arm).
+//   2. Mask BEFORE compile (D-13 ordering, Pitfall 5): every param value is
+//      scanned via scanContentAsync gated on the SAME dlpScanEnabled the
+//      message inlet uses (bypass-role semantics inherited) — the compiled
+//      prompt contains only masked params.
+//   3. compileTemplate (whitelisted {{param}} replacement) +
+//      wrapSpotlightedTemplate (D-12 delimiters) — the result rides
+//      AgentRunParams.skillCall into BOTH orchestrator loops.
+//
+// Both chat handlers share this block; the raw typed user message (e.g.
+// "/translate Ciao mondo") persists as the normal user message — only the
+// compiled prompt is injected (spotlighted user-level data, D-12).
+
+/** Payload the route hands to the orchestrator via AgentRunParams.skillCall. */
+interface SkillCallForAgent {
+  slug: string;
+  params: Record<string, string>;
+  compiledPrompt: string;
+}
+
+/** Chat-level error notice for an unresolvable/disabled/deleted skill slug. */
+function skillUnavailableNotice(slug: string): string {
+  return `Skill '/${slug}' is not available`;
+}
+
+/**
+ * Resolve an incoming parsed.data.skillCall server-side and build the
+ * spotlighted payload for the orchestrator. Returns:
+ *  - { skillCall: payload } on success;
+ *  - { error: notice } when the slug does not resolve (the caller turns it
+ *    into its surface-appropriate chat-level error notice — D-09).
+ * When skillCall is absent the function is never called (byte-identical
+ * handlers for requests without it).
+ */
+async function resolveSkillCallForAgent(
+  skillCall: { slug: string; params?: Record<string, string> },
+  workspaceId: string,
+  userId: string,
+  dlpScanEnabled: boolean,
+): Promise<{ skillCall?: SkillCallForAgent; error?: string }> {
+  const row = await skillService.resolveInvocableSkill({
+    slug: skillCall.slug,
+    workspaceId,
+    userId, // org via the ALS tenant context (TENANT_READ_MODELS AND-merge)
+  });
+  if (!row) {
+    return { error: skillUnavailableNotice(skillCall.slug) };
+  }
+  // D-13 ORDERING IS LOAD-BEARING: mask each param value BEFORE
+  // compileTemplate — the compiled prompt contains only masked params;
+  // reverse order double-redacts template literals and lets template-authored
+  // text hide params from the scanner (Pitfall 5).
+  const masked: Record<string, string> = {};
+  const rawParams = skillCall.params ?? {};
+  for (const [k, v] of Object.entries(rawParams)) {
+    masked[k] = dlpScanEnabled ? (await scanContentAsync(v)).redactedText : v;
+  }
+  // Safe JSON shape (mirrors the test-preview idiom in routes/skills.ts:460-470)
+  let config: Record<string, unknown> = {};
+  try {
+    const pc: unknown = typeof row.config === "string" ? JSON.parse(row.config) : row.config;
+    if (pc !== null && typeof pc === "object" && !Array.isArray(pc)) {
+      config = pc as Record<string, unknown>;
+    }
+  } catch {
+    config = {};
+  }
+  const template = typeof config.template === "string" ? config.template : "";
+  const defaults = (config.defaultParams as Record<string, unknown>) ?? {};
+  const compiled = skillService.compileTemplate(
+    template,
+    masked,
+    defaults,
+    skillService.allowedKeysFrom(row.inputSchema, defaults),
+  );
+  return {
+    skillCall: {
+      slug: row.slug,
+      params: masked,
+      compiledPrompt: skillService.wrapSpotlightedTemplate(compiled),
+    },
+  };
+}
+
 /**
  * @openapi
  * /workspaces/{workspaceId}/chat:
@@ -216,7 +328,7 @@ export async function setupSSESubscriber(
  *       500: { description: Agent execution failed }
  */
 // POST /api/workspaces/:workspaceId/chat — send a message and get agent response
-router.post("/:workspaceId/chat", requireWorkspaceAccess, async (req: Request, res: Response) => {
+router.post("/:workspaceId/chat", requireWorkspaceWriteAccess(), async (req: Request, res: Response) => {
   const workspaceId = req.params.workspaceId as string;
 
   const parsed = chatRequestSchema.safeParse(req.body);
@@ -308,6 +420,29 @@ router.post("/:workspaceId/chat", requireWorkspaceAccess, async (req: Request, r
     });
     const processedMessage = inletCtx.message;
 
+    // Phase 190 (SKIL-04, D-13): skillCall resolution — AFTER the chat row is
+    // resolved and AFTER the inlet computed the DLP decision. The gate mirrors
+    // the stream handler's dlpScanEnabled idiom (DLP_ENABLED true AND no
+    // bypass role) so bypass-role semantics are inherited by the params
+    // masking gate. Absent skillCall → the resolution block is skipped and
+    // the handler is byte-identical (the dlpMaskingEnabled flag below is
+    // still passed to the orchestrator — WR-02: the LLM-invoked custom-skill
+    // path masks through the executor on every chat, skillCall or not).
+    const { skillCall } = parsed.data;
+    const userRoleNames = req.user?.roles?.map((ur: { role: { name: string } }) => ur.role.name) ?? [];
+    const dlpEnabled = (await getSetting("DLP_ENABLED")).value === "true";
+    const dlpScanEnabled = dlpEnabled && (await getDlpBypassRoles(userRoleNames)).length === 0;
+    let skillCallForAgent: SkillCallForAgent | undefined;
+    if (skillCall) {
+      const resolved = await resolveSkillCallForAgent(skillCall, workspaceId, req.userId!, dlpScanEnabled);
+      if (resolved.error) {
+        // D-09 explicit-invocation arm: chat-level error notice, never a 500.
+        res.status(400).json({ error: resolved.error });
+        return;
+      }
+      skillCallForAgent = resolved.skillCall;
+    }
+
     // Run the agent
     const result = await runAgent({
       workspaceId,
@@ -319,6 +454,17 @@ router.post("/:workspaceId/chat", requireWorkspaceAccess, async (req: Request, r
       providerId: providerId || chat.providerId || undefined,
       model: model || chat.model || undefined,
       archiveId: chat.archiveId ?? undefined,  // D-08: deterministic chat-scoped archiveId
+      // Phase 190 (SKIL-04): the spotlighted payload rides the additive-optional
+      // field (Pattern 4 ordering — resolve → mask → compile → spread).
+      ...(skillCallForAgent ? { skillCall: skillCallForAgent } : {}),
+      // Phase 190 (WR-02, D-13): the SAME DLP decision gates the LLM-invoked
+      // custom-skill executor (mask-before-compile on both invocation styles).
+      dlpMaskingEnabled: dlpScanEnabled,
+      // 260919 model-missing UX: user-facing chat → strict model resolution.
+      // The user-selected model is honored; a missing model throws the typed
+      // [MODEL_NOT_AVAILABLE] error the frontend turns into a model-choice
+      // prompt (no silent substitution).
+      strictModelResolution: true,
     });
 
     // Phase 100-01: FilterChain outlet — post-LLM filter plugins (DLP
@@ -339,6 +485,27 @@ router.post("/:workspaceId/chat", requireWorkspaceAccess, async (req: Request, r
       userRoles: req.user?.roles?.map((ur: { role: { name: string } }) => ur.role.name) ?? [],
     });
     const finalResponse = outletCtx.message;
+
+    // Phase 192 (D-08): non-streaming re-composition twin — the SAME gate
+    // ladder via recomposeForUser (source "chat" only; the widget route
+    // never enters this handler). Runs AFTER the dlpPlugin redaction pass:
+    // placeholders contain no PII so dlpPlugin never re-redacts them —
+    // the ordering is safe by construction. Persisted canonical stays
+    // MASKED (A4); the additive-optional response `content` field carries
+    // the per-request re-composed text, omitted when byte-identical
+    // (doneReason convention — old clients unaffected).
+    const dlpRecomposeEnabledNs = dlpScanEnabled
+      && ((result.sources?.length ?? 0) > 0 || Boolean(attachedDocumentId));
+    const finalForUserNs = dlpRecomposeEnabledNs
+      ? await recomposeForUser(finalResponse, {
+          citedDocumentIds: extractCitedDocumentIds(result.sources),
+          attachedDocumentIds: attachedDocumentId ? [attachedDocumentId as string] : [],
+          userId: req.userId!,
+          workspaceId,
+          user: req.user,
+          isWidgetSource: false,
+        })
+      : finalResponse;
 
     // Save assistant response
     const assistantMessage = await prisma.chatMessage.create({
@@ -393,6 +560,10 @@ router.post("/:workspaceId/chat", requireWorkspaceAccess, async (req: Request, r
       chatId: chat.id,
       messageId: assistantMessage.id,
       response: finalResponse,
+      // Phase 192 (D-09): additive optional — terminal re-composed text for
+      // permitted DLP users. Omitted when byte-identical (no DLP document
+      // content involved / gate not passed) — old clients unaffected.
+      content: finalForUserNs !== finalResponse ? finalForUserNs : undefined,
       sources: result.sources,
       toolCalls: result.toolCalls,
       iterations: result.iterations,
@@ -453,7 +624,7 @@ router.post("/:workspaceId/chat", requireWorkspaceAccess, async (req: Request, r
 // Thin JWT wrapper over the shared handleChatStream core (260809-tuw): the
 // internal widget route (internalWidget.ts POST /chat/stream) reuses the same
 // handler with the widget-service account as the acting user.
-router.post("/:workspaceId/chat/stream", requireWorkspaceAccess, (req: Request, res: Response) => {
+router.post("/:workspaceId/chat/stream", requireWorkspaceWriteAccess(), (req: Request, res: Response) => {
   // 260815-k5s: thread the body's archiveId (selected before the first
   // message) as the 4th arg. `handleChatStream` validates the full body via
   // `chatRequestSchema.safeParse` (line 426) — an invalid archiveId is
@@ -471,11 +642,11 @@ router.post("/:workspaceId/chat/stream", requireWorkspaceAccess, (req: Request, 
  * error catch. Reads ONLY req.userId (populated by the JWT authMiddleware or
  * the internal apiKeyMiddleware), the X-Widget-Id / X-Widget-Session-Id
  * headers, and req.body. The workspace is passed in by the caller:
- * - JWT route: req.params.workspaceId (behind requireWorkspaceAccess)
+ * - JWT route: req.params.workspaceId (behind requireWorkspaceWriteAccess)
  * - internal widget route: whitelist[0] resolved from the widget's DB
  *   WidgetWorkspace rows (IDOR-safe — never client-supplied)
  */
-export async function handleChatStream(req: Request, res: Response, workspaceId: string, archiveId?: string | null, locale?: string, widgetModel?: { providerId?: string | null; model?: string | null }): Promise<void> {
+export async function handleChatStream(req: Request, res: Response, workspaceId: string, archiveId?: string | null, locale?: string, widgetModel?: { providerId?: string | null; model?: string | null; systemPrompt?: string | null }): Promise<void> {
   const parsed = chatRequestSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request body", details: parsed.error.flatten().fieldErrors });
@@ -559,6 +730,31 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
           organizationId: req.organizationId!,
         },
       });
+    }
+
+    // Phase 191 (KNOW-01 D-03): chat-attached archives — org-scoped silent
+    // filter (unknown/cross-org/soft-deleted IDs yield zero retrieval and
+    // zero persistence, never a 4xx oracle), then mirror the validated
+    // subset onto the Chat row (D-05 KNOW-02). req.organizationId is
+    // populated by tenant middleware on BOTH the JWT route (authMiddleware
+    // chain) and the internal widget route (widgetTenantContext) — the same
+    // non-null org stamp the chat.create above uses. Absent field →
+    // resolveAttachedArchives short-circuits to [] with NO DB round-trip.
+    // 191-03 (WR-01/IN-01 review fix): the mirror runs ONLY when the client
+    // explicitly manages attachments (field present) — an absent field
+    // (stale tab, retryMessage regenerate/fallback caller, bare API
+    // consumer) leaves the mirror UNCHANGED instead of wiping an existing
+    // selection to []. The turn's retrieval union still uses what was sent
+    // (absent → ungrounded turn, mirror untouched). A present-but-empty []
+    // still clears — that is an explicit detach.
+    // The widget path cannot reach here with archive IDs or a skillCall:
+    // BOTH strips apply — widgetChatRequestSchema strips them at the proxy
+    // re-parse, and the internal route's seam deletes them from the raw
+    // body it forwards (D-08 two-hop invariant).
+    const requestedArchiveIds = parsed.data.attachedArchiveIds ?? [];
+    const effectiveArchiveIds = await resolveAttachedArchives(requestedArchiveIds, req.organizationId);
+    if (parsed.data.attachedArchiveIds !== undefined) {
+      await syncChatAttachment(chat.id, chat.attachedArchiveIds, effectiveArchiveIds);
     }
 
     // D-03: subscribe to Redis pub/sub channel for this chat so events
@@ -646,6 +842,38 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
     // flush, progressive token flush, final tail scan) so the bypass covers
     // EVERY streaming DLP surface (spec consistency requirement).
     const dlpScanEnabled = dlpEnabled && (await getDlpBypassRoles(userRoleNames)).length === 0;
+
+    // Phase 190 (SKIL-04, D-13): skillCall resolution — after the chat row is
+    // resolved and AFTER the runInlet call computed dlpScanEnabled (the SAME
+    // gate the message inlet uses; bypass-role semantics inherited). Absent
+    // skillCall → the whole block is skipped and the handler is
+    // byte-identical (Pitfall 6: the widget path strips the field upstream —
+    // widgetChatRequestSchema — so a widget-headered request never reaches
+    // this arm).
+    let skillCallForAgent: SkillCallForAgent | undefined;
+    if (parsed.data.skillCall) {
+      const resolved = await resolveSkillCallForAgent(
+        parsed.data.skillCall,
+        workspaceId,
+        req.userId!,
+        dlpScanEnabled,
+      );
+      if (resolved.error) {
+        // D-09 explicit-invocation arm: SSE error event carrying the slug,
+        // stream closed gracefully the same way existing error terminations
+        // do — never a 500, never silent.
+        sendSSE("error", { error: resolved.error });
+        if (!clientDisconnected) {
+          try {
+            res.end();
+          } catch {
+            // EPIPE/write-after-end — client already gone
+          }
+        }
+        return;
+      }
+      skillCallForAgent = resolved.skillCall;
+    }
 
     // Resolve attached document context (IDOR-safe: scoped to workspace + not soft-deleted)
     let effectiveRagContext: string | undefined = ragContext;
@@ -766,7 +994,29 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
         // default > global default.
         providerId: effectiveProviderId || chat.providerId || undefined,
         model: effectiveModel || chat.model || undefined,
+        // 260917-mz6: the widget grounding prompt — DB-resolved from the
+        // Widget row by the internal widget route (default constant when
+        // the column is null), NEVER client-supplied. The JWT route passes
+        // no 6th arg → the key is omitted (byte-identical guard).
+        ...(widgetModel?.systemPrompt ? { widgetSystemPrompt: widgetModel.systemPrompt } : {}),
         archiveId: chat.archiveId ?? undefined,  // D-08: deterministic chat-scoped archiveId
+        // Phase 190 (SKIL-04): the spotlighted payload rides the
+        // additive-optional field, next to the effectiveLocale conditional
+        // spread (Pattern 4 ordering — resolve → mask → compile → spread).
+        ...(skillCallForAgent ? { skillCall: skillCallForAgent } : {}),
+        // Phase 190 (WR-02, D-13): the SAME dlpScanEnabled gates the
+        // LLM-invoked custom-skill executor (mask-before-compile on both
+        // invocation styles).
+        dlpMaskingEnabled: dlpScanEnabled,
+        // Phase 191 (KNOW-01 D-04): chat-attached archives ride the
+        // additive-optional field into rag_search's retrieval union.
+        // Conditional spread mirrors the skillCall pattern — only when the
+        // org-validated subset is non-empty (absent = byte-identical).
+        ...(effectiveArchiveIds.length > 0 && { attachedArchiveIds: effectiveArchiveIds }),
+        // 260919 model-missing UX: streaming twin — strict model resolution
+        // on the user-facing SSE path (typed [MODEL_NOT_AVAILABLE] error
+        // instead of a silent substitute model).
+        strictModelResolution: true,
       },
       // onToken — D-01 progressive DLP flush: append to dlpBuffer, extract
       // safe prefix, emit via sendSSE, retain 64-char tail.
@@ -830,6 +1080,27 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
       sendSSE("token", finalResponse);
     }
 
+    // Phase 192 (D-08/D-09): stream-end DLP re-composition — exactly once,
+    // AFTER the final tail flush (fullResponse is now the complete redacted
+    // text) and BEFORE persistence (Pitfall 4 fixed order: tail flush →
+    // recompose → persist masked canonical → done). Chat-source only — the
+    // widget arm is a hard never inside recomposeForUser (no entity-map
+    // load for widget requests, T-192-12). Lazy gates: the toggle read +
+    // permission resolution run ONLY when citations/attached docs exist on
+    // a chat-source request (zero cost on every other chat).
+    const dlpRecomposeEnabled = dlpScanEnabled && !isWidgetSource
+      && ((result.sources?.length ?? 0) > 0 || Boolean(attachedDocumentId));
+    const finalForUser = dlpRecomposeEnabled
+      ? await recomposeForUser(fullResponse, {
+          citedDocumentIds: extractCitedDocumentIds(result.sources),
+          attachedDocumentIds: attachedDocumentId ? [attachedDocumentId as string] : [],
+          userId: req.userId!,
+          workspaceId,
+          user: req.user,
+          isWidgetSource,
+        })
+      : fullResponse;
+
     // Phase 115: retrieve accumulated DLP matches for SSE done event and metadata persistence
     const finalDlpMatches = getAndClearDlpMatches(chat.id);
 
@@ -878,6 +1149,10 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
     let assistantMessage: { id: string } | null = null;
     if (result.abortReason !== "unknown_tool_breaker") {
       try {
+        // Phase 192 (D-08/A4): persist the MASKED canonical — fullResponse,
+        // never finalForUser. Re-composition is per-request on the done
+        // payload; permission revocation applies retroactively to history
+        // reads (T-192-15). finalForUser carries the user-visible variant.
         assistantMessage = await prisma.chatMessage.create({
           data: {
             chatId: chat.id,
@@ -986,6 +1261,14 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
       // termination reason. Omitted (undefined) when not mappable; old
       // clients ignore the field (JS graceful on unknown object fields).
       doneReason: result.doneReason,
+      // Phase 192 (D-09): additive optional — terminal re-composed text for
+      // permitted DLP users (dlp:unmask + workspace toggle + cited docs).
+      // Omitted (undefined) when no DLP document content was involved or
+      // the text is byte-identical to the streamed tokens — old clients
+      // ignore the field (doneReason convention) and the frontend falls
+      // back to streamingContentRef byte-identically (Pitfall 9).
+      // Canonical persistence stays MASKED (A4) — this field is per-request.
+      content: finalForUser !== fullResponse ? finalForUser : undefined,
       // Pipeline info — describes what tools were called and whether sources
       // were found. Used by the frontend to show the user how the answer was
       // produced.

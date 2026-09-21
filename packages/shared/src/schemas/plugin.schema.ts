@@ -286,6 +286,35 @@ export interface PluginContext {
    * real resolver); the `PluginContext` type is unchanged.
    */
   overrideFeatureLimit(flag: string, value: number): void;
+  /**
+   * Phase 193 (LDAP-03 — RESEARCH Pitfall 4 option b): core-owned
+   * auth-cache eviction delegated to the plugin. The enterprise package
+   * can only import `@simmetric-chat/shared` — it cannot import the
+   * community `authService` where `invalidateAuthCache` lives, yet the
+   * LDAP role-sync revocations must not stay effective up to the 24h
+   * Redis TTL (authMiddleware serves `auth:user:{userId}` with
+   * TTL = SESSION_EXPIRY). The loader delegates to
+   * `authService.invalidateAuthCache` (a lazy require in
+   * `pluginLoaderCore.ts`, same class as `generateToken`). Fire-and-forget
+   * semantics: non-blocking, failure logged but never thrown.
+   */
+  invalidateAuthCache(userId: string): Promise<void>;
+  /**
+   * Phase 193 (LDAP-03 — RESEARCH Open Question 1 option b): delegates to
+   * the community `createPersonalWorkspace` (Phase 189 substrate). The
+   * personal-workspace invariants (P2002 tombstone class
+   * `PersonalWorkspaceConflictError`, hasOnboarded flip, cache
+   * invalidation on both arms) must not drift by replication — the
+   * enterprise JIT arm consumes them via this seam. The delegate
+   * forwards the three args verbatim; a `PersonalWorkspaceConflictError`
+   * propagates to the enterprise caller as a thrown Error (the JIT arm
+   * catches and maps it to the uniform failure arm).
+   */
+  provisionPersonalWorkspace(
+    userId: string,
+    workspaceName: string,
+    organizationId: string,
+  ): Promise<unknown>;
 }
 
 /**

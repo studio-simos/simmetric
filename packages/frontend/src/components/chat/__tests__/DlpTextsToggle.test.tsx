@@ -6,7 +6,7 @@
 /**
  * DlpTextsToggle component tests (quick 260829-spj)
  *
- * The admin-gated "Show/Hide DLP texts" menu item for the chat more-actions
+ * The admin-gated "Show/Hide DLP" menu item for the chat more-actions
  * Popover. Covers: hidden for non-admins, label/icon/aria-checked flip,
  * onToggle callback with the NEXT value.
  *
@@ -18,8 +18,8 @@ jest.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string) => {
       const map: Record<string, string> = {
-        "chat.dlp.showTexts": "Show DLP texts",
-        "chat.dlp.hideTexts": "Hide DLP texts",
+        "chat.dlp.showTexts": "Show DLP",
+        "chat.dlp.hideTexts": "Hide DLP",
       };
       return map[key] ?? key;
     },
@@ -43,23 +43,23 @@ describe("DlpTextsToggle", () => {
     expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
   });
 
-  it("renders the OFF state: 'Show DLP texts' label + Eye icon + aria-checked=false", () => {
+  it("renders the OFF state: 'Show DLP' label + Eye icon + aria-checked=false", () => {
     render(<DlpTextsToggle visible={true} checked={false} onToggle={jest.fn()} />);
     const item = screen.getByRole("menuitemcheckbox");
     expect(item).toHaveAttribute("aria-checked", "false");
-    expect(item).toHaveAccessibleName("Show DLP texts");
+    expect(item).toHaveAccessibleName("Show DLP");
     expect(screen.getByTestId("eye")).toBeInTheDocument();
     expect(screen.queryByTestId("eye-off")).not.toBeInTheDocument();
-    expect(screen.getByText("Show DLP texts")).toBeInTheDocument();
+    expect(screen.getByText("Show DLP")).toBeInTheDocument();
   });
 
-  it("renders the ON state: 'Hide DLP texts' label + EyeOff icon + aria-checked=true", () => {
+  it("renders the ON state: 'Hide DLP' label + EyeOff icon + aria-checked=true", () => {
     render(<DlpTextsToggle visible={true} checked={true} onToggle={jest.fn()} />);
     const item = screen.getByRole("menuitemcheckbox");
     expect(item).toHaveAttribute("aria-checked", "true");
     expect(screen.getByTestId("eye-off")).toBeInTheDocument();
     expect(screen.queryByTestId("eye")).not.toBeInTheDocument();
-    expect(screen.getByText("Hide DLP texts")).toBeInTheDocument();
+    expect(screen.getByText("Hide DLP")).toBeInTheDocument();
   });
 
   it("calls onToggle(true) when clicked while OFF", () => {

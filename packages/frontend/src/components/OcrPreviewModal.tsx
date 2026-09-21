@@ -6,13 +6,14 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
-import { Image, FileText, AlertTriangle, X, CheckCircle2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Image, FileText, AlertTriangle, X, CheckCircle2, ChevronLeft, ChevronRight, RefreshCw, Loader2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Alert, AlertDescription } from "./ui/alert";
-import { useApproveOcrJob, useRejectOcrJob } from "../queries/useOcrJobs";
+import { useApproveOcrJob, useRejectOcrJob, useRepairOcrPages } from "../queries/useOcrJobs";
 import { queryKeys } from "../queries/keys";
 import { showSuccess, showError } from "../lib/toast";
+import { getErrorMessage } from "../utils/errorUtils";
 import { renderMarkdown } from "../utils/markdown";
 import type { OcrJob } from "../queries/useOcrJobs";
 
@@ -28,6 +29,8 @@ export default function OcrPreviewModal({ job, archiveId, open, onClose }: Props
   const queryClient = useQueryClient();
   const approveMutation = useApproveOcrJob();
   const rejectMutation = useRejectOcrJob();
+  // 260919-kvm: single-page re-OCR from the preview modal.
+  const repairMutation = useRepairOcrPages();
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
@@ -70,6 +73,27 @@ export default function OcrPreviewModal({ job, archiveId, open, onClose }: Props
       showError(t("ocr.error.rejectFailed"));
     } finally {
       setRejecting(false);
+    }
+  };
+
+  // 260919-kvm: re-OCR the current page only, with toasts mirroring the
+  // job-card repair flow.
+  const handleRepairCurrentPage = async () => {
+    if (!currentPage) return;
+    try {
+      const outcome = await repairMutation.mutateAsync({
+        archiveId,
+        jobId: job.id,
+        pages: [currentPage.pageNumber],
+      });
+      const repairedCount = outcome.repaired.filter((r) => !r.stillFailed).length;
+      if (repairedCount > 0) {
+        showSuccess(t("ocr.repairSuccess", { repaired: repairedCount }));
+      } else {
+        showError(t("ocr.repairStillFailed"));
+      }
+    } catch (err: unknown) {
+      showError(getErrorMessage(err, t("ocr.repairStillFailed")));
     }
   };
 
@@ -182,11 +206,33 @@ export default function OcrPreviewModal({ job, archiveId, open, onClose }: Props
 
         {/* Right pane: Extracted Markdown */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
-          <div className="px-4 py-2 border-b border-border flex-shrink-0">
+          <div className="px-4 py-2 border-b border-border flex-shrink-0 flex items-center justify-between">
             <span className="text-sm font-medium text-foreground flex items-center gap-1.5">
               <FileText className="h-4 w-4 text-muted-foreground" />
               {t("ocr.preview.extractedMarkdown")}
             </span>
+            {currentPage?.markdown.startsWith("[FAILED:") && (
+              <div className="flex items-center gap-2">
+                <Badge variant="destructive" className="flex-shrink-0">
+                  <X className="h-3 w-3" />
+                  <span className="ml-1">{t("ocr.pageFailed")}</span>
+                </Badge>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  disabled={repairMutation.isPending}
+                  onClick={handleRepairCurrentPage}
+                  title={t("ocr.retryFailedPages")}
+                >
+                  {repairMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+            )}
           </div>
           <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">
             <div className="p-4">
@@ -213,19 +259,43 @@ export default function OcrPreviewModal({ job, archiveId, open, onClose }: Props
               <FileText className="h-4 w-4 text-muted-foreground" />
               {t("ocr.preview.extractedMarkdown")}
             </span>
-            {hasPageResults && pageResults.length > 1 && (
-              <div className="flex items-center gap-1">
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={goPrevPage} disabled={currentPageIndex === 0}>
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {t("ocr.preview.pageOf", { current: currentPageIndex + 1, total: pageResults.length })}
-                </span>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={goNextPage} disabled={currentPageIndex >= pageResults.length - 1}>
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
-            )}
+            <div className="flex items-center gap-2">
+              {currentPage?.markdown.startsWith("[FAILED:") && (
+                <>
+                  <Badge variant="destructive" className="flex-shrink-0">
+                    <X className="h-3 w-3" />
+                    <span className="ml-1">{t("ocr.pageFailed")}</span>
+                  </Badge>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    disabled={repairMutation.isPending}
+                    onClick={handleRepairCurrentPage}
+                    title={t("ocr.retryFailedPages")}
+                  >
+                    {repairMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
+                  </Button>
+                </>
+              )}
+              {hasPageResults && pageResults.length > 1 && (
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={goPrevPage} disabled={currentPageIndex === 0}>
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {t("ocr.preview.pageOf", { current: currentPageIndex + 1, total: pageResults.length })}
+                  </span>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={goNextPage} disabled={currentPageIndex >= pageResults.length - 1}>
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">
             <div className="p-4">

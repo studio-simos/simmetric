@@ -24,7 +24,7 @@ import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
 import { forwardToCollector } from "../routes/documents";
 import { dispatchUploadToArchive } from "./archiveImportService";
-import { createOcrJob } from "./ocrJobService";
+import { createOcrJob, cancelOcrJob } from "./ocrJobService";
 import { getSetting } from "./systemConfigService";
 import { getStorageProvider } from "./storageProvider";
 import { isDraftsPath } from "../utils/fileUtils";
@@ -562,9 +562,9 @@ export async function dispatchUploadDraft(
  * RAG states mirror `Document.status` (lowercase), KB states mirror
  * `ArchiveImportJob.status` (uppercase).
  */
-export const RAG_TERMINAL = new Set(["completed", "failed"]);
+export const RAG_TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const RAG_SUCCESS = new Set(["completed"]);
-export const KB_TERMINAL = new Set(["COMPLETED", "FAILED"]);
+export const KB_TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
 const KB_SUCCESS = new Set(["COMPLETED"]);
 
 /**
@@ -586,27 +586,41 @@ const KB_SUCCESS = new Set(["COMPLETED"]);
  *
  * `ragStatus` / `kbStatus` are derived only, NEVER stored as columns
  * (D-69-03 — no redundant status duplication, no callback races).
+ *
+ * quick 260918-p3h (D-2): the selects extend with `progress` and the return
+ * carries `ragProgress` / `kbProgress` (number | null) so the pending-list
+ * polling payload can render a live % while a leg runs.
  */
 export async function enrichDraftWithLegStatus(
   draft: UploadDraft,
-): Promise<UploadDraft & { ragStatus: string | null; kbStatus: string | null; parseStatus: string }> {
+): Promise<
+  UploadDraft & {
+    ragStatus: string | null;
+    kbStatus: string | null;
+    ragProgress: number | null;
+    kbProgress: number | null;
+    parseStatus: string;
+  }
+> {
   const [ragDocument, kbJob] = await Promise.all([
     draft.ragJobId
       ? prisma.document.findUnique({
           where: { id: draft.ragJobId },
-          select: { id: true, status: true },
+          select: { id: true, status: true, progress: true },
         })
       : Promise.resolve(null),
     draft.kbJobId
       ? prisma.archiveImportJob.findUnique({
           where: { id: draft.kbJobId },
-          select: { id: true, status: true },
+          select: { id: true, status: true, progress: true },
         })
       : Promise.resolve(null),
   ]);
 
   const ragStatus = ragDocument?.status ?? null;
   const kbStatus = kbJob?.status ?? null;
+  const ragProgress = ragDocument?.progress ?? null;
+  const kbProgress = kbJob?.progress ?? null;
 
   const ragDone = !draft.ragEnabled || (ragStatus !== null && RAG_TERMINAL.has(ragStatus));
   const kbDone = !draft.kbEnabled || (kbStatus !== null && KB_TERMINAL.has(kbStatus));
@@ -636,5 +650,9 @@ export async function enrichDraftWithLegStatus(
     parseStatus = "done";
   }
 
-  return { ...draft, ragStatus, kbStatus, parseStatus };
+  return { ...draft, ragStatus, kbStatus, ragProgress, kbProgress, parseStatus };
 }
+// quick 260918-p3h: re-export cancelOcrJob so the uploads cancel route can
+// import it from one place (service-layer facade — route files already
+// import from this module).
+export { cancelOcrJob };

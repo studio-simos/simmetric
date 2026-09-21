@@ -90,9 +90,9 @@ describe("IngestStatusCallbackSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("Test 6: rejects status `processing` — enum only completed/failed", () => {
+  it("Test 6: accepts status `processing` — additive progress-notify arm (quick 260918-p3h widened the enum)", () => {
     const result = IngestStatusCallbackSchema.safeParse({ status: "processing" });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it("accepts failed status with error + ocrSkipped fields", () => {

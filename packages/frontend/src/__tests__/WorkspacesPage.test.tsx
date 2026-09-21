@@ -69,6 +69,19 @@ jest.mock("../queries/useWorkspaces", () => ({
     mutateAsync: mockBulkDeleteMutateAsync,
     isPending: false,
   }),
+  useWorkspaceAccess: jest.fn().mockReturnValue({ data: [], isLoading: false }),
+  useGrantWorkspaceAccess: jest
+    .fn()
+    .mockReturnValue({ mutateAsync: jest.fn().mockResolvedValue(undefined), isPending: false }),
+  useRevokeWorkspaceAccess: jest
+    .fn()
+    .mockReturnValue({ mutateAsync: jest.fn().mockResolvedValue(undefined), isPending: false }),
+}));
+
+// Mock access-grants dialog (covered by its own interaction flows)
+jest.mock("../components/WorkspaceAccessDialog", () => ({
+  __esModule: true,
+  default: () => <div data-testid="workspace-access-dialog" />,
 }));
 
 // Mock RecentlyDeleted

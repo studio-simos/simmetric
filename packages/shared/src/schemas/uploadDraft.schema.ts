@@ -60,6 +60,14 @@ export const assignDraftSchema = z.object({
 });
 export type AssignDraftInput = z.infer<typeof assignDraftSchema>;
 
+// quick 260918-p3h: body of POST /api/uploads/:id/cancel. `leg` omitted =
+// cancel every in-flight enabled leg (RAG and/or KB). Values mirror the
+// draftDestinationSchema leg names.
+export const cancelDraftLegSchema = z.object({
+  leg: z.enum(["rag", "kb"]).optional(),
+});
+export type CancelDraftLegInput = z.infer<typeof cancelDraftLegSchema>;
+
 // D-07 (Phase 76): rename body for PATCH /api/uploads/:id. 1-500 char — the
 // rename target is a display name (NOT an OS filename), so 500 wins over the
 // 255 cap in createUploadDraftSchema (RESEARCH Open Question #1). Empty is

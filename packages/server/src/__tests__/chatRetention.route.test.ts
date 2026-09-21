@@ -96,6 +96,11 @@ jest.mock("../middleware/auth", () => {
 jest.mock("../middleware/rbac", () => {
   const mockState = require("../middleware/auth").__mockState;
   return {
+  // Phase 189 (189-02 sweep): routes now import the graded middlewares —
+  // the mock must export them (shadow no-op) or express throws at load.
+  requireWorkspaceWriteAccess: () => (_req: any, _res: any, next: any) => next(),
+  requireWorkspaceRead: () => (_req: any, _res: any, next: any) => next(),
+
     requirePermission: (_perm: string) => (req: Request, res: Response, next: NextFunction) => {
       if (mockState.authMode === "no-permission") {
         res.status(403).json({ error: "Insufficient permissions" });

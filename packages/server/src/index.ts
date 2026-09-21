@@ -31,6 +31,12 @@ import { loadSaaSPlugin, shutdownSaaSPlugin } from "./services/saasLoader";
 // null-safe. Only the start/stop functions are imported here; getBoss /
 // schedule / createQueue are Phase 165 concerns.
 import { startJobQueue, stopJobQueue } from "./services/jobQueue";
+// pg-boss queue-table self-heal guard (debug session pgboss-queue-pkey-duplicate):
+// detects + repairs index/heap-diverged duplicate rows in pgboss.queue BEFORE the
+// schedulers register. No-op (single aggregate query) on a healthy table. Has its
+// own internal try/catch and never throws — same degradation shape as
+// startJobQueue.
+import { healPgbossQueueDuplicates } from "./services/pgbossQueueHealthService";
 // Phase 165 (Q-02, Plan 04): the inline fidelitySampling scheduler registers
 // via the pg-boss API directly (it stays inline in index.ts — Pitfall 7).
 // getBoss/createQueue/schedule are the same delegators the 7 extracted
@@ -39,6 +45,9 @@ import { getBoss, createQueue, schedule } from "./services/jobQueue";
 
 // Routes
 import authRoutes from "./routes/auth";
+// Phase 193 (D-13): the community composite login route — mounted after the
+// plugin loads (see the boot-sequence mount for the defer-then-serve contract).
+import { createAuthLdapCompositeRouter } from "./routes/authLdapComposite";
 import userRoutes from "./routes/users";
 import roleRoutes from "./routes/roles";
 import projectRoutes from "./routes/projects";
@@ -55,6 +64,9 @@ import chatExportRoutes from "./routes/chatExport";
 import chatImportRoutes from "./routes/chatImport";
 import chatTokenRoutes from "./routes/chatTokens";
 import skillsRoutes from "./routes/skills";
+// Phase 190 (SKIL-01, Pitfall 2): the CRUD + test-preview surface rides its
+// own /api/skills mount; GET /api/agent/skills stays byte-identical.
+import { skillsCrudRouter } from "./routes/skills";
 import mcpRoutes from "./routes/mcp";
 import mcpPinRoutes from "./routes/mcpPins";
 import marketplaceRoutes from "./routes/marketplace";
@@ -134,6 +146,12 @@ import { initVectorCleanupScheduler } from "./services/vectorCleanupJob";
 // (was inline in index.ts:260-288). Phase 165 (Q-02/Q-03): migrated to pg-boss
 // cron — pg-boss stopJobQueue drains the worker (no per-scheduler shutdown).
 import { initWikiConsistencyScheduler } from "./services/archiveConsistencyService";
+
+// Phase 192 (DLP-01/D-12, D-01/D-12): document PII scan + legacy backfill —
+// the first one-shot send/work pg-boss consumers in the repo (plan 02).
+// Registered after startJobQueue; the init functions null-guard getBoss()
+// themselves (pg-boss offline = scan offline, logged at warn).
+import { initDlpDocumentScanScheduler, initDlpBackfillScheduler } from "./services/dlpDocumentScanJob";
 
 // License
 import { initLicense } from "./services/licenseService";
@@ -656,6 +674,8 @@ export function createApp(): Express {
   app.use("/api/workspaces", chatCrudRoutes);
   app.use("/api/workspaces", chatAgentConfigRoutes);
   app.use("/api/agent", skillsRoutes);
+  // Phase 190 (SKIL-01 D-21): the custom-skill CRUD + test-preview mount.
+  app.use("/api/skills", skillsCrudRouter);
   app.use("/api/mcp-connections", mcpRoutes);
   app.use("/api/mcp-marketplace", marketplaceRoutes);
   // T-DRD-01: the e2eHelpers router is an unauthenticated process-spawn
@@ -889,6 +909,15 @@ if (isMainModule) {
     // invariant enforced by src/__tests__/bootOrder.test.ts.
     await startJobQueue();
 
+    // pgboss-queue-pkey-duplicate (2026-09-16): self-heal the queue table BEFORE
+    // any scheduler registers. On a healthy table this is a single aggregate
+    // query (no-op). When the queue_pkey index/heap divergence produced
+    // duplicate queue rows (its failure signature: constant `duplicate key value
+    // violates unique constraint "queue_pkey"` warns), it dedups, re-creates the
+    // affected queues and REINDEXes the unique index. Never throws (see service
+    // contract) — safe to call unguarded here.
+    await healPgbossQueueDuplicates();
+
     // Phase 140 (EPA-01, D-08): load the enterprise plugin AFTER
     // prisma.$connect() + initLicense() and BEFORE the NODE_ENV==="production"
     // scheduler block. Community builds (no @simmetric-chat/enterprise
@@ -904,6 +933,19 @@ if (isMainModule) {
     // T-186-08). Community builds (no @simmetric-chat/saas installed) log an
     // info-level no-op and continue (SC-4).
     await loadSaaSPlugin(app);
+
+    // Phase 193 (LDAP-01, D-13): the community composite login route — the
+    // SOLE local-auth fallback arm. Mounted AFTER both plugin loads and
+    // BEFORE mountCatchAlls so it receives (a) requests the enterprise LDAP
+    // login route deferred via next() on fallback-eligible arms (stage
+    // config/unreachable/bindFailure with ldapFallbackToLocal true) and
+    // (b) unmatched POST /api/auth/ldap/login requests in community builds
+    // (no enterprise plugin installed; serves local auth when the SsoConfig
+    // row reports provider "ldap", 404 otherwise). createApp() registers
+    // community authRoutes BEFORE the plugins, so exactly one handler owns
+    // the response per request — no double-handling is possible. Catch-alls
+    // stay last per bootOrder.test.ts.
+    app.use("/api/auth", createAuthLdapCompositeRouter());
 
     // Mount the 404 + error catch-all handlers AFTER loadEnterprisePlugin so
     // enterprise routes are registered before the catch-all and are reachable.
@@ -952,6 +994,13 @@ if (isMainModule) {
       // natively (Pattern 2 — no msUntilNext3AM initial-delay timer).
       await initUploadDraftReaperScheduler(); // Phase 69 D-69-07: daily 03:00 reaper for expired UploadDrafts
       await initChatMessageReaperScheduler(); // Phase 84: daily 03:00 chat-message retention reaper (D-10/D-12)
+      // Phase 192 (DLP-01/D-12): document PII scan + legacy backfill consumers
+      // (the first one-shot send/work queues). Registered AFTER the cron
+      // consumers, mirroring the existing registration order. Each init
+      // null-guards getBoss() internally (pg-boss offline = scan offline,
+      // logged at warn — never blocks boot).
+      await initDlpDocumentScanScheduler();
+      await initDlpBackfillScheduler();
       // D-18 (Pitfall 1): wire initializeMCPConnections so enabled MCP servers
       // connect at boot. Fire-and-forget so a failing external MCP server does
       // not block server startup.

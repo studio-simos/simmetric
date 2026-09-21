@@ -109,7 +109,8 @@
     "dateView": {
       "dndDisabled": "Drag & Drop in der Datumsansicht deaktiviert"
     },
-    "uploads": "Uploads"
+    "uploads": "Uploads",
+    "skills": "Skills"
   },
   "login": {
     "signIn": "Anmelden",
@@ -139,7 +140,10 @@
       "signOut": "Abmelden"
     },
     "ssoOr": "or sign in with SSO",
-    "ssoSignIn": "Login with SSO"
+    "ssoSignIn": "Login with SSO",
+    "ldap": {
+      "hint": "Melden Sie sich mit Ihren Unternehmensverzeichnis-Zugangsdaten an."
+    }
   },
   "chat": {
     "placeholder": "Geben Sie eine Nachricht ein...",
@@ -184,6 +188,15 @@
       "error": "Das verknüpfte Archiv konnte nicht aktualisiert werden. Bitte versuchen Sie es erneut.",
       "badge": "Archiv"
     },
+    "attach": {
+      "menuItem": "Wissen",
+      "back": "Zurück",
+      "pickerTitle": "Archivwissen anhängen",
+      "empty": "Keine Archive zum Anhängen verfügbar.",
+      "maxReached": "Du kannst bis zu {{max}} Archive anhängen.",
+      "remove": "Angehängtes Archiv entfernen",
+      "pageCount": "{{count}} Seiten"
+    },
     "selectWorkspace": "Wählen Sie einen Arbeitsbereich aus, um mit dem Chatten zu beginnen",
     "attachedToNext": "an die nächste Nachricht angehängt",
     "removeAttachment": "Anhang entfernen",
@@ -221,6 +234,14 @@
     },
     "modelCommand": {
       "notFound": "Modell nicht gefunden"
+    },
+    "skillsPalette": {
+      "empty": "Keine passenden Skills",
+      "hint": "↑↓ zum Navigieren, Enter zum Einfügen, Esc zum Schließen",
+      "manageLink": "Skills verwalten",
+      "paramError": "Parameter für /{{slug}} konnten nicht gelesen werden. Versuche /{{slug}} schlüssel=wert.",
+      "customGroup": "Skills",
+      "builtinGroup": "Built-in (LLM-Tools — keine Slash-Befehle)"
     },
     "capabilities": {
       "localOnly": "Nur lokal",
@@ -283,7 +304,7 @@
     "sidebarTitle": "Chat-Liste",
     "sidebarDescription": "Liste Ihrer Chats in diesem Arbeitsbereich",
     "renameChatTitle": "Chat umbenennen",
-    "compareModelsTitle": "Modelle vergleichen",
+    "compareModelsTitle": "Vergleichen",
     "noSourcesAvailable": "Keine Quellen verfügbar",
     "sendLabel": "Nachricht senden",
     "emptyState": {
@@ -325,7 +346,7 @@
     "input": {
       "label": "Nachrichtenfeld",
       "hint": "Enter zum Senden, Shift+Enter für neue Zeile",
-      "attach": "Dokument anhängen",
+      "attach": "Anhängen",
       "moreActions": "Weitere Aktionen",
       "model": "Modell auswählen",
       "placeholder": {
@@ -350,9 +371,10 @@
     "attachedDocument": "Angehängtes Dokument",
     "aiDisclaimer": "Antworten werden durch künstliche Intelligenz generiert",
     "dlp": {
-      "showTexts": "DLP-Texte anzeigen",
-      "hideTexts": "DLP-Texte ausblenden"
-    }
+      "showTexts": "DLP anzeigen",
+      "hideTexts": "DLP ausblenden"
+    },
+    "modelUnavailable": "Modell \"{{model}}\" ist nicht verfügbar. Bitte wählen Sie ein anderes Modell."
   },
   "eventLog": {
     "title": "Ereignisprotokoll",
@@ -518,6 +540,19 @@
       "success": "{{count}} Seiten gelöscht.",
       "processing": "Assegnazione in corso...",
       "partialError": "Gelöscht {{ok}}, fehlgeschlagen {{failed}}: {{message}}"
+    },
+    "schemaPrompt": {
+      "save": "Konfiguration speichern",
+      "saving": "Konfiguration wird gespeichert…",
+      "label": "Redaktionelle Richtlinien (Schema Prompt)",
+      "helper": "Natürlichsprachige Anweisungen, die der LLM befolgen soll, um dieses Wiki zu pflegen — wie eine CLAUDE.md-Datei für ein Repository.",
+      "placeholder": "Kein Schema-Prompt gesetzt — das LLM folgt nur den strukturierten Feldern. Verwende die Vorlage, um von einem vorkompilierten Beispiel zu starten.",
+      "useTemplate": "Vorlage verwenden",
+      "tabEdit": "Bearbeiten",
+      "tabPreview": "Vorschau",
+      "charCount": "{{count}} / 10000",
+      "overLimitError": "Das Schema-Prompt ist auf 10.000 Zeichen begrenzt. Kürze es unter das Limit, um zu speichern.",
+      "advisoryNote": "Richtlinien sind unverbindlich — harte Regeln haben immer Vorrang."
     }
   },
   "widgets": {
@@ -528,7 +563,31 @@
       "localization": "Lokalisierung",
       "questions": "Fragen",
       "credits": "Credits",
-      "leads": "Leads"
+      "leads": "Leads",
+      "list": "Widgets"
+    },
+    "archive": {
+      "tabLabel": "Workspace-Archiv",
+      "statTotalWidgets": "Widgets gesamt",
+      "statTotalWorkspaces": "Verknüpfte Workspaces",
+      "statTotalProjects": "Projekte",
+      "statOrphans": "Verwaiste Widgets",
+      "filterProject": "Nach Projekt filtern",
+      "filterAllProjects": "Alle Projekte",
+      "filterWidget": "Nach Widget filtern",
+      "filterAllWidgets": "Alle Widgets",
+      "viewGrouped": "Gruppiert",
+      "viewFlat": "Flach",
+      "activeBadge": "Aktiv",
+      "inactiveBadge": "Inaktiv",
+      "emptyState": "Keine Widget-Workspace-Verknüpfungen entsprechen den aktuellen Filtern.",
+      "exportCsv": "CSV exportieren",
+      "exportError": "CSV-Export fehlgeschlagen",
+      "colProject": "Projekt",
+      "colWidget": "Widget",
+      "colStatus": "Status",
+      "colWorkspace": "Workspace",
+      "attribution": "Simmetric Chat von"
     },
     "localization": {
       "fallbackLocaleLabel": "Standardsprache",
@@ -1121,7 +1180,11 @@
       "limitsSection": "Limits",
       "sessionLimitPerDay": "Nachrichten pro Tag",
       "sessionLimitPerDayPlaceholder": "z. B. 50",
-      "sessionLimitPerDayHint": "Maximale Anzahl an Nachrichten, die jeder Besucher pro Tag senden kann. Leer lassen für den Standardwert (5 pro Tag).",
+      "sessionLimitPerDayHint": "Maximale Anzahl an Nachrichten, die jeder Besucher pro Tag senden kann. Leer lassen für den Standardwert (5 pro Tag). „Kein Limit“ ankreuzen, um das Limit zu entfernen.",
+      "rateLimitPerMinute": "Anfragen pro Minute",
+      "rateLimitPerMinutePlaceholder": "z. B. 60",
+      "rateLimitPerMinuteHint": "Maximale Chat-Anfragen pro Widget pro Minute. Leer lassen für den globalen Standardwert (30 pro Minute). „Kein Limit“ ankreuzen, um das Limit zu entfernen.",
+      "unlimited": "Kein Limit",
       "exitIntentCooldownPlaceholder": "z.B. 30",
       "leadCaptureSection": "Lead-Erfassung",
       "leadCaptureToggle": "Aktivieren Sie die Lead-Erfassung",
@@ -1142,7 +1205,32 @@
       "columnDate": "Datum",
       "downloadCsv": "CSV herunterladen",
       "viewTranscript": "Transkript ansehen",
-      "hideTranscript": "Transkript ausblenden"
+      "hideTranscript": "Transkript ausblenden",
+      "chatBehaviorSection": "Chat-Verhalten",
+      "systemPromptLabel": "System-Prompt",
+      "systemPromptHint": "Jedes Widget hat seinen eigenen Prompt. Leer lassen, um den integrierten Fallback zu verwenden, der jede Antwort an die Wissensbasis dieses Widgets koppelt. Ein eigener Prompt ersetzt ihn.",
+      "systemPromptPlaceholder": "Eigene Grounding-Anweisungen für den Assistenten dieses Widgets…",
+      "leadTimingLabel": "Nach E-Mail fragen",
+      "leadTimingStart": "Beim Öffnen des Chats",
+      "leadTimingEnd": "Beim Erreichen des Tageslimits",
+      "leadTimingTimeout": "Nach einer Verzögerung",
+      "leadTimeoutSecondsLabel": "Verzögerung vor der Anfrage (Sekunden)",
+      "leadTimeoutSecondsHint": "Wie lange nach der ersten Besucher-Nachricht gewartet wird, bis die E-Mail-Karte erscheint (5–86400).",
+      "contactOptionsSection": "Kontaktoptionen beim Tageslimit",
+      "contactFormUrlLabel": "URL des Kontaktformulars",
+      "contactFormUrlPlaceholder": "https://beispiel.de/kontakt",
+      "contactBookingUrlLabel": "Buchungs-URL",
+      "contactBookingUrlPlaceholder": "https://cal.beispiel.de/owner",
+      "contactEmailLabel": "E-Mail-Adresse",
+      "contactEmailPlaceholder": "owner@beispiel.de",
+      "contactCustomUrlLabel": "URL des eigenen Links",
+      "contactCustomUrlPlaceholder": "https://beispiel.de/verkauf",
+      "contactCustomLabelLabel": "Bezeichnung des eigenen Links",
+      "contactCustomLabelPlaceholder": "Vertrieb kontaktieren",
+      "privacyUrlLabel": "Datenschutz-URL",
+      "privacyUrlPlaceholder": "https://example.com/privacy",
+      "privacyUrlHint": "Wird Besuchern als Link neben dem Zustimmungskästchen für die E-Mail-Freigabe angezeigt. Öffnet sich in einem neuen Tab. Leer lassen, um das Kästchen ohne Link anzuzeigen.",
+      "leadsPrivacyConsent": "Datenschutzeinwilligung"
     },
     "ocr": {
       "title": "OCR-Einstellungen",
@@ -1409,7 +1497,8 @@
       "agentWatchdog": "Agent-Watchdog",
       "reranker": "RAG-Reranker",
       "vapid": "Web Push (VAPID)",
-      "dlpPatterns": "DLP-Muster"
+      "dlpPatterns": "DLP-Muster",
+      "workspaceAccess": "Workspace-Zugriff"
     },
     "appearance": {
       "themeTitle": "Design",
@@ -1576,7 +1665,100 @@
       "blocked": "Benachrichtigungen wurden vom Browser blockiert. Ändern Sie die Website-Einstellungen, um sie wieder zu aktivieren.",
       "permissionHint": "Beim Klick auf \"Benachrichtigungen aktivieren\" fragt der Browser nach der Berechtigung."
     },
-    "back": "Zurück"
+    "back": "Zurück",
+    "workspaceAccess": {
+      "title": "Workspace-Zugriff",
+      "grantTitle": "Zugriff auf {{name}}",
+      "userSearch": "Benutzer suchen...",
+      "role": "Rolle",
+      "roleOwner": "Eigentümer",
+      "roleEditor": "Bearbeiter",
+      "roleViewer": "Betrachter",
+      "grant": "Erteilen",
+      "grantBulk": "Massenerteilung",
+      "revoke": "Widerrufen",
+      "grantedList": "Aktuelle Zugriffsberechtigungen",
+      "grantedAt": "Erteilt am",
+      "grantedBy": "Erteilt von",
+      "noAccess": "Keine Zugriffsberechtigungen für diesen Workspace.",
+      "bulkPartial": "Erteilung abgeschlossen mit Fehlern für: {{failed}}",
+      "success": "Zugriff aktualisiert",
+      "revokeSuccess": "Zugriff widerrufen",
+      "error": "Aktualisierung des Zugriffs fehlgeschlagen",
+      "loadError": "Workspace-Zugriff konnte nicht geladen werden. Prüfe die Verbindung und versuche es erneut.",
+      "retry": "Erneut versuchen"
+    },
+    "sso": {
+      "ldap": {
+        "testPending": "Wird getestet…",
+        "testFailed": "Verbindungstest fehlgeschlagen. Prüfen Sie die Server-URL, die Netzwerkerreichbarkeit vom Server und das Zertifikatsvertrauen und versuchen Sie es erneut.",
+        "saveFailed": "Die LDAP-Konfiguration konnte nicht gespeichert werden. Überprüfen Sie die hervorgehobenen Felder und versuchen Sie es erneut.",
+        "mapEmptyTitle": "Keine Gruppenzuordnungen",
+        "mapEmptyBody": "LDAP-Benutzer erhalten bei der Anmeldung die Standardrolle. Fügen Sie eine Zuordnung hinzu, um Plattformrollen nach Gruppenmitgliedschaft zu vergeben.",
+        "mapAdminWarning": "Diese Gruppe ist einer Administratorrolle zugeordnet. Jedes Mitglied erhält beim nächsten LDAP-Login Administratorzugriff.",
+        "removeMapping": "Zuordnung entfernen",
+        "exclusiveHint": "Das Aktivieren von LDAP deaktiviert den aktuell konfigurierten SAML/OIDC-Anbieter — ein aktiver Anbieter pro Installation.",
+        "diag": {
+          "reachable": "Server erreichbar",
+          "bindOk": "Service-Bind erfolgreich",
+          "userFound": "Testbenutzer gefunden",
+          "groupsFound": "Gruppensuche konfiguriert"
+        },
+        "url": "LDAP-Server-URL",
+        "bindDn": "Bind DN (Dienstkonto)",
+        "bindPassword": "Bind-Passwort",
+        "bindPasswordViaEnv": "über Umgebungsvariable konfiguriert",
+        "bindPasswordReadOnly": "LDAP_BIND_PASSWORD ist über eine Umgebungsvariable gesetzt und kann nicht über die Benutzeroberfläche geändert werden. Ändern Sie dazu die .env-Datei des Servers.",
+        "searchBase": "Suchbasis",
+        "searchFilter": "Benutzersuchfilter",
+        "groupSearchBase": "Gruppen-Suchbasis",
+        "groupSearchFilter": "Gruppen-Suchfilter",
+        "useTls": "StartTLS verwenden",
+        "tlsHint": "StartTLS aktualisiert eine klartext-ldap://-Verbindung auf TLS. Deaktivieren Sie es nur für ldaps://-URLs — diese sind bereits verschlüsselt.",
+        "acceptCert": "Eigenes CA-Zertifikat (PEM, optional)",
+        "fallbackToLocal": "Auf lokale Anmeldung zurückfallen, wenn LDAP nicht erreichbar ist",
+        "fallbackHint": "Wenn aktiviert, kann sich der Benutzer bei unerreichbarem LDAP mit seinem lokalen Konto anmelden, statt einen Fehler zu sehen.",
+        "mapTitle": "Gruppe → Rollen-Zuordnung",
+        "mapDescription": "Mitglieder einer zugeordneten LDAP-Gruppe erhalten bei ihrer nächsten Anmeldung die Plattformrolle. Zeilen werden beim Speichern angewendet.",
+        "addMapping": "Zuordnung hinzufügen",
+        "groupDn": "Gruppen-DN",
+        "duplicateMapping": "Dieses Gruppen-Rollen-Paar ist bereits vorgemerkt."
+      }
+    },
+    "dlpDocs": {
+      "title": "DLP-Dokumentscan",
+      "description": "Führen Sie die Qualitätsbewertung der Erkennung über den italienischen PII-Beispielkorpus aus und scannen Sie anschließend Bestandsdokumente neu, damit keine ungeschwärzten Vektoren durchsuchbar bleiben.",
+      "eval": {
+        "run": "Bewertung ausführen",
+        "running": "Bewertung läuft…",
+        "empty": {
+          "heading": "Noch keine Bewertung",
+          "body": "Führen Sie die Bewertung über den italienischen PII-Beispielkorpus aus, um die Erkennungsqualität zu prüfen, bevor Sie den Dokumentscan aktivieren."
+        },
+        "passed": "Schwelle bestanden — {{fpRate}} Falschpositive bei {{total}} Prüfungen. Kann aktiviert werden.",
+        "failed": "Schwelle nicht bestanden — die Falsch-positiv-Quote {{fpRate}} überschreitet den Schwellenwert. Überprüfen Sie die Muster vor der Aktivierung.",
+        "lastRun": "Zuletzt ausgeführt {{date}}",
+        "documentedOnly": "dokumentiert, nicht sperrend",
+        "error": "Bewertung fehlgeschlagen — beheben Sie das Problem und führen Sie sie erneut aus.",
+        "retry": "Erneut versuchen",
+        "perClassTitle": "Ergebnisse nach Klasse",
+        "detected": "Erkannt: {{count}}",
+        "expected": "Erwartet: {{count}}",
+        "falsePositives": "Falsch positiv: {{count}}"
+      },
+      "backfill": {
+        "run": "Bestandsdokumente scannen",
+        "running": "Bestandsdokumente werden gescannt…",
+        "confirmTitle": "Bestandsdokumente scannen?",
+        "confirmBody": "{{count}} Dokumente werden erneut gescannt und ihr durchsuchbarer Text durch geschwärzten Text ersetzt. Originale bleiben verschlüsselt. Der Vorgang läuft im Hintergrund und kann gefahrlos wiederholt werden.",
+        "confirmRun": "{{count}} Dokumente scannen",
+        "cancel": "Nicht jetzt",
+        "result": "{{scanned}} gescannt · {{masked}} geschwärzt · {{failed}} fehlgeschlagen",
+        "empty": "Keine Bestandsdokumente benötigen einen erneuten Scan.",
+        "error": "Der erneute Scan wurde mit {{failed}} Fehlern beendet. Führen Sie ihn erneut aus, um nur die ausstehenden Dokumente zu wiederholen.",
+        "runError": "Der erneute Scan konnte nicht gestartet werden."
+      }
+    }
   },
   "upgrade": {
     "title": "Enterprise-Funktion",
@@ -1699,7 +1881,35 @@
       "deleteError": "Die ausgewählten Arbeitsbereiche konnten nicht gelöscht werden.",
       "selectAll": "Alle auswählen"
     },
-    "selectRow": "Workspace {{name}} auswählen"
+    "selectRow": "Workspace {{name}} auswählen",
+    "access": {
+      "button": "Zugriff",
+      "title": "Zugriff auf {{name}}",
+      "description": "Nutzer mit Zugriff können diesen Arbeitsbereich öffnen und Dokumente hochladen, auch wenn sie nicht der Projektbesitzer sind.",
+      "selectUser": "Benutzer auswählen...",
+      "grantButton": "Erteilen",
+      "granted": "Zugriff erteilt",
+      "grantError": "Zugriff konnte nicht erteilt werden",
+      "revoked": "Zugriff entzogen",
+      "revokeError": "Zugriff konnte nicht entzogen werden",
+      "revoke": "Zugriff entziehen",
+      "empty": "Keine zusätzlichen Zugriffsberechtigungen für diesen Arbeitsbereich.",
+      "listLabel": "Aktuelle Zugriffsberechtigungen",
+      "roleOwner": "Eigentümer",
+      "roleEditor": "Bearbeiter",
+      "roleViewer": "Betrachter",
+      "role": "Rolle",
+      "usersLoadError": "Benutzer konnten nicht geladen werden.",
+      "retryUsers": "Benutzer neu laden"
+    },
+    "dlp": {
+      "scanToggle": "DLP-Dokumentscan",
+      "scanDescription": "Scannt Dokumente nach dem Hochladen auf personenbezogene Daten und schwärzt sie, bevor KI-Modelle sie lesen.",
+      "gateBlocked": "Führen Sie die DLP-Bewertung unter Einstellungen → Erweitert aus, bevor Sie aktivieren.",
+      "enabled": "DLP-Dokumentscan aktiviert",
+      "disabled": "DLP-Dokumentscan deaktiviert",
+      "saveError": "Die DLP-Scan-Einstellung konnte nicht gespeichert werden."
+    }
   },
   "workspaceCreate": {
     "title": "Arbeitsbereich erstellen",
@@ -1789,7 +1999,8 @@
     "errorDetails": "Fehlerdetails",
     "reloadPage": "Seite neu laden",
     "unexpectedError": "Etwas ist schiefgelaufen",
-    "back": "Zurück"
+    "back": "Zurück",
+    "uninstall": "Deinstallieren"
   },
   "export": {
     "buttonLabel": "Export",
@@ -1945,6 +2156,21 @@
       "dialogTitle": "{{count}} Dokumente in Archiv kopieren",
       "success": "Kopiere {{count}} Dokumente in {{archiveName}}.",
       "forbidden": "Zugriff auf eines oder mehrere der ausgewählten Dokumente verweigert."
+    },
+    "cancel": "Abbrechen",
+    "cancelling": "Abbrechen…",
+    "cancelFailed": "Abbrechen fehlgeschlagen: {{error}}",
+    "cancelled": "Ingestion abgebrochen",
+    "dlp": {
+      "scanPending": "DLP-Scan in Warteschlange",
+      "scanning": "DLP-Scan läuft…",
+      "clean": "DLP gescannt",
+      "entities": "DLP · {{count}}",
+      "failed": "DLP-Scan fehlgeschlagen",
+      "maskedNotice": "Personenbezogene Daten in diesem Dokument sind geschwärzt — Platzhalter wie [PERSON_1] ersetzen sensible Werte.",
+      "show": "Ungeschwärzte Daten anzeigen",
+      "hide": "Sensible Daten ausblenden",
+      "unmaskError": "Ungeschwärzter Text konnte nicht geladen werden."
     }
   },
   "workspaces": {
@@ -1973,7 +2199,71 @@
     "document_temp_process": {
       "displayName": "Temporäre Dokumentenverarbeitung",
       "description": "Verarbeiten Sie eine während des Chats hochgeladene Datei. Die Datei wird vorübergehend eingebettet und analysiert. Anschließend können Sie entscheiden, ob Sie sie dauerhaft im Arbeitsbereich speichern möchten."
-    }
+    },
+    "page": {
+      "heading": "Skills",
+      "subtitle": "Erstelle wiederverwendbare Prompt-Vorlagen und rufe sie im Chat mit /slug auf.",
+      "create": "Skill erstellen",
+      "limit": "{{used}} von {{limit}} benutzerdefinierten Skills verwendet",
+      "limitUnlimited": "Unbegrenzte benutzerdefinierte Skills",
+      "limitReached": "Du hast das Limit deines Plans von {{limit}} benutzerdefinierten Skills erreicht. Upgrade auf Enterprise für unbegrenzte Skills."
+    },
+    "form": {
+      "save": "Skill speichern",
+      "saving": "Speichern...",
+      "slugInvalid": "Verwende nur Kleinbuchstaben, Zahlen und Bindestriche (z.B. translate-text).",
+      "slugReserved": "Dieser Slug ist von einem eingebauten Befehl reserviert. Wähle einen anderen.",
+      "slugDuplicate": "Eine Skill mit diesem Slug existiert bereits.",
+      "jsonError": "Ungültiges JSON — korrigiere das Schema zum Speichern.",
+      "test": "Skill testen",
+      "testPreview": "Vorschau des kompilierten Prompts",
+      "testNeedsSave": "Speichere die Skill, um Tests zu aktivieren.",
+      "modePrompt": "Prompt",
+      "modeWebhook": "Webhook",
+      "modeWebhookSoon": "Webhook-Skills kommen bald",
+      "scopePersonal": "Persönlich",
+      "scopeWorkspace": "Workspace",
+      "scopeGlobal": "Global (Admin)",
+      "scopeGlobalAdminOnly": "Nur Admins können globale Skills erstellen",
+      "workspace": "Workspace",
+      "selectWorkspace": "Workspace auswählen...",
+      "name": "Name",
+      "template": "Vorlage",
+      "defaultParams": "Standardparameter",
+      "paramKey": "Schlüssel",
+      "paramValue": "Wert",
+      "addParam": "Parameter hinzufügen",
+      "removeParam": "Entfernen",
+      "inputSchema": "Eingabeschema",
+      "inputSchemaAuto": "Automatisch generieren",
+      "inputSchemaManual": "Manuelles JSON",
+      "enabled": "Aktiviert",
+      "createTitle": "Skill erstellen",
+      "editTitle": "Skill bearbeiten",
+      "mode": "Modus",
+      "scope": "Bereich"
+    },
+    "error": {
+      "limit402": "Du hast das Limit benutzerdefinierter Skills deines Plans erreicht.",
+      "save": "Skill konnte nicht gespeichert werden",
+      "delete": "Skill konnte nicht gelöscht werden"
+    },
+    "success": {
+      "created": "Skill erstellt",
+      "updated": "Skill aktualisiert",
+      "deleted": "Skill gelöscht"
+    },
+    "empty": {
+      "heading": "Noch keine benutzerdefinierten Skills",
+      "body": "Erstelle eine Skill auf Basis einer Prompt-Vorlage und rufe sie im Chat mit /slug auf."
+    },
+    "delete": {
+      "title": "Skill /{{slug}} löschen?",
+      "body": "Nachrichten, die sie aufrufen, werden im Chat nicht mehr sofort aufgelöst. Dies kann nicht rückgängig gemacht werden."
+    },
+    "builtinSection": "Eingebaute Skills",
+    "builtinBadge": "Eingebaut",
+    "customSection": "Benutzerdefinierte Skills"
   },
   "roles": {
     "admin": {
@@ -2048,7 +2338,10 @@
       "installFailed": "Installation von {{name}} fehlgeschlagen. Bitte versuchen Sie es erneut.",
       "uninstallSuccess": "{{name}} deinstalliert",
       "uninstallFailed": "{{name}} konnte nicht deinstalliert werden. Bitte versuchen Sie es erneut.",
-      "alreadyInstalled": "{{name}} ist bereits in diesem Arbeitsbereich installiert"
+      "alreadyInstalled": "{{name}} ist bereits in diesem Arbeitsbereich installiert",
+      "deleteSuccess": "{{name}} aus dem Marketplace gelöscht",
+      "deleteFailed": "Löschen von {{name}} fehlgeschlagen. Bitte versuchen Sie es erneut.",
+      "deleteInUse": "{{name}} ist noch in einem oder mehreren Arbeitsbereichen installiert — deinstallieren Sie ihn zuerst dort."
     },
     "empty": {
       "noResults": "Keine Server gefunden",
@@ -2056,6 +2349,11 @@
       "notFound": "Katalogeintrag nicht gefunden",
       "loading": "Marktplatz wird geladen...",
       "error": "Der Marktplatz konnte nicht geladen werden. Überprüfen Sie Ihre Verbindung und versuchen Sie es erneut."
+    },
+    "delete": {
+      "title": "{{name}} löschen?",
+      "body": "Dies entfernt den Server endgültig aus dem Marketplace-Katalog. Er kann nicht gelöscht werden, solange er in einem Arbeitsbereich installiert ist.",
+      "confirm": "Löschen"
     }
   },
   "mcp": {
@@ -2078,7 +2376,8 @@
       "tooltipVerifiedCommunity": "Von der Community verifizierter Server. Von der Community geprüft und als funktionsfähig bestätigt.",
       "tooltipActiveMaintenance": "Der letzte Commit erfolgte innerhalb der letzten 6 Monate.",
       "tooltipStaleMaintenance": "Der letzte Commit war vor 6–12 Monaten. Der Server wird möglicherweise nicht aktiv gewartet."
-    }
+    },
+    "uninstallConfirm": "Dies trennt die Verbindung und entfernt den MCP-Server aus diesem Arbeitsbereich. Diese Aktion kann nicht rückgängig gemacht werden."
   },
   "mcpPinner": {
     "title": "MCP-Verbindungen",
@@ -2190,6 +2489,12 @@
     "customInstructionsLabel": "Benutzerdefinierte Anweisungen",
     "customInstructionsPlaceholder": "Spezifische Anweisungen für das OCR-Modell hinzufügen...",
     "customInstructionsHint": "Diese Anweisungen werden an den System-Prompt angehängt",
+    "failedPagesBadge": "{{count}} Seite(n) OCR fehlgeschlagen",
+    "pageFailed": "OCR für Seite fehlgeschlagen",
+    "retryFailedPages": "Fehlgeschlagene Seiten wiederholen",
+    "repairing": "OCR wird für fehlgeschlagene Seiten erneut ausgeführt…",
+    "repairSuccess": "{{repaired}} Seite(n) repariert",
+    "repairStillFailed": "Seiten schlagen nach dem Wiederholen weiter fehl",
     "characterCount": "{{count}} / 500",
     "previewLabel": "Prompt-Vorschau",
     "previewEmpty": "Wählen Sie ein Modell, um die Prompt-Vorschau zu sehen",
@@ -2700,6 +3005,12 @@
       "partialError": "Massenwiederholung fehlgeschlagen: {{message}}",
       "archiveRequired": "Zuerst ein Archiv auswählen",
       "processing": "Wiederhole..."
+    },
+    "ingest": {
+      "cancel": "Abbrechen",
+      "cancelling": "Abbrechen…",
+      "cancelFailed": "Ingestion konnte nicht abgebrochen werden: {{error}}",
+      "cancelled": "Job abgebrochen"
     }
   },
   "providerPreset": {
@@ -2820,5 +3131,20 @@
       "saveError": "Muster konnte nicht gespeichert werden.",
       "deleteError": "Muster konnte nicht gelöscht werden."
     }
+  },
+  "onboarding": {
+    "welcome": "Willkommen! Erstelle deinen ersten Workspace",
+    "welcomeBody": "Dein persönlicher Workspace hält deine Chats und Dokumente getrennt. Gib ihm einen Namen, um loszulegen.",
+    "workspaceNameLabel": "Workspace-Name",
+    "workspaceNamePlaceholder": "z. B. Mein Workspace",
+    "create": "Workspace erstellen",
+    "creating": "Wird erstellt...",
+    "createSuccess": "Workspace erstellt",
+    "createError": "Erstellen des Workspaces fehlgeschlagen",
+    "duplicateName": "Ein Workspace mit diesem Namen existiert bereits in diesem Projekt",
+    "noAccessMessage": "Du hast noch keinen Zugriff auf einen Workspace.",
+    "askAdmin": "Bite einen Administrator, dir Zugriff auf einen Workspace zu geben.",
+    "loadError": "Deine Workspaces konnten nicht geladen werden. Prüfe die Verbindung und versuche es erneut.",
+    "retry": "Erneut versuchen"
   }
 }

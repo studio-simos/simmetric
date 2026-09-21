@@ -39,6 +39,12 @@ import {
   grantWorkspaceAccessSchema,
   grantProjectAccessSchema,
 } from "../schemas/role.schema";
+import {
+  grantWorkspaceAccessRouteSchema,
+  bulkGrantWorkspaceAccessSchema,
+  workspaceAccessListEntrySchema,
+} from "../schemas/workspaceAccess.schema";
+import { createPersonalWorkspaceSchema } from "../schemas/personalWorkspace.schema";
 import { createProjectSchema } from "../schemas/project.schema";
 import { licensePayloadSchema } from "../schemas/license.schema";
 import {
@@ -594,6 +600,134 @@ describe("grantWorkspaceAccessSchema", () => {
     const result = grantWorkspaceAccessSchema.safeParse({
       userId: "550e8400-e29b-41d4-a716-446655440000",
       workspaceId: "not-a-uuid",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// Phase 189 (WSIS-03, D-18): route-specific grant schema WITHOUT workspaceId.
+describe("grantWorkspaceAccessRouteSchema", () => {
+  const UUID = "550e8400-e29b-41d4-a716-446655440000";
+
+  it("accepts {userId, role} without workspaceId (route takes it from the URL)", () => {
+    const result = grantWorkspaceAccessRouteSchema.safeParse({
+      userId: UUID,
+      role: "editor",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts userId alone (role defaults to viewer)", () => {
+    const result = grantWorkspaceAccessRouteSchema.safeParse({ userId: UUID });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.role).toBe("viewer");
+    }
+  });
+
+  it("unknown keys (e.g. stray workspaceId) are stripped, not an error", () => {
+    const result = grantWorkspaceAccessRouteSchema.safeParse({
+      userId: UUID,
+      workspaceId: "660e8400-e29b-41d4-a716-446655440001",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect("workspaceId" in result.data).toBe(false);
+    }
+  });
+
+  it("rejects a missing userId", () => {
+    const result = grantWorkspaceAccessRouteSchema.safeParse({ role: "editor" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a role outside the 3-role enum", () => {
+    const result = grantWorkspaceAccessRouteSchema.safeParse({
+      userId: UUID,
+      role: "moderator",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// Phase 189 (WSIS-03, D-17): bulk grant body.
+describe("bulkGrantWorkspaceAccessSchema", () => {
+  const UUID = "550e8400-e29b-41d4-a716-446655440000";
+
+  it("accepts a non-empty userIds array with a role", () => {
+    const result = bulkGrantWorkspaceAccessSchema.safeParse({
+      userIds: [UUID, "660e8400-e29b-41d4-a716-446655440001"],
+      role: "editor",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an empty userIds array", () => {
+    const result = bulkGrantWorkspaceAccessSchema.safeParse({ userIds: [] });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a non-uuid member", () => {
+    const result = bulkGrantWorkspaceAccessSchema.safeParse({
+      userIds: [UUID, "not-a-uuid"],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// Phase 189 (WSIS-03, D-15): list-entry wire shape.
+describe("workspaceAccessListEntrySchema", () => {
+  const UUID = "550e8400-e29b-41d4-a716-446655440000";
+
+  it("accepts grantedBy null (legacy-row marker, D-12)", () => {
+    const result = workspaceAccessListEntrySchema.safeParse({
+      userId: UUID,
+      username: "alice",
+      role: "editor",
+      grantedAt: "2026-09-15T00:00:00.000Z",
+      grantedBy: null,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a granted admin string", () => {
+    const result = workspaceAccessListEntrySchema.safeParse({
+      userId: UUID,
+      username: "alice",
+      role: "viewer",
+      grantedAt: "2026-09-15T00:00:00.000Z",
+      grantedBy: "660e8400-e29b-41d4-a716-446655440001",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an unknown role", () => {
+    const result = workspaceAccessListEntrySchema.safeParse({
+      userId: UUID,
+      username: "alice",
+      role: "moderator",
+      grantedAt: "2026-09-15T00:00:00.000Z",
+      grantedBy: null,
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// Phase 189 (WSIS-01, D-05): personal-workspace creation body.
+describe("createPersonalWorkspaceSchema", () => {
+  it("accepts a 1-100 char workspaceName", () => {
+    const result = createPersonalWorkspaceSchema.safeParse({ workspaceName: "My Notes" });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an empty workspaceName", () => {
+    const result = createPersonalWorkspaceSchema.safeParse({ workspaceName: "" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a >100-char workspaceName", () => {
+    const result = createPersonalWorkspaceSchema.safeParse({
+      workspaceName: "x".repeat(101),
     });
     expect(result.success).toBe(false);
   });

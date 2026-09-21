@@ -5,7 +5,7 @@
 
 import { useState, useEffect } from "react";
 import { useLogin } from "../queries/useAuth";
-import { useSsoStatus } from "../queries/useSso";
+import { useSsoStatus, useLdapLogin } from "../queries/useSso";
 import { useFeature } from "../hooks/useFeature";
 import { showSuccess, showError } from "../lib/toast";
 import { useTranslation } from "react-i18next";
@@ -53,10 +53,30 @@ export default function LoginPage() {
   const ssoFeatureEnabled = useFeature("sso_enabled");
   const { t, i18n } = useTranslation();
 
-  const submitting = loginMutation.isPending;
+  // Phase 193 (D-18) — LDAP credential login. When the enabled provider is
+  // `ldap`, the SAME username/password form POSTs to /api/auth/ldap/login
+  // (no browser redirect — that block stays saml|oidc-only below).
+  const ldapLoginMutation = useLdapLogin();
+  const isLdapProvider =
+    ssoFeatureEnabled && ssoStatus?.enabled && ssoStatus?.provider === "ldap";
+
+  const submitting = isLdapProvider ? ldapLoginMutation.isPending : loginMutation.isPending;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Phase 193 (D-18) — provider branches the submit handler; the form
+    // markup does not change. The LDAP error arm surfaces the single
+    // uniform login.authFailed message (D-15: never stage detail).
+    if (isLdapProvider) {
+      try {
+        await ldapLoginMutation.mutateAsync({ username, password });
+        showSuccess(t("login.successLogin"));
+      } catch {
+        showError(t("login.authFailed"));
+      }
+      return;
+    }
 
     try {
       await loginMutation.mutateAsync({ username, password });
@@ -107,6 +127,11 @@ export default function LoginPage() {
           <CardHeader className="text-center">
             <CardTitle className="text-2xl font-bold">Simmetric Chat</CardTitle>
             <CardDescription>{t("app.subtitle")}</CardDescription>
+            {/* Phase 193 (D-18) — LDAP hint renders ONLY in the ldap arm,
+                directly under CardDescription per the UI-SPEC. */}
+            {isLdapProvider && (
+              <p className="text-sm text-muted-foreground">{t("login.ldap.hint")}</p>
+            )}
           </CardHeader>
 
           <CardContent>
@@ -168,8 +193,12 @@ export default function LoginPage() {
               {/* SSO login button (D-06) — driven by the public status endpoint
                   (quick 260808-p5y). The admin-gated useSsoConfig() 401s for
                   unauthenticated visitors, so availability comes from the
-                  public GET /api/auth/sso/status instead. */}
-              {ssoFeatureEnabled && ssoStatus?.enabled && ssoStatus?.provider && (
+                  public GET /api/auth/sso/status instead.
+                  Phase 193 (D-18): the guard is NARROWED to saml|oidc —
+                  provider `ldap` is POST-only and must never render a
+                  redirect button (nor the ssoOr divider). */}
+              {ssoFeatureEnabled && ssoStatus?.enabled &&
+                (ssoStatus.provider === "saml" || ssoStatus.provider === "oidc") && (
                 <div className="mt-4 border-t border-border pt-4">
                   <p className="mb-2 text-center text-sm text-muted-foreground">
                     {t("login.ssoOr")}

@@ -54,15 +54,30 @@ export async function createTemplate(data: ArchiveSchemaTemplateInput & { archiv
 
 /**
  * Apply a template's config to an archive's ArchiveConfig record.
+ *
+ * CR-01 (Phase 187 code review) — read-merge-write mirror of the
+ * setArchiveConfig seam: the template's config replaces the UI-managed
+ * structured fields wholesale, but keys the template does not define
+ * (notably `localLLMOnly`, the synthesis D-15 PHI gate input, and any key a
+ * future panel save relies on) must survive the apply. Template-managed keys
+ * win; absent keys are preserved verbatim.
  */
 export async function applyTemplate(archiveId: string, templateId: string) {
   const template = await prisma.archiveSchemaTemplate.findUnique({ where: { id: templateId } });
   if (!template) throw new Error("Template not found");
 
+  const existing = await prisma.archiveConfig.findUnique({
+    where: { archiveId },
+    select: { config: true },
+  });
+  // Legacy stored blobs type-lie — merge defensively (Shared Pattern 5).
+  const prev = (existing?.config as Record<string, unknown> | null) ?? {};
+  const merged = { ...prev, ...(template.config as Record<string, unknown>) } as Prisma.InputJsonValue;
+
   await prisma.archiveConfig.upsert({
     where: { archiveId },
-    create: { archiveId, config: template.config as Prisma.InputJsonValue },
-    update: { config: template.config as Prisma.InputJsonValue },
+    create: { archiveId, config: merged },
+    update: { config: merged },
   });
 
   return template;
@@ -100,6 +115,7 @@ export async function seedBuiltInTemplates() {
         linkingDensity: { min: 0.01, max: 0.15 },
         agentPersona: "conservative",
         purpose: "Organize research papers, experiments, and literature reviews.",
+        rawSourcesImmutable: true,
       },
       pageTypes: [
         { name: "Paper", requiredSections: ["Abstract", "Methodology", "Results"], optionalSections: ["References", "Appendix"] },
@@ -123,6 +139,7 @@ export async function seedBuiltInTemplates() {
         linkingDensity: { min: 0.02, max: 0.2 },
         agentPersona: "balanced",
         purpose: "Track ADRs, RFCs, and project documentation.",
+        rawSourcesImmutable: true,
       },
       pageTypes: [
         { name: "ADR", requiredSections: ["Context", "Decision", "Consequences"], optionalSections: ["Alternatives"] },
@@ -145,6 +162,7 @@ export async function seedBuiltInTemplates() {
         linkingDensity: { min: 0.005, max: 0.25 },
         agentPersona: "exploratory",
         purpose: "Flexible PKM with light structure.",
+        rawSourcesImmutable: true,
       },
       pageTypes: [
         { name: "Journal", requiredSections: [], optionalSections: ["Summary", "Reflection"] },

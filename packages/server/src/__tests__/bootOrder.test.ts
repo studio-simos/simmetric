@@ -621,3 +621,60 @@ describe("index.ts boot order — SaaS plugin (Phase 186, SAAS-05 D-10)", () => 
     expect(shutdownEnterpriseLine).toBeLessThan(prismaDisconnectLine);
   });
 });
+
+// Phase 193 (LDAP-01, D-13): the community composite login route mounts
+// AFTER both plugin loads and BEFORE mountCatchAlls — the defer-then-serve
+// window. The enterprise LDAP route (mounted via the plugin loader) next()s
+// fallback-eligible requests on this SAME /api/auth path; the composite
+// router is the sole local-auth fallback arm. Source-string assertion —
+// fails the build if the mount is reordered (before the plugins = enterprise
+// requests would double-handle; after the catch-alls = deferred requests
+// would 404 instead of falling back).
+describe("index.ts boot order — authLdapComposite mount (Phase 193, D-13)", () => {
+  const src = readIndexTsSource();
+  const lines = src.split(/\r?\n/);
+
+  const enterpriseLine = lineNumberOfFirstMatch(
+    lines,
+    /await\s+loadEnterprisePlugin\s*\(\s*app\s*\)/,
+  );
+  const saasLine = lineNumberOfFirstMatch(
+    lines,
+    /await\s+loadSaaSPlugin\s*\(\s*app\s*\)/,
+  );
+  const compositeLine = lineNumberOfFirstMatch(
+    lines,
+    /app\.use\s*\(\s*["']\/api\/auth["']\s*,\s*createAuthLdapCompositeRouter\s*\(\s*\)\s*\)/,
+  );
+  const catchAllsLine = lineNumberOfFirstMatch(
+    lines,
+    /^\s*mountCatchAlls\s*\(\s*app\s*\)/,
+  );
+
+  test("createAuthLdapCompositeRouter mount is present in index.ts", () => {
+    expect(compositeLine).toBeGreaterThan(0);
+  });
+
+  test("the composite mount runs AFTER loadEnterprisePlugin (defer receiver, not competitor)", () => {
+    expect(enterpriseLine).toBeGreaterThan(0);
+    expect(compositeLine).toBeGreaterThan(enterpriseLine);
+  });
+
+  test("the composite mount runs AFTER loadSaaSPlugin", () => {
+    expect(saasLine).toBeGreaterThan(0);
+    expect(compositeLine).toBeGreaterThan(saasLine);
+  });
+
+  test("the composite mount runs BEFORE mountCatchAlls (deferred requests must reach it, not the 404)", () => {
+    expect(catchAllsLine).toBeGreaterThan(0);
+    expect(compositeLine).toBeLessThan(catchAllsLine);
+  });
+
+  test("the composite router factory is imported in index.ts", () => {
+    const importLine = lineNumberOfFirstMatch(
+      lines,
+      /import\s*\{[^}]*createAuthLdapCompositeRouter[^}]*\}\s*from\s*["']\.\/routes\/authLdapComposite["']/,
+    );
+    expect(importLine).toBeGreaterThan(0);
+  });
+});

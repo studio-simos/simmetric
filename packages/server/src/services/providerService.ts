@@ -127,6 +127,10 @@ export async function listAvailableProviders() {
         displayName: m.displayName,
         isLocal: m.isLocal,
         isDefault: m.isDefault,
+        // 260919 model-missing UX: surfaced so the chat model selector can
+        // hide/badge OCR + embedding models (they reject chat requests).
+        isOcr: m.isOcr,
+        isEmbedding: m.isEmbedding,
         capabilities: deriveCapabilities(m.name, p.type, isOllamaCloud && !m.isLocal, presetNativeTools),
       })),
     };
@@ -552,6 +556,77 @@ export async function startOllamaPull(providerId: string, modelName: string): Pr
 
 // ===== Resolution =====
 
+// 260917-mz6 (widget error fix): when the requested named model has NO
+// ProviderModel row on a provider, degrade to that provider's first
+// isEnabled && isAvailable model instead of letting the arm fall through
+// (the old behavior returned null and cascaded to buildFallbackConfig with
+// the SAME dead model → hard "model not found" SSE error on unpinned
+// widgets — an unpinned widget chat lands on Chat.model's schema default
+// "qwen2.5:3b", which may not exist on any provider). The degradation is
+// OBSERVABLE: logger.info names the requested model, the degraded-to model
+// and the provider name — never silent. When the named model IS found this
+// helper never runs, so found-model selection stays byte-identical.
+//
+// 260919 model-missing UX: the degrade candidate NEVER lands on an
+// isOcr/isEmbedding model (observed: deepseek-ocr:latest was the only
+// available model and every chat degraded into a vision-model HTTP 400).
+// On degrade, `degradedFrom` carries the originally requested name.
+function degradeToAvailableModel<
+  T extends { name: string; isEnabled: boolean; isAvailable: boolean; isOcr?: boolean; isEmbedding?: boolean },
+>(
+  models: T[],
+  requestedModel: string,
+  providerName: string,
+): T | undefined {
+  const degraded = models.find(
+    (m) => m.isEnabled && m.isAvailable && !m.isOcr && !m.isEmbedding,
+  );
+  if (degraded) {
+    logger.info(
+      `[provider] Requested model "${requestedModel}" not found on provider "${providerName}" — degrading to available model "${degraded.name}"`,
+    );
+  }
+  return degraded;
+}
+
+/**
+ * 260919 model-missing UX — strict resolution for USER-FACING chat paths.
+ *
+ * The user (or the chat record they chose) picked a specific model. If that
+ * model is not resolvable, they must be TOLD and asked to pick a new one —
+ * the orchestrator must NOT silently substitute a different model.
+ *
+ * Contract:
+ * - Named provider+model found        → ProviderConfig verbatim (no
+ *   `degradedFrom`), byte-identical to the lenient resolver for this arm.
+ * - Named model missing on its provider → `{ config: null, requestedModel }`
+ *   (the caller surfaces "model not available — choose another"). NO silent
+ *   substitution, NO cascade to another provider with a different model.
+ * - NO explicit selection (params.model / chat.model both absent — the
+ *   "let the workspace/default decide" case) → delegate to the lenient
+ *   `resolveProviderConfig`, which may degrade with `degradedFrom` set; that
+ *   is a config-resolution choice, not a user substitution.
+ */
+export async function resolveProviderConfigStrict(
+  providerId?: string,
+  model?: string,
+): Promise<{ config: ProviderConfig | null; requestedModel?: string }> {
+  if (!model) {
+    const config = await resolveProviderConfig(providerId, model);
+    return { config };
+  }
+  const config = await resolveProviderConfig(providerId, model);
+  if (!config) {
+    return { config: null, requestedModel: model };
+  }
+  if (config.degradedFrom) {
+    // The named model was missing everywhere — the lenient resolver degraded.
+    // Report as not-found rather than serving the substitute.
+    return { config: null, requestedModel: model };
+  }
+  return { config };
+}
+
 export async function resolveProviderConfig(
   providerId?: string,
   model?: string,
@@ -564,9 +639,14 @@ export async function resolveProviderConfig(
     });
     if (provider && provider.isEnabled) {
       const apiKey = provider.apiKey ? decrypt(provider.apiKey) : null;
-      const resolvedModel = model
-        ? provider.models.find((m) => m.name === model)
-        : provider.models.find((m) => m.isEnabled && m.isAvailable);
+      // 260917-mz6: named model missing on this provider → degrade to the
+      // provider's first available model (logged) instead of falling through
+      // with a dead model name. Byte-identical when the model IS found.
+      // 260919: the degraded config carries `degradedFrom` so the strict
+      // resolver can reject it for user-facing chats.
+      const foundModel = model ? provider.models.find((m) => m.name === model) : undefined;
+      const resolvedModel = foundModel ??
+        (model ? degradeToAvailableModel(provider.models, model, provider.name) : provider.models.find((m) => m.isEnabled && m.isAvailable));
       if (resolvedModel) {
         const isOllamaCloud = provider.type === "ollama" && !!apiKey;
         const presetNativeTools = findPresetNativeToolsReliable(provider.type, provider.baseUrl);
@@ -586,6 +666,7 @@ export async function resolveProviderConfig(
           maxTokens: resolvedModel.maxTokens ?? undefined,
           isLocal: resolvedModel.isLocal ?? true,
           nativeToolsReliable,
+          ...(foundModel ? {} : { degradedFrom: model }),
         };
       }
     }
@@ -598,9 +679,12 @@ export async function resolveProviderConfig(
   });
   if (defaultProvider) {
     const apiKey = defaultProvider.apiKey ? decrypt(defaultProvider.apiKey) : null;
-    const resolvedModel = model
-      ? defaultProvider.models.find((m) => m.name === model)
-      : defaultProvider.models[0];
+    // 260917-mz6: same degrade arm as the explicit-provider tier above —
+    // the default provider may not carry the requested model either.
+    // 260919: degraded configs carry `degradedFrom` (strict resolver reads it).
+    const foundModel = model ? defaultProvider.models.find((m) => m.name === model) : undefined;
+    const resolvedModel = foundModel ??
+      (model ? degradeToAvailableModel(defaultProvider.models, model, defaultProvider.name) : defaultProvider.models[0]);
     if (resolvedModel) {
       const isOllamaCloud = defaultProvider.type === "ollama" && !!apiKey;
       const presetNativeTools = findPresetNativeToolsReliable(defaultProvider.type, defaultProvider.baseUrl);
@@ -620,6 +704,7 @@ export async function resolveProviderConfig(
         maxTokens: resolvedModel.maxTokens ?? undefined,
         isLocal: resolvedModel.isLocal ?? true,
         nativeToolsReliable,
+        ...(foundModel ? {} : { degradedFrom: model }),
       };
     }
   }
@@ -631,9 +716,11 @@ export async function resolveProviderConfig(
   });
   if (anyProvider) {
     const apiKey = anyProvider.apiKey ? decrypt(anyProvider.apiKey) : null;
-    const resolvedModel = model
-      ? anyProvider.models.find((m) => m.name === model)
-      : anyProvider.models[0];
+    // 260917-mz6: same degrade arm on the any-enabled-provider tier.
+    // 260919: degraded configs carry `degradedFrom` (strict resolver reads it).
+    const foundModel = model ? anyProvider.models.find((m) => m.name === model) : undefined;
+    const resolvedModel = foundModel ??
+      (model ? degradeToAvailableModel(anyProvider.models, model, anyProvider.name) : anyProvider.models[0]);
     if (resolvedModel) {
       const isOllamaCloud = anyProvider.type === "ollama" && !!apiKey;
       const presetNativeTools = findPresetNativeToolsReliable(anyProvider.type, anyProvider.baseUrl);
@@ -653,6 +740,7 @@ export async function resolveProviderConfig(
         maxTokens: resolvedModel.maxTokens ?? undefined,
         isLocal: resolvedModel.isLocal ?? true,
         nativeToolsReliable,
+        ...(foundModel ? {} : { degradedFrom: model }),
       };
     }
   }

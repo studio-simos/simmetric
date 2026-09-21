@@ -28,6 +28,13 @@ import { probeRateLimiter } from "../middleware/rateLimit";
 import { assertSafeProbeUrl } from "../utils/ssrfGuard";
 import { getRedis } from "../services/redisService";
 import { prewarmModel } from "../ocr/prewarm";
+import { dlpBackfillRequestSchema, dlpEvalResultSchema, dlpEvalRunResponseSchema } from "@simmetric-chat/shared";
+import { DLP_EVAL_LAST_RUN_KEY } from "../services/dlpEvalService";
+import {
+  assertEvalGatePassed,
+  countEligibleDocuments,
+  enqueueDlpBackfillBatch,
+} from "../services/dlpBackfillService";
 import { MULTI_CONFIG_TSVECTOR } from "../services/ftsService";
 import { parseMetadata } from "../utils/parseMetadata";
 
@@ -967,6 +974,124 @@ router.post("/ocr/prewarm", authMiddleware, tenantContextMiddleware, requireAdmi
   const message = err instanceof Error ? err.message : String(err);
     logger.error("[system] Pre-warm failed", { error: message });
     res.status(500).json({ error: "Pre-warm failed unexpectedly" });
+  }
+});
+
+// POST /api/system/dlp/eval/run — run the DLP-05 detection-quality eval gate (admin only)
+// 192-10 Gap 2 closure (plan-05 Task 2 contract, T-192-29 DoS mitigation):
+// module-level single-flight flag — a second concurrent POST short-circuits
+// to 409 with a stable message; the flag releases in a finally so a rejected
+// run never wedges the gate. The response carries durationSeconds and
+// validates through dlpEvalRunResponseSchema before res.json.
+let dlpEvalRunInFlight = false;
+router.post("/dlp/eval/run", authMiddleware, tenantContextMiddleware, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    // Single-flight guard (plan-05 Task 2 declared contract / T-192-29):
+    // the UI panel already enforces single-flight client-side; this is the
+    // server-side backstop against concurrent admin triggers.
+    if (dlpEvalRunInFlight) {
+      res.status(409).json({ error: "DLP eval run already in progress" });
+      return;
+    }
+    dlpEvalRunInFlight = true;
+    const startTime = Date.now();
+    try {
+      const { runEval, persistEvalResult } = await import("../services/dlpEvalService");
+      const result = await runEval();
+      await persistEvalResult(result);
+      const parsed = dlpEvalResultSchema.safeParse(result);
+      if (!parsed.success) {
+        logger.error("[system] DLP eval run produced a schema-invalid result");
+        res.status(500).json({ error: "Eval run produced a schema-invalid result" });
+        return;
+      }
+      const durationSeconds = (Date.now() - startTime) / 1000;
+      const runResponse = { ...parsed.data, durationSeconds };
+      const runParsed = dlpEvalRunResponseSchema.safeParse(runResponse);
+      if (!runParsed.success) {
+        logger.error("[system] DLP eval run response failed the dlpEvalRunResponseSchema contract");
+        res.status(500).json({ error: "Eval run produced a schema-invalid response" });
+        return;
+      }
+      res.json(runParsed.data);
+    } finally {
+      // Released in finally — a rejected run never wedges the gate closed.
+      dlpEvalRunInFlight = false;
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error("[system] DLP eval run failed", { error: message });
+    res.status(500).json({ error: message });
+  }
+});
+
+// GET /api/system/dlp/eval/result — read the persisted last eval run (admin only).
+// Never-run (or unparseable) returns the no-run arm { passed: false, noRun: true }
+// validated through the shared schema's discriminated union — never a silent pass.
+// 192-10 Gap 2: the row parse is hardened with a local try/catch so a
+// MALFORMED-JSON row value fails close to the no-run arm too (mirrors
+// readEvalResult's fail-safe parse, dlpEvalService.ts readEvalResult) — the
+// T-192-32 corrupt-row fail-close claim now literally holds for BOTH corrupt
+// shapes (malformed JSON AND parseable-but-schema-invalid).
+router.get("/dlp/eval/result", authMiddleware, tenantContextMiddleware, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const row = await prisma.systemConfig.findUnique({ where: { key: DLP_EVAL_LAST_RUN_KEY } });
+    let candidate: unknown = { passed: false, noRun: true };
+    if (row?.value) {
+      try {
+        candidate = JSON.parse(row.value);
+      } catch {
+        // Malformed persisted JSON → fail-closed no-run arm (never a 500,
+        // never a fabricated pass — mirrors readEvalResult).
+        candidate = { passed: false, noRun: true };
+      }
+    }
+    const parsed = dlpEvalResultSchema.safeParse(candidate);
+    if (!parsed.success) {
+      res.json({ passed: false, noRun: true });
+      return;
+    }
+    res.json(parsed.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error("[system] DLP eval read failed", { error: message });
+    res.status(500).json({ error: message });
+  }
+});
+
+// POST /api/system/dlp/backfill — trigger the DLP-06 legacy-corpus backfill
+// (admin only). Phase 192 D-12 one-way door (checkpoint-approved
+// "proceed-gated"): this endpoint rewrites persistent vector + FTS data for
+// every legacy document lacking the dlpScannedAt marker. The DLP-05 eval
+// gate is enforced SERVER-SIDE first (409 until green — T-192-28), then the
+// eligible count drives one dlp_backfill job per document
+// (enqueueDlpBackfillBatch: slice-50 sends, cap 500/request, re-run-safe).
+// Zero eligible is a NO-OP SUCCESS response (UI empty state renders from it).
+// UI consumer note (UI-SPEC destructive-AlertDialog): the confirm dialog
+// counts ride the response shape { enqueued, skipped, totalEligible, errors };
+// the destructive-action confirmation itself rides the UI per D-12 (the ONLY
+// destructive action in the phase).
+router.post("/dlp/backfill", authMiddleware, tenantContextMiddleware, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    dlpBackfillRequestSchema.safeParse(req.body ?? {});
+
+    // D-12 ordering gate (T-192-28): refuse until the DLP-05 eval result has
+    // passed. The eligible count is included in the 409 so the UI copy can
+    // say how many legacy docs are waiting on the green gate.
+    const evalGatePassed = await assertEvalGatePassed();
+    if (!evalGatePassed) {
+      const totalEligible = await countEligibleDocuments();
+      logger.warn("[system] DLP backfill refused — eval gate not passed", { totalEligible });
+      res.status(409).json({ error: "DLP eval gate not passed — run the eval and retry", gate: "eval-not-passed", totalEligible });
+      return;
+    }
+
+    const response = await enqueueDlpBackfillBatch();
+    res.json(response);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error("[system] DLP backfill trigger failed", { error: message });
+    res.status(500).json({ error: message });
   }
 });
 

@@ -107,6 +107,52 @@ export const widgetCreditsSchema = z
   });
 export type WidgetCredits = z.infer<typeof widgetCreditsSchema>;
 
+// 260917-mz6: contact options shown when the widget's daily response limit is
+// reached. Every URL field refined through the MANDATORY isHttpUrl (credits
+// blob precedent — z.string().url() alone accepts javascript:), the email via
+// z.string().email(), customLabel capped at 200. Strict object (unknown keys
+// rejected). At least ONE field must be non-empty via a chained superRefine —
+// an empty blob is "not configured" (the admin form sends null for it).
+export const widgetContactOptionsSchema = z
+  .object({
+    formUrl: z.string().optional(),
+    bookingUrl: z.string().optional(),
+    email: z.string().optional(),
+    customUrl: z.string().optional(),
+    customLabel: z.string().max(200).optional(),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    // URL fields: mandatory http/https refine (isHttpUrl — the SAME predicate
+    // as the credits-blob refine; a javascript:/data: payload is rejected).
+    // Empty string = "not set" (same hide-semantics as the credits blob).
+    for (const field of ["formUrl", "bookingUrl", "customUrl"] as const) {
+      const val = v[field];
+      if (val !== undefined && val !== "" && !isHttpUrl(val)) {
+        ctx.addIssue({ code: "custom", path: [field], message: "Only http:// and https:// URLs are allowed" });
+      }
+    }
+    // Email shape enforced only when non-empty.
+    if (v.email !== undefined && v.email !== "") {
+      const emailCheck = z.string().email().safeParse(v.email);
+      if (!emailCheck.success) {
+        ctx.addIssue({ code: "custom", path: ["email"], message: "Must be a valid email address" });
+      }
+    }
+    // At least one configured field — an all-empty/absent blob is "not
+    // configured" (the admin form sends null for it instead).
+    const hasAny =
+      (v.formUrl !== undefined && v.formUrl !== "") ||
+      (v.bookingUrl !== undefined && v.bookingUrl !== "") ||
+      (v.email !== undefined && v.email !== "") ||
+      (v.customUrl !== undefined && v.customUrl !== "") ||
+      (v.customLabel !== undefined && v.customLabel !== "");
+    if (!hasAny) {
+      ctx.addIssue({ code: "custom", message: "At least one contact option is required" });
+    }
+  });
+export type WidgetContactOptions = z.infer<typeof widgetContactOptionsSchema>;
+
 // ===== Fallback resolvers (D-06, D-07) =====
 // Pure helpers, no side effects, no zod dependency at call time.
 // Resolution chain: exact visitor locale → widget fallbackLocale → legacy
@@ -229,12 +275,21 @@ export const createWidgetSchema = z.object({
   exitIntentCooldownMs: z.number().int().min(60000).max(86400000).optional(),
   leadCaptureEnabled: z.boolean().optional(),
   leadCapturePrompt: z.string().max(500).nullable().optional(),
-  // Per-widget rate-limit override (SCALE-04, D-05). null = global default.
-  rateLimitPerMinute: z.number().int().positive().nullable().optional(),
-  // Per-widget daily MESSAGE limit (151-02, G-151-1b). null = global default
-  // (5 messages/day prod, 50/day dev). Positive int; semantics = messages
-  // sent per visitor per day (views never count — enforced on the send path).
-  sessionLimitPerDay: z.number().int().positive().nullable().optional(),
+  // Per-widget rate-limit override (SCALE-04, D-05). Tri-state convention:
+  // null = global default (backward compat), 0 = unlimited ("no limits"),
+  // positive int = custom limit. express-rate-limit v7+ treats a computed
+  // max of 0 as block-ALL requests, so the schema accepts 0 but the WIDGET
+  // limiter (packages/widget/src/middleware/rateLimit.ts) is what translates
+  // 0 → the unlimited bypass (WIDGET_UNLIMITED_MAX) — never ship max=0.
+  rateLimitPerMinute: z.number().int().min(0).nullable().optional(),
+  // Per-widget daily MESSAGE limit (151-02, G-151-1b). Tri-state convention:
+  // null = global default (5 messages/day prod, 50/day dev — backward compat),
+  // 0 = unlimited ("no limits"), positive int = custom limit. Same schema/limiter
+  // split as rateLimitPerMinute: the schema accepts 0, the widget limiter
+  // translates 0 → WIDGET_UNLIMITED_MAX (express-rate-limit v7+ max=0 blocks all).
+  // Semantics = messages sent per visitor per day (views never count — enforced
+  // on the send path).
+  sessionLimitPerDay: z.number().int().min(0).nullable().optional(),
   // CORS allowed origins (JSON-encoded string of string[] for DB storage)
   allowedOrigins: z.string().max(2000).nullable().optional(),
   // Per-widget localization (D-02..D-05). .nullable() is the write contract
@@ -255,6 +310,24 @@ export const createWidgetSchema = z.object({
   // model NAME on that provider (mirrors Chat.model, not ProviderModel.id).
   responseProviderId: z.string().uuid("Invalid provider ID").nullable().optional(),
   responseModel: z.string().min(1).max(200).nullable().optional(),
+  // 260917-mz6: per-widget grounding prompt + contact options + lead timing.
+  // Write contract (mirrors archiveId/responseModelPin): null clears (SQL
+  // NULL via the routes' spread), undefined = unchanged on update.
+  // systemPrompt is server-side ONLY — the runtime response schema
+  // (widgetConfigResponseSchema) deliberately omits it (prompt-injection
+  // surface T-Q02: it must never reach the client bundle).
+  systemPrompt: z.string().max(4000).nullable().optional(),
+  contactConfig: widgetContactOptionsSchema.nullable().optional(),
+  leadCaptureTiming: z.enum(["start", "end", "timeout"]).optional(),
+  leadCaptureTimeoutSeconds: z.number().int().min(5).max(86400).nullable().optional(),
+  // 260917-qoh: per-widget privacy policy page URL, shown as a link beside
+  // the lead-capture consent checkbox. The MANDATORY isHttpUrl refine is the
+  // credits/contact-options precedent (plain z.string().url() accepts
+  // javascript: in Zod 4.4.3) — the URL is rendered host-side via the
+  // creditsOpen bridge, so scheme safety is mandatory. Nullable write
+  // contract (mirrors archiveId): null clears (SQL NULL via the routes'
+  // spread), undefined = unchanged on update.
+  privacyUrl: z.string().refine(isHttpUrl, { message: "Only http:// and https:// URLs are allowed" }).nullable().optional(),
 });
 type CreateWidgetInput = z.infer<typeof createWidgetSchema>;
 
@@ -288,10 +361,16 @@ export const updateWidgetSchema = z.object({
   exitIntentCooldownMs: z.number().int().min(60000).max(86400000).optional(),
   leadCaptureEnabled: z.boolean().optional(),
   leadCapturePrompt: z.string().max(500).nullable().optional(),
-  // Per-widget rate-limit override (SCALE-04, D-05). null = global default.
-  rateLimitPerMinute: z.number().int().positive().nullable().optional(),
-  // Per-widget daily MESSAGE limit (151-02, G-151-1b). null = global default.
-  sessionLimitPerDay: z.number().int().positive().nullable().optional(),
+  // Per-widget rate-limit override (SCALE-04, D-05). Tri-state convention:
+  // null = global default (backward compat), 0 = unlimited ("no limits"),
+  // positive int = custom limit. Same schema/limiter split as in
+  // createWidgetSchema — the schema accepts 0, the widget limiter translates
+  // 0 → WIDGET_UNLIMITED_MAX (express-rate-limit v7+ max=0 blocks all).
+  rateLimitPerMinute: z.number().int().min(0).nullable().optional(),
+  // Per-widget daily MESSAGE limit (151-02, G-151-1b). Tri-state convention:
+  // null = global default, 0 = unlimited ("no limits"), positive int = custom
+  // limit (mirrors rateLimitPerMinute above).
+  sessionLimitPerDay: z.number().int().min(0).nullable().optional(),
   // CORS allowed origins (JSON-encoded string of string[] for DB storage)
   allowedOrigins: z.string().max(2000).nullable().optional(),
   // Per-widget localization (D-02..D-05). .nullable() write contract for
@@ -310,6 +389,17 @@ export const updateWidgetSchema = z.object({
   // columns, no toJsonWriteValue needed (mirrors archiveId).
   responseProviderId: z.string().uuid("Invalid provider ID").nullable().optional(),
   responseModel: z.string().min(1).max(200).nullable().optional(),
+  // 260917-mz6: same write contract as createWidgetSchema — null clears
+  // (SQL NULL), undefined = unchanged (partial-update semantics).
+  systemPrompt: z.string().max(4000).nullable().optional(),
+  contactConfig: widgetContactOptionsSchema.nullable().optional(),
+  leadCaptureTiming: z.enum(["start", "end", "timeout"]).optional(),
+  leadCaptureTimeoutSeconds: z.number().int().min(5).max(86400).nullable().optional(),
+  // 260917-qoh: same write contract as createWidgetSchema — null clears
+  // (SQL NULL), undefined = unchanged (partial-update semantics). Mandatory
+  // isHttpUrl refine (javascript:/data: rejected — the creditsOpen bridge
+  // renders it host-side).
+  privacyUrl: z.string().refine(isHttpUrl, { message: "Only http:// and https:// URLs are allowed" }).nullable().optional(),
 });
 type UpdateWidgetInput = z.infer<typeof updateWidgetSchema>;
 
@@ -356,6 +446,19 @@ export const widgetConfigResponseSchema = z.object({
   // 260809-uxk T3: bound knowledge archive id (null when unbound). Additive
   // optional so old fixtures keep parsing (mirrors whiteLabel).
   archiveId: z.string().uuid().nullable().optional(),
+  // 260917-mz6: the three RUNTIME fields the widget client consumes at the
+  // daily-limit / lead-timing decision points. Additive-optional so old
+  // fixtures keep parsing. Deliberately NO systemPrompt here — the grounding
+  // prompt is server-side only and must never reach the client bundle
+  // (prompt-injection surface, T-Q02).
+  contactConfig: widgetContactOptionsSchema.nullable().optional(),
+  leadCaptureTiming: z.enum(["start", "end", "timeout"]).optional(),
+  leadCaptureTimeoutSeconds: z.number().int().nullable().optional(),
+  // 260917-qoh: the per-widget privacy URL the widget client consumes to
+  // render the consent-checkbox link (additive-optional so old fixtures keep
+  // parsing; null = not configured → the card renders the checkbox without
+  // a link). Deliberately NO systemPrompt here — see T-Q02 above.
+  privacyUrl: z.string().nullable().optional(),
 });
 export type WidgetConfigResponse = z.infer<typeof widgetConfigResponseSchema>;
 
@@ -414,9 +517,17 @@ const widgetLeadCaptureSchema = z.object({
 type WidgetLeadCapture = z.infer<typeof widgetLeadCaptureSchema>;
 
 // Visitor lead submission (ADM-04, per D-08/D-10)
+// 260917-qoh: privacyConsented is REQUIRED and must be EXACTLY true — the
+// lead endpoint fails closed when the visitor did not consent to the privacy
+// policy (T-Q02 repudiation gate; a request without the flag is a 400). The
+// widget client and widget service deploy together, so the stricter contract
+// is safe: the card only invokes submit after the checkbox gate, and the
+// server schema enforces the literal (a tampered false/absent value cannot
+// create a lead — T-Q04).
 export const widgetLeadSubmitSchema = z.object({
   email: z.string().email("Valid email is required"),
   name: z.string().max(200).optional(),
+  privacyConsented: z.literal(true),
   transcript: z.array(z.object({
     role: z.enum(["user", "assistant"]),
     content: z.string(),
@@ -439,3 +550,14 @@ export const widgetAnalyticsQuerySchema = z.object({
   widgetId: z.string().uuid().optional(),
 });
 type WidgetAnalyticsQueryInput = z.infer<typeof widgetAnalyticsQuerySchema>;
+
+// Widget workspace archive filter parameters (WGTA-01, D-01) — read-only
+// archive projection over the WidgetWorkspace join. All keys optional
+// (uuid-validated) so an empty query returns the full archive; safeParse in
+// the handlers turns a malformed uuid into 400 { error, details }.
+export const widgetWorkspaceArchiveFilterSchema = z.object({
+  projectId: z.string().uuid().optional(),
+  workspaceId: z.string().uuid().optional(),
+  widgetId: z.string().uuid().optional(),
+});
+export type WidgetWorkspaceArchiveFilterInput = z.infer<typeof widgetWorkspaceArchiveFilterSchema>;

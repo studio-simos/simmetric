@@ -11,6 +11,18 @@ import { getRedis, isRedisAvailable } from "../services/redisService";
 
 const isDev = getEnv().NODE_ENV !== "production";
 
+// Per-widget "no limits" bypass constant (0 = unlimited tri-state). The
+// stored convention is null = global default, 0 = unlimited, positive int =
+// custom limit — but express-rate-limit v7+ treats a computed max of 0 as
+// block-ALL requests, so the limiters translate a cached 0 into a max so
+// large it is never reached in practice. Int32 max (2147483647) is safe for
+// the Redis counter store and renders in standard rate-limit headers.
+// Rationale: a huge max is the documented express-rate-limit bypass for "no
+// limit" (the docs recommend skip or a large max) — reusing the existing
+// async `max` keeps ONE Redis read per request instead of adding a second
+// Redis-reading `skip` callback.
+export const WIDGET_UNLIMITED_MAX = 2147483647;
+
 // Exported key generators for testability (express-rate-limit v8 doesn't expose keyGenerator on handler).
 // SEC-02: key on the widgetId from the URL path so throttling is per-tenant
 // (per-Widget). The widgetChatLimiter is mounted at `/api/chat` (index.ts:38)
@@ -79,8 +91,12 @@ function createRedisStore() {
 // D-05, Open Q1, Pitfall 4: max is a function that reads rateLimitPerMinute
 // from the Redis widget config cache (widget:config:{widgetId}). The limiter
 // runs BEFORE sessionMiddleware (index.ts:38), so req.widgetConfig is NOT
-// populated — the max function reads from Redis directly. On cache miss or
-// Redis unavailable, falls back to global default (30 prod / 200 dev).
+// populated — the max function reads from Redis directly. Tri-state (0 =
+// unlimited): a cached 0 → WIDGET_UNLIMITED_MAX (the limiter is effectively
+// bypassed — express-rate-limit v7+ would block ALL requests on max=0),
+// positive int → custom limit, null/absent/negative (defensive) → global
+// default (30 prod / 200 dev). On cache miss or Redis unavailable, falls
+// back to global default.
 export const widgetChatLimiter: RateLimitRequestHandler = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: (async (req: Request): Promise<number> => {
@@ -92,6 +108,9 @@ export const widgetChatLimiter: RateLimitRequestHandler = rateLimit({
           const cached = await redis.get(`widget:config:${widgetId}`);
           if (cached) {
             const parsed = JSON.parse(cached);
+            // 0 = unlimited ("no limits") → bypass via a never-reached max
+            // (never return 0 — express-rate-limit v7+ blocks all on max=0).
+            if (parsed.rateLimitPerMinute === 0) return WIDGET_UNLIMITED_MAX;
             if (parsed.rateLimitPerMinute != null && parsed.rateLimitPerMinute > 0) {
               return parsed.rateLimitPerMinute;
             }
@@ -115,11 +134,15 @@ export const widgetChatLimiter: RateLimitRequestHandler = rateLimit({
 // widgetChatLimiter's per-widget-only burst cap). max is an async function
 // reading sessionLimitPerDay from the Redis widget config cache
 // (widget:config:{widgetId}) — exactly mirroring widgetChatLimiter.max reading
-// rateLimitPerMinute. On cache miss / null / Redis unavailable, falls back to
-// the global default (5 messages/day prod, 50/day dev). Mounted on the chat
-// router BEFORE widgetChatLimiter (index.ts) so the daily cap is checked
-// first. The widgetId IS in the URL path (/api/chat/:widgetId/stream), so
-// extractWidgetId(req) is used — no body parsing needed.
+// rateLimitPerMinute. Tri-state (0 = unlimited): a cached 0 →
+// WIDGET_UNLIMITED_MAX (limiter effectively bypassed — never return 0,
+// express-rate-limit v7+ blocks all on max=0), positive int → custom limit,
+// null/absent/negative (defensive) → global default. On cache miss / Redis
+// unavailable, falls back to the global default (5 messages/day prod, 50/day
+// dev). Mounted on the chat router BEFORE widgetChatLimiter (index.ts) so the
+// daily cap is checked first. The widgetId IS in the URL path
+// (/api/chat/:widgetId/stream), so extractWidgetId(req) is used — no body
+// parsing needed.
 export const widgetDailyMessageLimiter: RateLimitRequestHandler = rateLimit({
   windowMs: 24 * 60 * 60 * 1000, // 24 hours
   max: (async (req: Request): Promise<number> => {
@@ -131,6 +154,9 @@ export const widgetDailyMessageLimiter: RateLimitRequestHandler = rateLimit({
           const cached = await redis.get(`widget:config:${widgetId}`);
           if (cached) {
             const parsed = JSON.parse(cached);
+            // 0 = unlimited ("no limits") → bypass via a never-reached max
+            // (never return 0 — express-rate-limit v7+ blocks all on max=0).
+            if (parsed.sessionLimitPerDay === 0) return WIDGET_UNLIMITED_MAX;
             if (parsed.sessionLimitPerDay != null && parsed.sessionLimitPerDay > 0) {
               return parsed.sessionLimitPerDay;
             }

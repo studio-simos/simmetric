@@ -20,6 +20,9 @@ export interface AuthUser {
   customInstructions: string | null;
   textSize: string | null;
   mustChangePassword: boolean;
+  // Phase 189 (WSIS-01, D-03): personal-workspace empty-state gate scalar
+  // (served by /auth/me).
+  hasOnboarded: boolean;
   roles: { id: string; name: string; isDefault: boolean }[];
   permissions: string[];
 }

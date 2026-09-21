@@ -366,9 +366,42 @@ describe("audit:migrations classification", () => {
   // documents + upload_drafts with the null-guarded backfill
   // (storageKey = filePath — path-as-key, no file moves). The audit now
   // reports 7 migrations, 7 additive, 0 destructive.
-  it("committed MIGRATION_AUDIT.md reports the audit state (7 additive, 0 destructive — init + M1-M6)", () => {
+  // Phase 189 (D-24) added the wsis_workspace_access_roles batch (5 additive
+  // columns, role backfill pinned ADD-before-UPDATE). Phase 190 (SKIL-01)
+  // added the skil_agent_skills_custom batch (10 additive columns + partial
+  // unique slug + org index + 3 FKs). The audit now reports 9 migrations,
+  // 9 additive, 0 destructive.
+  // quick 260918-p3h: +3 migration batches (qoh widget prompt, oa9 ocr mode,
+  // p3h ingest progress/cancelledAt) → 12 total, still all-additive.
+  // Phase 191 (KNOW-02 D-05): the know_chat_attached_archive_ids batch adds
+  // the additive Chat.attachedArchiveIds scalar-list column → 14 total,
+  // still all-additive.
+  // 191-07 (IN-04 review fix): the pin asserts the INVARIANT (the committed
+  // audit is self-consistent and all-additive — Additive === Total &&
+  // Destructive === 0) instead of a magic count. The literal "Total: 14"
+  // line had already drifted once at the phase's diff base (a migration
+  // landed without bumping the pin — the 4th such breakage); deriving the
+  // expectation from the audit's own counts removes the recurring breakage
+  // while still failing the suite when a DESTRUCTIVE migration lands
+  // (Additive < Total) or the audit drifts from disk (see audit:migrations
+  // CI drift-check).
+  it("committed MIGRATION_AUDIT.md is all-additive (Additive === Total, Destructive === 0)", () => {
     const auditPath = path.resolve(__dirname, "../../../../docs/MIGRATION_AUDIT.md");
     const audit = fs.readFileSync(auditPath, "utf-8");
-    expect(audit).toContain("**Total:** 7 migrations · **Additive:** 7 · **Destructive:** 0");
+    const totalLine = audit
+      .split("\n")
+      .find((l) => l.includes("**Total:**"));
+    expect(totalLine).toBeDefined();
+    const total = Number((totalLine as string).match(/\*\*Total:\*\* (\d+)/)?.[1]);
+    const additive = Number((totalLine as string).match(/\*\*Additive:\*\* (\d+)/)?.[1]);
+    const destructive = Number((totalLine as string).match(/\*\*Destructive:\*\* (\d+)/)?.[1]);
+    expect(Number.isFinite(total)).toBe(true);
+    expect(Number.isFinite(additive)).toBe(true);
+    expect(Number.isFinite(destructive)).toBe(true);
+    expect(total).toBeGreaterThan(0);
+    // The invariant that actually matters: every migration on the books is
+    // additive (the additive-only policy), regardless of the count.
+    expect(additive).toBe(total);
+    expect(destructive).toBe(0);
   });
 });

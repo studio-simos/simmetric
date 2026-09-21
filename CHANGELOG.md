@@ -22,6 +22,16 @@ for release tags (`vMAJOR.MINOR.PATCH`).
 
 ## [Unreleased]
 
+### Fixed
+- Backup/restore: a dry-run or restore failing with "Unable to decrypt
+  (no key in chain matched)" (destination credentials written under a
+  previous `ENCRYPTION_KEY`) now returns a guided error naming the cause,
+  the recovery levers (`LEGACY_PREVIOUS_ENCRYPTION_KEYS` / previous
+  `ENCRYPTION_KEY`, then restart), the number of keys tried, and the
+  `docs/ENCRYPTION_KEY_ROTATION.md` runbook — which gained a Docker
+  "Backup restore dry-run fails" recovery section. Only the key-chain
+  length is disclosed, never key material.
+
 ## [v0.25.0] — 2026-09-09
 
 ### Added

@@ -285,6 +285,17 @@ export async function handleArchiveImportCallback(
     throw new Error("ArchiveImportJob not found: " + jobId);
   }
 
+  // quick 260918-p3h (T-P3H-04, race guard): cancellation beats a racing
+  // collector callback — a CANCELLED job must not gain a page or a status
+  // flip. Return WITHOUT creating the page or touching the status.
+  if (job.status === "CANCELLED") {
+    logger.info("[archiveImport] callback suppressed: job already cancelled", {
+      jobId,
+      incomingStatus: body.status,
+    });
+    return;
+  }
+
   if (body.status === "failed") {
     await prisma.archiveImportJob.update({
       where: { id: jobId },

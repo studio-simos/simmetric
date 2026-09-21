@@ -12,7 +12,13 @@ import crypto from "crypto";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { authMiddleware } from "../middleware/auth";
 import { tenantContextMiddleware } from "../middleware/tenantContext";
-import { requirePermission } from "../middleware/rbac";
+// Phase 189 (D-13, Plan 04 gate swap): the graded write gate is ENFORCED
+// (bypassAdmin:false — D-04 upload normalization, Pitfall 2; the binary gate
+// on this route retired with the flip). The INLINE D-04 checks on the
+// document READ routes (GET /:documentId, /text, bulk-delete loop, DELETE)
+// KEEP their inline access checks as the gate in BOTH modes (Plan 02's
+// read-half deviation).
+import { requirePermission, requireWorkspaceWriteAccess } from "../middleware/rbac";
 import { assertNonAdminUploadAllowed } from "../middleware/uploadGate";
 import prisma, { withSoftDelete } from "../utils/prisma";
 import { getEnv } from "../config/env";
@@ -21,8 +27,16 @@ import { getSetting } from "../services/systemConfigService";
 import { extractTextFromPdf, cleanupOcrTextFile } from "../services/ragOcrService";
 import { logger } from "../utils/logger";
 import { getUniqueFilePath, isDraftsPath, isDraftStorageKey } from "../utils/fileUtils";
+import { getPdfStandardFontDataUrl } from "../utils/pdfjsFonts";
+import { describeFetchFailureCause } from "../utils/fetchDiagnostics";
+import { collectorDispatchAgent } from "../utils/collectorDispatchAgent";
 import { getStorageProvider } from "../services/storageProvider";
 import { IngestStatusCallbackSchema, sanitizeFileName, bulkDeleteDocumentsSchema } from "@simmetric-chat/shared";
+// Phase 192 (D-10): preview unmask query contract + entity-map re-composition.
+import { dlpUnmaskQuerySchema } from "@simmetric-chat/shared";
+import { buildRecompositionMap, buildPlaceholderRegex } from "../services/dlpEntityService";
+import { resolveWorkspaceRole } from "../middleware/rbac";
+import { getEffectivePermissions } from "../utils/auth";
 import { z } from "zod";
 import { isAdmin } from "../utils/auth";
 import { Prisma } from "@prisma/client";
@@ -153,9 +167,34 @@ router.put("/:documentId/status", async (req: Request, res: Response) => {
 
     const { status, chunkCount, statusMessage } = parsed.data;
 
+    // quick 260918-p3h (T-P3H-04, race guard): a cancellation beats a racing
+    // collector terminal callback — re-read the row FIRST and refuse
+    // completed/failed over a CANCELLED row. Return 200 with the row
+    // UNCHANGED (the collector treats the callback as delivered; no retry
+    // storm) and skip the terminal cleanup block entirely.
+    const current = await prisma.document.findUnique({
+      where: { id: req.params.documentId as string },
+      select: { id: true, status: true },
+    });
+    if (current?.status === "cancelled" && (status === "completed" || status === "failed")) {
+      logger.info("[documents] terminal callback suppressed: document already cancelled", {
+        documentId: req.params.documentId,
+        incomingStatus: status,
+      });
+      res.json(current);
+      return;
+    }
+
+    // quick 260918-p3h (D-2): additive progress notify — the collector PUTs
+    // status "processing" with a progress % between ingest boundaries. The
+    // write is idempotent with the row it races (row is already "processing").
+    // Terminal statuses keep the exact legacy write path below.
+    const isProgressNotify = status === "processing" && typeof parsed.data.progress === "number";
+
     const updateData: Prisma.DocumentUpdateInput = { status };
     if (typeof chunkCount === "number") updateData.chunkCount = chunkCount;
     if (statusMessage) updateData.statusMessage = statusMessage;
+    if (typeof parsed.data.progress === "number") updateData.progress = parsed.data.progress;
 
     const document = await prisma.document.update({
       where: { id: req.params.documentId as string },
@@ -187,7 +226,7 @@ router.put("/:documentId/status", async (req: Request, res: Response) => {
     //   (belt-and-braces for any pre-backfill row) keep the exact
     //   fs.existsSync+unlinkSync shape. The d6ef3403 invariant is preserved:
     //   draft-owned keys are NEVER deleted here.
-    if (status === "completed" || status === "failed") {
+    if (!isProgressNotify && (status === "completed" || status === "failed")) {
       if (document.storageKey && isDraftStorageKey(document.storageKey)) {
         logger.info(
           "[documents] terminal status callback suppressed unlink of draft-owned storage key (draft-file lifecycle invariant, 260829-jv7 D-01)",
@@ -218,6 +257,41 @@ router.put("/:documentId/status", async (req: Request, res: Response) => {
     res.json(document);
   } catch (err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+// GET /api/documents/:documentId/status — collector-secret-authed cancellation
+// poll (quick 260918-p3h, T-P3H-01). Same posture as the sibling PUT above:
+// constant-time secretEquals + req.tenantBypass inside the secret-pass branch.
+// The collector polls this between work units (phases / embed slices) to
+// observe a user cancellation. Response is LIMITED to { status, progress } —
+// never name/filePath/storageKey/secrets. Defined BEFORE router.use
+// (authMiddleware) exactly like the PUT.
+router.get("/:documentId/status", async (req: Request, res: Response) => {
+  try {
+    const secret = String(req.headers["x-collector-secret"] ?? "");
+    if (!secretEquals(secret, getEnv().COLLECTOR_SECRET)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    // D-05 bypass sentinel — set ONLY after the constant-time secret compare
+    // passes (same discipline as the PUT callback, T-185-08).
+    req.tenantBypass = true;
+
+    // T-P3H-01: minimal projection — run-state only.
+    const document = await prisma.document.findUnique({
+      where: { id: req.params.documentId as string },
+      select: { status: true, progress: true },
+    });
+    if (!document) {
+      res.status(404).json({ error: "Document not found" });
+      return;
+    }
+    res.json({ status: document.status, progress: document.progress });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });
   }
 });
@@ -264,11 +338,28 @@ router.get("/", async (req: Request, res: Response) => {
       { workspace: { project: { accessGrants: { some: { userId: req.userId! } } } } },
     ];
 
+    // Phase 192 plan 10 (Gap 3 — UI-SPEC surface 3): one query arm maps the
+    // DlpEntity relation count onto each served row as dlpEntityCount — no
+    // per-row client fan-out, no N+1. COUNT ONLY (no-PII discipline): entity
+    // VALUES/classes never cross this route; unscanned legacy docs
+    // legitimately report 0 (the chip renders nothing — dlpChip keys on
+    // dlpScanState first). The Prisma _count wrapper is stripped before
+    // res.json; the response stays additive (an extra field per row).
     const documents = await prisma.document.findMany({
       where,
       orderBy: { createdAt: "desc" },
+      include: {
+        _count: {
+          select: { dlpEntities: true },
+        },
+      },
     });
-    res.json(documents);
+    res.json(
+      documents.map(({ _count, ...doc }) => ({
+        ...doc,
+        dlpEntityCount: _count.dlpEntities,
+      })),
+    );
   } catch (err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });
@@ -299,7 +390,7 @@ router.get("/", async (req: Request, res: Response) => {
  *       403: { description: Missing document:write permission }
  */
 // POST /api/documents/upload — upload a document and forward to collector
-router.post("/upload", uploadSingle("file"), requirePermission("document:write"), async (req: Request, res: Response) => {
+router.post("/upload", uploadSingle("file"), requirePermission("document:write"), requireWorkspaceWriteAccess({ bypassAdmin: false }), async (req: Request, res: Response) => {
   try {
     if (!req.file) {
       res.status(400).json({ error: "No file uploaded" });
@@ -511,6 +602,14 @@ router.get("/:documentId", async (req: Request, res: Response) => {
 // GET /api/documents/:documentId/text — concatenated chunk text (DOC-01)
 // Returns { text, length, name, type, status } — NEVER exposes filePath.
 // IDOR/soft-delete gate mirrors GET /:documentId exactly (D-04: admin does NOT bypass).
+//
+// Phase 192 (D-10): server-side redaction by default — the joined text is
+// the chunkText AS STORED (masked post-scan, structural inheritance). The
+// ?unmask=true opt-in arm re-composes placeholders from the DlpEntity map
+// (decrypt via buildRecompositionMap) ONLY for callers passing the D-04
+// access gate AND holding dlp:unmask via the Phase 189 single resolver
+// (resolveWorkspaceRole) in a workspace with the DLP toggle on. The entity
+// map loads ONLY after the access gate passes (cost + leak discipline).
 router.get("/:documentId/text", async (req: Request, res: Response) => {
   try {
     const document = await prisma.document.findFirst({
@@ -543,7 +642,61 @@ router.get("/:documentId/text", async (req: Request, res: Response) => {
       const idxB = parseInt(b.id.split("-").pop()!, 10);
       return idxA - idxB;
     });
-    const text = sortedChunks.map((c) => c.chunkText).join("\n\n");
+
+    // Phase 192 (D-10): parse the unmask opt-in — strict literal-union
+    // schema (only "true"/"false" case-insensitive; ?unmask=banana is a
+    // 400, never a silent unmask attempt — T-192-21). The access gate has
+    // already passed above.
+    const unmaskQuery = dlpUnmaskQuerySchema.safeParse(req.query);
+    let unmaskRequested = false;
+    if (!unmaskQuery.success) {
+      res.status(400).json({ error: "Invalid query parameter", details: unmaskQuery.error.flatten().fieldErrors });
+      return;
+    }
+    unmaskRequested = unmaskQuery.data.unmask === true;
+
+    let text = sortedChunks.map((c) => c.chunkText).join("\n\n");
+
+    if (unmaskRequested) {
+      // Unmask arm — the workspace toggle gates the whole DLP surface
+      // (toggle-off → masked text, never an error: the server enforces,
+      // the UI hides — UI-SPEC rule). resolveWorkspaceRole is the Phase 189
+      // single-resolver contract (admin bypass rides its admin arm; never
+      // a parallel role check — role resolution happens ONLY through the
+      // resolver, never a direct access-row read here).
+      const ws = await prisma.workspace.findUnique({
+        where: { id: document.workspaceId },
+        select: { dlpDocumentScanEnabled: true },
+      });
+      if (ws?.dlpDocumentScanEnabled) {
+        const role = await resolveWorkspaceRole(req.userId!, document.workspaceId, req.user);
+        if (role) {
+          const perms = getEffectivePermissions(req.user);
+          if (perms.includes("dlp:unmask")) {
+            // Permission held — load the entity map (ONLY now, post-gate)
+            // and re-substitute per chunk. Unresolvable placeholders stay
+            // literal (partial unmask, never an error).
+            const map = await buildRecompositionMap([document.id]);
+            if (map.size > 0) {
+              text = sortedChunks
+                .map((c) => {
+                  let chunkText = c.chunkText;
+                  for (const [placeholder, original] of map) {
+                    if (!chunkText.includes(placeholder.slice(1, -1))) continue;
+                    chunkText = chunkText.replace(buildPlaceholderRegex(placeholder), original);
+                  }
+                  return chunkText;
+                })
+                .join("\n\n");
+            }
+          }
+        }
+      }
+      // Any unmask-miss arm (toggle off / no role / no permission) falls
+      // through with the MASKED text — a 200 with masked content, never a
+      // 4xx oracle distinguishing entitlement from content.
+    }
+
     res.json({
       text,
       length: text.length,
@@ -679,6 +832,74 @@ router.post("/bulk-delete", requirePermission("document:delete"), async (req: Re
 
     const deleted = toDelete.map((d) => d.id);
     res.json({ deleted, failed });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+// POST /api/documents/:documentId/cancel — cooperative per-document
+// cancellation while ingestion is running (quick 260918-p3h, T-P3H-02).
+//
+// Access posture mirrors the DELETE route above (CR-01 D-04): findFirst
+// deletedAt:null + the workspace-access OR filter applied to ALL users
+// including admins. Permission: document:write (NOT document:delete — the
+// cancel is a write-shaped lifecycle action available to editors, matching
+// the PEND-01 rationale for the draft DELETE route).
+//
+// Cooperative: the endpoint flips the row to "cancelled"(+cancelledAt); the
+// collector observes it on its next status poll between work units and
+// terminates. The race guards (PUT callback + forwardToCollector) keep the
+// row cancelled when a completing ingest races the flip (T-P3H-04).
+router.post("/:documentId/cancel", requirePermission("document:write"), async (req: Request, res: Response) => {
+  try {
+    const document = await prisma.document.findFirst({
+      where: withSoftDelete({ id: req.params.documentId as string, deletedAt: null }),
+      select: { id: true, status: true, workspaceId: true, workspace: { include: { project: true } } },
+    });
+    if (!document) {
+      res.status(404).json({ error: "Document not found" });
+      return;
+    }
+
+    // CR-01 D-04: workspace access check applies to ALL users including
+    // admins — same gate as the DELETE route above (IDOR posture T-P3H-02).
+    const isProjectOwner = document.workspace?.project?.createdBy === req.userId;
+    const hasWorkspaceAccess = await prisma.workspaceAccess.findFirst({
+      where: { userId: req.userId!, workspaceId: document.workspaceId },
+    });
+    const hasProjectAccess = await prisma.projectAccess.findFirst({
+      where: { userId: req.userId!, projectId: document.workspace?.projectId },
+    });
+    if (!isProjectOwner && !hasWorkspaceAccess && !hasProjectAccess) {
+      res.status(403).json({ error: "Access denied to this document" });
+      return;
+    }
+
+    // Only in-flight rows are cancellable — completed/failed/cancelled rows
+    // get a 409 so a stale UI cannot flip a settled row.
+    if (document.status !== "pending" && document.status !== "processing") {
+      res.status(409).json({ error: "Document is not processing" });
+      return;
+    }
+
+    await prisma.document.update({
+      where: { id: document.id },
+      data: {
+        status: "cancelled",
+        cancelledAt: new Date(),
+        statusMessage: "Cancelled by user",
+      },
+    });
+
+    // T-P3H-06: who cancelled? — same logEvent discipline as DELETE.
+    await logEvent("document", document.id, "document.cancelled", req.userId!);
+
+    logger.info("[documents] Document cancelled by user", {
+      documentId: document.id,
+      userId: req.userId,
+    });
+    res.json({ id: document.id, status: "cancelled" });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });
@@ -853,6 +1074,7 @@ async function extractPdfTextFirstPass(pdfPath: string): Promise<string> {
       data: new Uint8Array(pdfBuffer),
       disableAutoFetch: true,
       disableStream: true,
+      standardFontDataUrl: getPdfStandardFontDataUrl(),
     })
     .promise;
   return runPdfPrecheck(pdfDoc);
@@ -871,6 +1093,7 @@ async function extractPdfTextFirstPassFromBuffer(pdfBuffer: Buffer): Promise<str
       data: new Uint8Array(pdfBuffer),
       disableAutoFetch: true,
       disableStream: true,
+      standardFontDataUrl: getPdfStandardFontDataUrl(),
     })
     .promise;
   return runPdfPrecheck(pdfDoc);
@@ -978,11 +1201,20 @@ export async function forwardToCollector(
   let uploadFilePath = filePath;
 
   try {
-    // Update status to processing
-    await prisma.document.update({
-      where: { id: documentId },
+    // Update status to processing — GUARDED (quick 260918-p3h, T-P3H-04 arm
+    // a): updateMany keyed on the still-"pending" status. When count === 0
+    // the row is already cancelled (or deleted) — a cancel-before-dispatch
+    // race — so log and RETURN without dispatching to the collector.
+    const processingClaim = await prisma.document.updateMany({
+      where: { id: documentId, status: "pending" },
       data: { status: "processing" },
     });
+    if (processingClaim.count === 0) {
+      logger.info(
+        `[documents] Skipping collector dispatch: document ${documentId} is no longer pending (cancelled or deleted)`,
+      );
+      return;
+    }
 
     let uploadOriginalName = originalName;
     let uploadDocType = docType;
@@ -1122,16 +1354,62 @@ export async function forwardToCollector(
       formData.append("ocrSkipped", ocrSkipped);
     }
 
+    // quick 260918-gxs + 260918-p3h (D-1): the ingest wait cap is an
+    // operator OPT-IN. UNSET = no cap (the dispatch runs unbounded — large
+    // local CPU embeddings legitimately exceed any fixed limit; the cancel
+    // endpoints are the relief valve). When the operator DOES configure the
+    // key, the AbortController + the operator-actionable timeout message and
+    // the k8n connection diagnostics keep working exactly as before.
+    const ingestTimeoutMs = env.COLLECTOR_INGEST_TIMEOUT_MS;
+    const capConfigured = typeof ingestTimeoutMs === "number" && ingestTimeoutMs > 0;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 300_000);
+    const timeoutId = capConfigured ? setTimeout(() => controller.abort(), ingestTimeoutMs) : null;
 
-    const response = await fetch(`${env.COLLECTOR_URL}/api/ingest`, {
-      method: "POST",
-      body: formData,
-      signal: controller.signal,
-      headers: { "X-Collector-Secret": env.COLLECTOR_SECRET },
-    });
-    clearTimeout(timeoutId);
+    // globalThis.Response: the file-scope `Response` is Express's handler type
+    let response: globalThis.Response;
+    try {
+      logger.info(
+        `[documents] Dispatching to collector: id=${documentId} name="${originalName}" bytes=${fileBuffer.length} timeoutMs=${capConfigured ? ingestTimeoutMs : "unlimited"}`,
+      );
+      const dispatchInit = {
+        method: "POST",
+        body: formData,
+        ...(capConfigured ? { signal: controller.signal } : {}),
+        headers: { "X-Collector-Secret": env.COLLECTOR_SECRET },
+        // quick 260918-j9m: bypass undici's global 300s headersTimeout — the
+        // collector answers only after the full parse→chunk→embed pipeline,
+        // which legitimately exceeds 5 min for large local-embedded PDFs.
+        // D-1's "unbounded unless COLLECTOR_INGEST_TIMEOUT_MS" intent must
+        // hold at the transport layer too; keepAlive still surfaces a dead
+        // collector as ECONNRESET/UND_ERR_SOCKET.
+        dispatcher: collectorDispatchAgent,
+      } as unknown as Parameters<typeof fetch>[1];
+      response = await fetch(`${env.COLLECTOR_URL}/api/ingest`, dispatchInit);
+    } catch (fetchErr: unknown) {
+      if (controller.signal.aborted) {
+        const cappedTimeoutMs = ingestTimeoutMs as number;
+        throw new Error(
+          `Collector ingest timed out after ${Math.round(cappedTimeoutMs / 1000)}s — raise COLLECTOR_INGEST_TIMEOUT_MS or retry the document from its upload draft`,
+          { cause: fetchErr },
+        );
+      }
+      // quick 260918-k8n: undici surfaces connection-level failures as a
+      // bare TypeError("fetch failed") — the real reason (ECONNREFUSED,
+      // ENOTFOUND, …) rides the `cause` chain this log line used to drop.
+      // Enrich the server log with the cause + a COLLECTOR_URL reachability
+      // hint (mirrors the timeout-hint style above); the rethrow below stays
+      // untouched so the outer catch persists the SAME raw message into
+      // statusMessage as before (no URL/secret reaches the user).
+      const causeDetail = describeFetchFailureCause(fetchErr);
+      if (causeDetail) {
+        logger.error(
+          `[documents] Collector fetch failed before response (connection error: ${causeDetail}) — check the collector service is running and that COLLECTOR_URL (${env.COLLECTOR_URL}) is reachable from this container`,
+        );
+      }
+      throw fetchErr;
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    }
 
     // Clean up temp OCR text file if we created one
     if (uploadFilePath !== filePath) {
@@ -1148,7 +1426,20 @@ export async function forwardToCollector(
     const result = (await response.json()) as {
       chunkCount?: number;
       chunks?: { chunkIndex: number; chunkText: string; paragraph?: number; charStart?: number; charEnd?: number }[];
+      status?: string;
     };
+
+    // quick 260918-p3h (T-P3H-04 arm b): the collector returns
+    // { status: "cancelled" } when the ingest was aborted mid-flight. Return
+    // early — NO completed write, NO FTS chunk writes (the collector already
+    // skipped the vector write; the row stays "cancelled").
+    if (result.status === "cancelled") {
+      logger.info(
+        `[documents] Collector reports document ${documentId} was cancelled mid-ingest — skipping completion write`,
+      );
+      return;
+    }
+
     const chunkCount = result.chunkCount ?? 0;
 
     // Save chunks to PostgreSQL for FTS (full-text search via tsvector)
@@ -1213,9 +1504,66 @@ export async function forwardToCollector(
       where: { id: documentId },
       data: { status: "completed", chunkCount },
     });
+
+    // Phase 192 (D-01): async post-ingest DLP scan — enqueue AFTER completion
+    // so upload latency stays bounded; the scan consumes the extracted text +
+    // collector chunks. The workspace toggle is read HERE (first gate; the
+    // consumer re-reads it per job). Fire-and-forget with .catch — an enqueue
+    // failure NEVER fails the ingest response (the document is complete
+    // regardless). Toggle off (default) → no enqueue, no DLP surface.
+    try {
+      const ws = await prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { dlpDocumentScanEnabled: true },
+      });
+      if (ws?.dlpDocumentScanEnabled) {
+        const { enqueueDlpScan } = await import("../services/dlpDocumentScanJob");
+        const docRow = await prisma.document.findUnique({
+          where: { id: documentId },
+          select: { organizationId: true },
+        });
+        if (docRow) {
+          void enqueueDlpScan(documentId, workspaceId, docRow.organizationId).catch(
+            (enqueueErr: unknown) => {
+              logger.error("[documents] DLP scan enqueue failed (non-blocking)", {
+                documentId,
+                error: enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr),
+              });
+            },
+          );
+        }
+      }
+    } catch (dlpHookErr: unknown) {
+      // Non-blocking by construction: any toggle-read failure only costs the
+      // scan for this document — the ingest response is already written.
+      logger.error("[documents] DLP enqueue hook failed (non-blocking)", {
+        documentId,
+        error: dlpHookErr instanceof Error ? dlpHookErr.message : String(dlpHookErr),
+      });
+    }
   } catch (err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
     logger.error("[documents] Collector processing failed:", { error: message });
+
+    // quick 260918-p3h (T-P3H-04 arm c, race guard): re-read the row BEFORE
+    // the failed write — if a user cancellation flipped it while the dispatch
+    // was in flight, preserve "cancelled" (no failed write, no statusMessage
+    // overwrite). Everything else keeps the exact legacy semantics.
+    try {
+      const currentStatus = await prisma.document.findUnique({
+        where: { id: documentId },
+        select: { status: true },
+      });
+      if (currentStatus?.status === "cancelled") {
+        logger.info(
+          `[documents] Failure path suppressed: document ${documentId} already cancelled — preserving cancelled status`,
+        );
+        return;
+      }
+    } catch (readErr: unknown) {
+      const readMessage = readErr instanceof Error ? readErr.message : String(readErr);
+      logger.warn(`[documents] Could not re-read document status before failed write: ${readMessage}`);
+    }
 
     // Update status to failed
     await prisma.document.update({

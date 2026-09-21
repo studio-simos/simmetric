@@ -115,6 +115,16 @@ export interface WidgetFormValues {
   // default of 5 messages/day prod / 50/day dev). String field (RHF numeric
   // inputs hold strings; the payload branch converts).
   sessionLimitPerDay: string;
+  // 260916-pwd: per-widget burst rate limit — same RHF numeric-input string
+  // pattern as sessionLimitPerDay ("" = unset → global default of 30/min prod
+  // / 200/min dev; the payload branch converts).
+  rateLimitPerMinute: string;
+  // 260916-pwd: per-limit "no limits" (unlimited) checkbox state — distinct
+  // from the string field so "" can still mean global default. Checked → the
+  // payload sends 0 (unlimited); off + empty string → null (global default);
+  // off + positive int → custom limit.
+  sessionLimitUnlimited: boolean;
+  rateLimitUnlimited: boolean;
   // Localization (D-03 / I18N-01): the widget default language + per-locale
   // chat texts. localizedTexts mirrors the string-keyed zod record
   // (widgetLocalizedTextsSchema) exactly — NOT a fixed Record<WidgetLocale, ...>
@@ -151,6 +161,24 @@ export interface WidgetFormValues {
   // server values: provider UUID + model NAME). "" = not configured → the
   // payload branch sends null for BOTH fields (clears the pin).
   responseModelSelect: string;
+  // 260917-mz6: per-widget grounding prompt ("" = the built-in knowledge-
+  // grounding default — the payload sends null to clear to the default).
+  systemPrompt: string;
+  // 260917-mz6: contact options shown at the daily limit (five string fields;
+  // payload builds the blob when any is non-empty, else null = not configured).
+  contactFormUrl: string;
+  contactBookingUrl: string;
+  contactEmail: string;
+  contactCustomUrl: string;
+  contactCustomLabel: string;
+  // 260917-mz6: lead-capture timing moment + timeout seconds ("" = unset;
+  // the payload parses the int only when timing === "timeout").
+  leadCaptureTiming: "start" | "end" | "timeout";
+  leadCaptureTimeoutSeconds: string;
+  // 260917-qoh: per-widget privacy policy URL ("" = not configured; the
+  // payload sends null for "" — the nullable write contract mirroring
+  // systemPrompt/contactConfig in the same payload block).
+  privacyUrl: string;
 }
 
 export default function WidgetForm({ widget, tab, onTabChange, onSave, onDirtyChange }: WidgetFormProps) {
@@ -185,6 +213,11 @@ export default function WidgetForm({ widget, tab, onTabChange, onSave, onDirtyCh
   );
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
+  // 260917-mz6: preview reload-on-save key — bumped (Date.now()) after BOTH
+  // save branches succeed so WidgetPreviewPane refetches the iframe with
+  // fresh config (the loader iframe route is per-request fresh; PUT already
+  // cache-busts). 0 = never bumped → the &r= param is omitted (Pitfall 3).
+  const [previewReloadKey, setPreviewReloadKey] = useState(0);
 
   const form = useForm<WidgetFormValues>({
     defaultValues: {
@@ -210,7 +243,20 @@ export default function WidgetForm({ widget, tab, onTabChange, onSave, onDirtyCh
       exitIntentCooldownMin: widget?.exitIntentCooldownMs ? String(Math.round(widget.exitIntentCooldownMs / 60000)) : "30",
       leadCaptureEnabled: widget?.leadCaptureEnabled ?? false,
       leadCapturePrompt: widget?.leadCapturePrompt || "",
-      sessionLimitPerDay: widget?.sessionLimitPerDay?.toString() || "",
+      // 260916-pwd tri-state seeding (null = global default, 0 = unlimited,
+      // positive int = custom limit). 0 is falsy — use the explicit
+      // != null && > 0 form (NOT ?.toString() || "", which would map 0 to ""
+      // and silently drop the unlimited state; the checkbox carries it).
+      sessionLimitUnlimited: widget?.sessionLimitPerDay === 0,
+      sessionLimitPerDay:
+        widget?.sessionLimitPerDay != null && widget.sessionLimitPerDay > 0
+          ? widget.sessionLimitPerDay.toString()
+          : "",
+      rateLimitUnlimited: widget?.rateLimitPerMinute === 0,
+      rateLimitPerMinute:
+        widget?.rateLimitPerMinute != null && widget.rateLimitPerMinute > 0
+          ? widget.rateLimitPerMinute.toString()
+          : "",
       allowedOrigins: Array.isArray(widget?.allowedOrigins)
         ? widget.allowedOrigins.join("\n")
         : (typeof widget?.allowedOrigins === "string" ? safeJsonParse(widget.allowedOrigins)?.join("\n") || "" : ""),
@@ -236,6 +282,19 @@ export default function WidgetForm({ widget, tab, onTabChange, onSave, onDirtyCh
       responseModelSelect: widget?.responseProviderId && widget?.responseModel
         ? `${widget.responseProviderId}::${widget.responseModel}`
         : "",
+      // 260917-mz6: grounding prompt seeds from the widget row ("" = the
+      // built-in default), contact options from the blob ?? {}, timing from
+      // the row (default "end"), timeout from the row ("" = unset).
+      systemPrompt: widget?.systemPrompt || "",
+      contactFormUrl: widget?.contactConfig?.formUrl || "",
+      contactBookingUrl: widget?.contactConfig?.bookingUrl || "",
+      contactEmail: widget?.contactConfig?.email || "",
+      contactCustomUrl: widget?.contactConfig?.customUrl || "",
+      contactCustomLabel: widget?.contactConfig?.customLabel || "",
+      leadCaptureTiming: (widget?.leadCaptureTiming as "start" | "end" | "timeout") || "end",
+      leadCaptureTimeoutSeconds: widget?.leadCaptureTimeoutSeconds?.toString() || "",
+      // 260917-qoh: per-widget privacy URL ("" = not configured → payload null).
+      privacyUrl: widget?.privacyUrl || "",
     },
   });
 
@@ -311,10 +370,21 @@ export default function WidgetForm({ widget, tab, onTabChange, onSave, onDirtyCh
       formData.leadCaptureEnabled = data.leadCaptureEnabled;
       formData.leadCapturePrompt = data.leadCaptureEnabled ? (data.leadCapturePrompt.trim() || null) : null;
 
-      // 151-02 (G-151-1b): per-widget daily MESSAGE limit — empty → null
-      // (global default); positive int otherwise. Nullable write contract.
+      // 260916-pwd tri-state payload conversion for BOTH widget chat limits
+      // (null = global default, 0 = unlimited "no limits", positive int =
+      // custom limit). The unlimited checkbox wins; an empty/off field sends
+      // null (global default — backward compatible); a filled field sends the
+      // parsed positive int (the min={1} input keeps non-positive values out).
+      // sessionLimitPerDay branch (151-02, G-151-1b):
       const sessionLimit = parseInt(data.sessionLimitPerDay, 10);
-      formData.sessionLimitPerDay = data.sessionLimitPerDay.trim() && sessionLimit > 0 ? sessionLimit : null;
+      formData.sessionLimitPerDay = data.sessionLimitUnlimited
+        ? 0
+        : data.sessionLimitPerDay.trim() && sessionLimit > 0 ? sessionLimit : null;
+      // rateLimitPerMinute branch (mirrors the above):
+      const rateLimit = parseInt(data.rateLimitPerMinute, 10);
+      formData.rateLimitPerMinute = data.rateLimitUnlimited
+        ? 0
+        : data.rateLimitPerMinute.trim() && rateLimit > 0 ? rateLimit : null;
 
       // CORS allowed origins (converts newline-separated string to JSON-encoded array)
       formData.allowedOrigins = data.allowedOrigins.trim()
@@ -434,6 +504,40 @@ export default function WidgetForm({ widget, tab, onTabChange, onSave, onDirtyCh
       formData.responseProviderId = pId || null;
       formData.responseModel = mName || null;
 
+      // 260917-mz6: per-widget grounding prompt — null clears to the
+      // module-private grounding floor (resolveWidgetSystemPrompt
+      // server-side); "" from an empty textarea → null. Every widget carries
+      // its OWN prompt — no global default constant exists server-side.
+      formData.systemPrompt = data.systemPrompt.trim() || null;
+
+      // 260917-qoh: per-widget privacy URL — the nullable write contract
+      // mirroring systemPrompt/contactConfig: the trimmed value persists,
+      // "" clears (null → SQL NULL via the server spread). The shared
+      // schema's isHttpUrl refine rejects javascript:/data: server-side
+      // (no client-side duplicate gate needed; the payload passes the
+      // trimmed value and the server 400s a bad scheme).
+      formData.privacyUrl = data.privacyUrl.trim() || null;
+
+      // 260917-mz6: contact options blob — null when EVERY field is empty
+      // (not configured → SQL NULL), else the validated blob (the shared
+      // widgetContactOptionsSchema refines URL/email safety server-side).
+      const contactBlob = {
+        ...(data.contactFormUrl.trim() ? { formUrl: data.contactFormUrl.trim() } : {}),
+        ...(data.contactBookingUrl.trim() ? { bookingUrl: data.contactBookingUrl.trim() } : {}),
+        ...(data.contactEmail.trim() ? { email: data.contactEmail.trim() } : {}),
+        ...(data.contactCustomUrl.trim() ? { customUrl: data.contactCustomUrl.trim() } : {}),
+        ...(data.contactCustomLabel.trim() ? { customLabel: data.contactCustomLabel.trim() } : {}),
+      };
+      formData.contactConfig = Object.keys(contactBlob).length > 0 ? contactBlob : null;
+
+      // 260917-mz6: lead timing + timeout — the timeout parses to int ONLY
+      // when timing === "timeout" (else null; the schema bounds 5..86400).
+      formData.leadCaptureTiming = data.leadCaptureTiming;
+      formData.leadCaptureTimeoutSeconds =
+        data.leadCaptureTiming === "timeout" && data.leadCaptureTimeoutSeconds.trim()
+          ? parseInt(data.leadCaptureTimeoutSeconds, 10) || null
+          : null;
+
       let createdId: string | undefined;
       if (isEdit && widget) {
         await updateWidget.mutateAsync({ id: widget.id, data: formData });
@@ -451,6 +555,11 @@ export default function WidgetForm({ widget, tab, onTabChange, onSave, onDirtyCh
       // Reset dirty state on save-success only (research Anti-Pattern:
       // defaultValues are read once at mount — never reset on refetch).
       form.reset(form.getValues());
+
+      // 260917-mz6: bump the preview reload key after BOTH save branches —
+      // the settings preview iframe reloads with the saved config without a
+      // manual page reload (no ctrl+f5).
+      setPreviewReloadKey(Date.now());
 
       onSave(createdId);
     } catch (err: unknown) {
@@ -659,6 +768,37 @@ export default function WidgetForm({ widget, tab, onTabChange, onSave, onDirtyCh
               />
             </div>
 
+            {/* 260917-mz6: Chat behavior section — the PER-WIDGET grounding
+                system prompt (260917-qoh: no global default constant exists
+                server-side anymore — every widget has its own; empty keeps
+                the module-private knowledge-grounding fallback). */}
+            <div className="border-t border-border pt-6">
+              <h4 className="text-sm font-semibold text-foreground mb-3">
+                {t("settings.widget.chatBehaviorSection")}
+              </h4>
+              <FormField
+                control={form.control}
+                name="systemPrompt"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("settings.widget.systemPromptLabel")}</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder={t("settings.widget.systemPromptPlaceholder")}
+                        className="min-h-[100px] resize-y"
+                        maxLength={4000}
+                        {...field}
+                      />
+                    </FormControl>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {t("settings.widget.systemPromptHint")}
+                    </p>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
             {/* 260831-hgy: Response Model section — per-widget LLM pin.
                 Composite value "${providerId}::${model}"; "" = workspace
                 default (pin cleared). Options grouped by provider (mirrors
@@ -837,6 +977,9 @@ export default function WidgetForm({ widget, tab, onTabChange, onSave, onDirtyCh
                           ? form.watch("autoOpenDelay") || undefined
                           : undefined
                       }
+                      // 260917-mz6: bumped on save → the iframe src gains &r=
+                      // and remounts, fetching the saved config fresh.
+                      reloadKey={previewReloadKey}
                     />
                   </div>
                 </div>
@@ -988,40 +1131,101 @@ export default function WidgetForm({ widget, tab, onTabChange, onSave, onDirtyCh
               </div>
             )}
 
-            {/* Limits section (151-02, G-151-1b): per-widget daily MESSAGE
-                limit — enforced by the widget service on the send path
-                (widgetDailyMessageLimiter, 24h per-visitor window). Empty =
-                global default (5 messages/day prod, 50/day dev). */}
-            {isEdit && (
-              <div className="border-t border-border pt-6">
-                <h4 className="text-sm font-semibold text-foreground mb-3">
-                  {t("settings.widget.limitsSection")}
-                </h4>
-                <div className="space-y-4">
-                  <FormField
-                    control={form.control}
-                    name="sessionLimitPerDay"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t("settings.widget.sessionLimitPerDay")}</FormLabel>
-                        <FormControl>
-                          <Input
-                            type="number"
-                            min={1}
-                            placeholder={t("settings.widget.sessionLimitPerDayPlaceholder")}
-                            {...field}
+            {/* Limits section (151-02, G-151-1b; 260916-pwd): BOTH per-widget
+                chat limits — daily messages per visitor (widgetDailyMessageLimiter,
+                24h window) and burst requests per minute (widgetChatLimiter,
+                1-min window), each with a "No limit" checkbox. Tri-state
+                convention: empty + unchecked = global default (5/day prod,
+                50/day dev; 30/min prod, 200/min dev), checkbox = unlimited
+                (payload 0 → WIDGET_UNLIMITED_MAX bypass), filled = custom
+                limit. Renders on create AND edit. */}
+            <div className="border-t border-border pt-6">
+              <h4 className="text-sm font-semibold text-foreground mb-3">
+                {t("settings.widget.limitsSection")}
+              </h4>
+              <div className="space-y-4">
+                <FormField
+                  control={form.control}
+                  name="sessionLimitPerDay"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("settings.widget.sessionLimitPerDay")}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          min={1}
+                          placeholder={t("settings.widget.sessionLimitPerDayPlaceholder")}
+                          disabled={form.watch("sessionLimitUnlimited")}
+                          {...field}
+                        />
+                      </FormControl>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {t("settings.widget.sessionLimitPerDayHint")}
+                      </p>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="sessionLimitUnlimited"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormControl>
+                        <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
                           />
-                        </FormControl>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {t("settings.widget.sessionLimitPerDayHint")}
-                        </p>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
+                          {t("settings.widget.unlimited")}
+                        </label>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="rateLimitPerMinute"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("settings.widget.rateLimitPerMinute")}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          min={1}
+                          placeholder={t("settings.widget.rateLimitPerMinutePlaceholder")}
+                          disabled={form.watch("rateLimitUnlimited")}
+                          {...field}
+                        />
+                      </FormControl>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {t("settings.widget.rateLimitPerMinuteHint")}
+                      </p>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="rateLimitUnlimited"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormControl>
+                        <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                          />
+                          {t("settings.widget.unlimited")}
+                        </label>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
               </div>
-            )}
+            </div>
 
             {/* Lead Capture section */}
             {isEdit && (
@@ -1069,6 +1273,195 @@ export default function WidgetForm({ widget, tab, onTabChange, onSave, onDirtyCh
                         </FormItem>
                       )}
                     />
+                  )}
+
+                  {/* 260917-mz6: lead-capture TIMING — the moment the email
+                      card appears (start / end / timeout). Inside the
+                      EXISTING edit-gated Lead Capture section, rendered
+                      unconditionally (the contact funnel is configurable
+                      even before the toggle is flipped). */}
+                  {(
+                    <FormField
+                      control={form.control}
+                      name="leadCaptureTiming"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t("settings.widget.leadTimingLabel")}</FormLabel>
+                          <FormControl>
+                            <Select
+                              value={field.value}
+                              onValueChange={(value) => field.onChange(value)}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="start">{t("settings.widget.leadTimingStart")}</SelectItem>
+                                <SelectItem value="end">{t("settings.widget.leadTimingEnd")}</SelectItem>
+                                <SelectItem value="timeout">{t("settings.widget.leadTimingTimeout")}</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
+                  {/* 260917-mz6: timeout seconds — shown ONLY when timing
+                      is "timeout" (bounds 5..86400 per the shared schema). */}
+                  {form.watch("leadCaptureTiming") === "timeout" && (
+                    <FormField
+                      control={form.control}
+                      name="leadCaptureTimeoutSeconds"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t("settings.widget.leadTimeoutSecondsLabel")}</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min={5}
+                              max={86400}
+                              placeholder="30"
+                              {...field}
+                            />
+                          </FormControl>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {t("settings.widget.leadTimeoutSecondsHint")}
+                          </p>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
+                  {/* 260917-qoh: per-widget privacy URL — shown to visitors
+                      on the email-sharing consent checkbox; opens in a new
+                      tab host-side. Independent of the lead-capture toggle
+                      (the consent funnel is configurable even before the
+                      toggle is flipped). */}
+                  {(
+                    <FormField
+                      control={form.control}
+                      name="privacyUrl"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t("settings.widget.privacyUrlLabel")}</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="url"
+                              placeholder={t("settings.widget.privacyUrlPlaceholder")}
+                              {...field}
+                            />
+                          </FormControl>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {t("settings.widget.privacyUrlHint")}
+                          </p>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
+                  {/* 260917-mz6: Contact options sub-block — the five inputs
+                      for the limit-reached contact card. URL inputs are
+                      type="url", the address type="email". Independent of
+                      the lead-capture toggle (the card shows at the daily
+                      limit regardless). */}
+                  {(
+                    <div className="border-t border-border pt-4">
+                      <h5 className="text-sm font-medium text-foreground mb-3">
+                        {t("settings.widget.contactOptionsSection")}
+                      </h5>
+                      <div className="space-y-4">
+                        <FormField
+                          control={form.control}
+                          name="contactFormUrl"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t("settings.widget.contactFormUrlLabel")}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="url"
+                                  placeholder={t("settings.widget.contactFormUrlPlaceholder")}
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="contactBookingUrl"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t("settings.widget.contactBookingUrlLabel")}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="url"
+                                  placeholder={t("settings.widget.contactBookingUrlPlaceholder")}
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="contactEmail"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t("settings.widget.contactEmailLabel")}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="email"
+                                  placeholder={t("settings.widget.contactEmailPlaceholder")}
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="contactCustomUrl"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t("settings.widget.contactCustomUrlLabel")}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="url"
+                                  placeholder={t("settings.widget.contactCustomUrlPlaceholder")}
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="contactCustomLabel"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t("settings.widget.contactCustomLabelLabel")}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="text"
+                                  maxLength={200}
+                                  placeholder={t("settings.widget.contactCustomLabelPlaceholder")}
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>

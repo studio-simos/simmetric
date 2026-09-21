@@ -96,10 +96,12 @@ describe("seedBootstrapAdmin", () => {
     // The wipe: user_roles is EMPTY (the exact symptom observed 2026-09-05/07/08).
     (prisma.userRole.count as jest.Mock).mockResolvedValue(0);
     // The well-known admin account SURVIVED the wipe.
+    // G-193-2: the fixture is schema-valid — the User model has NO deletedAt
+    // column (soft deletes live on Organization/OrganizationMember/Workspace/
+    // etc., not User), so the resolved row carries id + username only.
     (prisma.user.findFirst as jest.Mock).mockResolvedValue({
       id: "51233792-ac08-4729-a4d2-5b0404669d4e",
       username: "admin",
-      deletedAt: null,
     });
     (prisma.userRole.create as jest.Mock).mockResolvedValue({});
     (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue(null);
@@ -116,6 +118,32 @@ describe("seedBootstrapAdmin", () => {
     expect(prisma.user.create).not.toHaveBeenCalled();
     expect(prisma.userRole.create).toHaveBeenCalledWith({
       data: { userId: "51233792-ac08-4729-a4d2-5b0404669d4e", roleId: ADMIN_ROLE.id },
+    });
+  });
+
+  it("user_roles-wipe self-heal: the lookup filter is schema-valid — EXACTLY { where: { username: 'admin' } } with no second key (G-193-2 regression pin)", async () => {
+    (prisma.role.findFirst as jest.Mock).mockResolvedValue(ADMIN_ROLE);
+    (prisma.userRole.count as jest.Mock).mockResolvedValue(0);
+    (prisma.user.findFirst as jest.Mock).mockResolvedValue({
+      id: "51233792-ac08-4729-a4d2-5b0404669d4e",
+      username: "admin",
+    });
+    (prisma.userRole.create as jest.Mock).mockResolvedValue({});
+    (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.organization.findFirst as jest.Mock).mockResolvedValue({
+      id: "00000000-0000-0000-0000-000000000000",
+    });
+    (prisma.organizationMember.create as jest.Mock).mockResolvedValue({});
+
+    await seedBootstrapAdmin();
+
+    // Exact-shape assertion: toHaveBeenCalledWith is deep equality, so any
+    // reintroduced second key (e.g. the phantom `deletedAt: null` that
+    // crashed every fresh install with "Unknown argument deletedAt")
+    // FAILS this pin. The generated Prisma client rejects unknown User
+    // fields at runtime — the where shape must stay schema-valid.
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: { username: "admin" },
     });
   });
 

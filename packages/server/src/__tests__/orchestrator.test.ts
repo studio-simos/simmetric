@@ -375,9 +375,16 @@ describe("Orchestrator single-call + save-in-finally + buffered-replay", () => {
     });
 
     expect(streamLLMMock).toHaveBeenCalledTimes(1);
-    // callLLM (axios.post) is NOT used in the ReAct loop — only generatePlan
-    // (plan mode) uses it, and plan mode is off here.
-    expect(axiosPostMock).not.toHaveBeenCalled();
+    // callLLM (planRunner's axios.post to provider base URLs) is NOT used in
+    // the ReAct loop — only generatePlan (plan mode) uses it, and plan mode
+    // is off here. WR-03 (Phase 187 fix): the iteration-1 memory-retrieval
+    // hook now actually fires and queries the collector via the SAME axios
+    // mock (`/api/ingest/query`) — exclude that legitimate call; the pinned
+    // invariant is "no LLM-provider HTTP call in the loop".
+    const llmProviderCalls = axiosPostMock.mock.calls.filter(
+      ([url]) => !String(url).includes("/api/ingest/query"),
+    );
+    expect(llmProviderCalls).toHaveLength(0);
   });
 
   it("save token usage on success — workspaceTokenUsage.create called with totalTokens after runAgent completes", async () => {
@@ -459,8 +466,14 @@ describe("Orchestrator single-call + save-in-finally + buffered-replay", () => {
     });
 
     // 2 iterations → 2 streamLLM calls. No callLLM in the loop.
+    // WR-03: exclude the now-legitimate iteration-1 memory-retrieval collector
+    // query (same axios mock, /api/ingest/query URL) — the pinned invariant
+    // is "no LLM-provider HTTP call in the loop".
     expect(streamLLMMock).toHaveBeenCalledTimes(2);
-    expect(axiosPostMock).not.toHaveBeenCalled();
+    const llmProviderCalls = axiosPostMock.mock.calls.filter(
+      ([url]) => !String(url).includes("/api/ingest/query"),
+    );
+    expect(llmProviderCalls).toHaveLength(0);
   });
 
   it("D-02 buffered-replay: tool-call iteration does not call onToken, final-answer iteration replays buffer token-by-token", async () => {

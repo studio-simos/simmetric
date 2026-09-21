@@ -50,7 +50,7 @@ const renderWithProvider = (ui: React.ReactElement) => {
 // Mock i18next
 jest.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string, defaultValue?: string) => {
+    t: (key: string, defaultValue?: string, opts?: Record<string, string>) => {
       const map: Record<string, string> = {
         "chat.placeholder": "Type a message...",
         "chat.send": "Send",
@@ -59,8 +59,16 @@ jest.mock("react-i18next", () => ({
         "chat.modelSelector.unavailable": "Failed to update model",
         "chat.readAloud": "Read Aloud",
         "chat.microphone": "Microphone",
+        "chat.skillsPalette.paramError": "Could not read parameters for /{{slug}}. Try /{{slug}} key=value.",
+        "chat.cancel": "Cancel",
       };
-      return map[key] || defaultValue || key;
+      let out = map[key] || defaultValue || key;
+      if (opts) {
+        for (const [k, v] of Object.entries(opts)) {
+          out = out.replace(new RegExp(`\\{\\{${k}\\}\\}`, "g"), v);
+        }
+      }
+      return out;
     },
     i18n: { language: "en", changeLanguage: jest.fn() },
   }),
@@ -159,8 +167,62 @@ const mockAvailableModels = [
   { id: "m3", name: "claude-3-opus", displayName: "Claude 3 Opus", providerId: "p3", providerName: "Anthropic", providerType: "anthropic", isDefault: false, isLocal: false, capabilities: ["smartest"] },
 ];
 
+// Phase 190 (SKIL-02): the /slug parser reads useSkills (custom ∪ accessible).
+const mockSkills: { builtin: unknown[]; custom: unknown[]; accessible: unknown[] } = {
+  builtin: [],
+  custom: [
+    {
+      id: "sk-1",
+      slug: "translate",
+      name: "custom_translate",
+      description: "Translate text",
+      skillMode: "prompt",
+      scope: "personal",
+      isEnabled: true,
+      workspaceId: null,
+      createdBy: "u1",
+      config: { defaultParams: {} },
+      inputSchema: { properties: { input: { type: "string" } }, required: ["input"] },
+    },
+    // A disabled row must NOT be invocable (server resolver filters isEnabled).
+    {
+      id: "sk-2",
+      slug: "disabled_skill",
+      name: "custom_disabled_skill",
+      description: "Disabled skill",
+      skillMode: "prompt",
+      scope: "personal",
+      isEnabled: false,
+      workspaceId: null,
+      createdBy: "u1",
+      config: { defaultParams: {} },
+      inputSchema: { properties: { input: { type: "string" } }, required: ["input"] },
+    },
+    // CR-01: a row scoped to ANOTHER workspace is never offered — the server
+    // resolver's workspace arm would reject it (dead command in the palette).
+    {
+      id: "sk-3",
+      slug: "other_ws_skill",
+      name: "custom_other_ws_skill",
+      description: "Other workspace skill",
+      skillMode: "prompt",
+      scope: "workspace",
+      isEnabled: true,
+      workspaceId: "ws-999",
+      createdBy: "someone-else",
+      config: { defaultParams: {} },
+      inputSchema: { properties: { input: { type: "string" } }, required: ["input"] },
+    },
+  ],
+  accessible: [],
+};
+
 jest.mock("../queries/useProviders", () => ({
   useAvailableModels: () => ({ data: mockAvailableModels, isLoading: false, error: null }),
+}));
+
+jest.mock("../queries/useSkills", () => ({
+  useSkills: () => ({ data: mockSkills, isLoading: false, error: null }),
 }));
 
 jest.mock("../hooks/useModelAvailability", () => ({
@@ -180,23 +242,34 @@ jest.mock("../hooks/useModelAvailability", () => ({
 }));
 
 // Mock chat store
+// ── Phase 191 archive-draft lifecycle (191-04 WR-02 + IN-02 review fixes) ──
+// The mount-time write effect removes the CURRENT key when the selection is
+// empty (write-before-read ordering), so a same-key draft only reaches the
+// read effect through a KEY TRANSITION. The lifecycle tests below drive the
+// transition via a mutable mockChatState.currentChatId: render with chat-A,
+// then re-render with a different chat id — the read effect for the NEW key
+// runs against the saved draft (IN-02 clamp) and the cleanup arm fires (WR-02).
+const chatNavContext = {
+  currentWorkspaceId: "ws-001",
+  currentChatId: "chat-001" as string | null,
+  setWorkspaceId: jest.fn(),
+  setChatId: jest.fn(),
+  selectionMode: false,
+  setSelectionMode: jest.fn(),
+  selectedMessageIds: new Set<string>(),
+  setSelectedMessageIds: jest.fn(),
+  distillDialogOpen: false,
+  setDistillDialogOpen: jest.fn(),
+  messageCount: 0,
+  setMessageCount: jest.fn(),
+  // quick 260910-e0n — shape-complete: the panel reconciler destructures
+  // setNewChatArchiveId (new-chat transition resets the ephemeral pick).
+  newChatArchiveId: null,
+  setNewChatArchiveId: jest.fn(),
+};
+
 jest.mock("../contexts/ChatContext", () => ({
-  useChatNav: () => ({
-    currentWorkspaceId: "ws-001",
-    currentChatId: null,
-    setWorkspaceId: jest.fn(),
-    setChatId: jest.fn(),
-    // quick 260723-nnr follow-up — lifted chat panel action state. (Tokens
-    // removed in follow-up 3 — lives in RightPanel Token Stats tendina now.)
-    selectionMode: false,
-    setSelectionMode: jest.fn(),
-    selectedMessageIds: new Set<string>(),
-    setSelectedMessageIds: jest.fn(),
-    distillDialogOpen: false,
-    setDistillDialogOpen: jest.fn(),
-    messageCount: 0,
-    setMessageCount: jest.fn(),
-  }),
+  useChatNav: () => chatNavContext,
 }));
 
 // Mock markdown renderer
@@ -312,16 +385,18 @@ describe("ChatPanel /model command", () => {
     fireEvent.change(textarea, { target: { value: "Hello world" } });
     fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
 
-    // 260815-k5s contract: sendMessage takes 5 args — (content, attachedDocId,
-    // attachedDocName, modelOverride, archiveId). This assert previously
-    // pinned the pre-k5s 4-arg shape; expect.anything() at the 4th slot
-    // matched the modelOverride object while the REAL 5th (archiveId
-    // undefined) fell outside the expected arg list. Assert the full shape.
+    // 260815-k5s + Phase 191 contract: sendMessage takes 7 positional args —
+    // (content, attachedDocId, attachedDocName, modelOverride, archiveId,
+    // skillCall, attachedArchiveIds). The two trailing slots (skillCall,
+    // attachedArchiveIds) are additive-optional and stay undefined here
+    // (no slash-skill, no attached archive chips).
     expect(mockSendMessage).toHaveBeenCalledWith(
       "Hello world",
       undefined,
       undefined,
       expect.anything(),
+      undefined,
+      undefined,
       undefined,
     );
   });
@@ -462,5 +537,205 @@ describe("ChatPanel message history (↑/↓)", () => {
     textarea.setSelectionRange?.(9, 9);
     fireEvent.keyDown(textarea, { key: "ArrowUp" });
     expect(textarea).toHaveValue("line one\nline two");
+  });
+});
+
+// ── Phase 190 (SKIL-02): /slug parser arms — appended-only suite (Pitfall 9:
+// every /model assertion above stays untouched and green). ──
+describe("ChatPanel /slug skill parser (Phase 190)", () => {
+  const textareaOf = () => screen.getByPlaceholderText("Type a message...") as HTMLTextAreaElement;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    localStorage.clear();
+  });
+
+  it("sends message + skillCall for a matched skill with positional args (D-09)", () => {
+    renderWithProvider(<ChatPanel />);
+    const textarea = textareaOf();
+    fireEvent.change(textarea, { target: { value: "/translate Ciao mondo" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      "/translate Ciao mondo",
+      undefined,
+      undefined,
+      expect.anything(),
+      undefined,
+      { slug: "translate", params: { input: "Ciao mondo" } },
+      // Phase 191 (D-02): the 7th attachedArchiveIds slot is undefined —
+      // no archive chips attached in this scenario.
+      undefined,
+    );
+    expect(textarea).toHaveValue("");
+  });
+
+  it("shows the paramError notice and does NOT send when required params are missing (D-09)", () => {
+    renderWithProvider(<ChatPanel />);
+    const textarea = textareaOf();
+    fireEvent.change(textarea, { target: { value: "/translate" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("Could not read parameters for /translate. Try /translate key=value.")
+    ).toBeInTheDocument();
+  });
+
+  it("sends an unmatched /word as a normal message with NO skillCall (D-08 never-error)", () => {
+    renderWithProvider(<ChatPanel />);
+    const textarea = textareaOf();
+    fireEvent.change(textarea, { target: { value: "/nonexistent word" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      "/nonexistent word",
+      undefined,
+      undefined,
+      expect.anything(),
+      undefined,
+      // Phase 190/191 trailing slots: skillCall (absent for a plain send)
+      // and attachedArchiveIds (no chips) — both undefined.
+      undefined,
+      undefined,
+    );
+    // The plain-send shape carries the full 7-arg arity (Phase 190 skillCall
+    // + Phase 191 attachedArchiveIds trailing slots, both undefined here).
+    expect(mockSendMessage.mock.calls[0].length).toBe(7);
+    expect(mockSendMessage.mock.calls[0][5]).toBeUndefined(); // skillCall
+    expect(mockSendMessage.mock.calls[0][6]).toBeUndefined(); // attachedArchiveIds
+  });
+
+  it("treats a builtin-style slug as a normal message (match set excludes builtins)", () => {
+    renderWithProvider(<ChatPanel />);
+    const textarea = textareaOf();
+    fireEvent.change(textarea, { target: { value: "/rag_search find stuff" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    expect(mockSendMessage.mock.calls[0].length).toBe(7);
+    expect(mockSendMessage.mock.calls[0][5]).toBeUndefined(); // skillCall
+    expect(mockSendMessage.mock.calls[0][6]).toBeUndefined(); // attachedArchiveIds
+  });
+
+  it("never routes a disabled custom skill (match set filters isEnabled)", () => {
+    renderWithProvider(<ChatPanel />);
+    const textarea = textareaOf();
+    fireEvent.change(textarea, { target: { value: "/disabled_skill hello" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    expect(mockSendMessage.mock.calls[0].length).toBe(7);
+    expect(mockSendMessage.mock.calls[0][5]).toBeUndefined(); // skillCall
+    expect(mockSendMessage.mock.calls[0][6]).toBeUndefined(); // attachedArchiveIds
+  });
+
+  it("CR-01: a row scoped to ANOTHER workspace is never offered (falls through as a normal message)", () => {
+    renderWithProvider(<ChatPanel />);
+    const textarea = textareaOf();
+    // ws-999 ≠ the panel's currentWorkspaceId (ws-001) — the workspace filter
+    // excludes it, so the /slug falls through to a normal message.
+    fireEvent.change(textarea, { target: { value: "/other_ws_skill hello" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    expect(mockSendMessage.mock.calls[0].length).toBe(7);
+    expect(mockSendMessage.mock.calls[0][4]).toBeUndefined(); // archiveId
+    expect(mockSendMessage.mock.calls[0][5]).toBeUndefined(); // skillCall
+    expect(mockSendMessage.mock.calls[0][6]).toBeUndefined(); // attachedArchiveIds
+  });
+
+  it("routes /model first — the /model branch owns inputs starting with /model (Pitfall 9)", () => {
+    renderWithProvider(<ChatPanel />);
+    const textarea = textareaOf();
+    fireEvent.change(textarea, { target: { value: "/model gemma4:latest" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+});
+
+// ── Phase 190 (SKIL-02/D-10): SkillsPalette mount contract in ChatPanel —
+// separate surface (Pitfall 9), insert-not-send selection. ──
+describe("ChatPanel skills palette mount (Phase 190)", () => {
+  const textareaOf = () => screen.getByPlaceholderText("Type a message...") as HTMLTextAreaElement;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    localStorage.clear();
+  });
+
+  it("typing '/' opens the palette and selecting a row inserts '/slug ' WITHOUT sending", () => {
+    renderWithProvider(<ChatPanel />);
+    const textarea = textareaOf();
+
+    // The palette is open while the input starts with "/" (cached data only).
+    fireEvent.change(textarea, { target: { value: "/trans" } });
+    expect(screen.getByTestId("skills-palette-item-translate")).toBeInTheDocument();
+
+    // Selecting inserts "/translate " into the input — sendMessage NOT called.
+    fireEvent.click(screen.getByTestId("skills-palette-item-translate"));
+    expect(textarea).toHaveValue("/translate ");
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+
+  it("the palette does not open for the /model family (separate surfaces — Pitfall 9)", () => {
+    renderWithProvider(<ChatPanel />);
+    const textarea = textareaOf();
+    fireEvent.change(textarea, { target: { value: "/model gpt" } });
+    expect(screen.queryByTestId("skills-palette-item-translate")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("skills-palette-empty")).not.toBeInTheDocument();
+  });
+
+  it("a space after the slug closes the palette (space-disambiguation)", () => {
+    renderWithProvider(<ChatPanel />);
+    const textarea = textareaOf();
+    fireEvent.change(textarea, { target: { value: "/translate" } });
+    expect(screen.getByTestId("skills-palette-item-translate")).toBeInTheDocument();
+    fireEvent.change(textarea, { target: { value: "/translate " } });
+    expect(screen.queryByTestId("skills-palette-item-translate")).not.toBeInTheDocument();
+  });
+
+  it("normal (non-slash) input keeps the palette closed", () => {
+    renderWithProvider(<ChatPanel />);
+    const textarea = textareaOf();
+    fireEvent.change(textarea, { target: { value: "hello world" } });
+    expect(screen.queryByTestId("skills-palette-item-translate")).not.toBeInTheDocument();
+  });
+});
+
+// ── Phase 191 archive-draft lifecycle (191-04 WR-02 review fix) ──
+// An abandoned `attachedArchives:<ws>:new` draft must be cleared once a real
+// chat id is active (the dead endsWith(":new") gate is replaced), so it
+// cannot resurrect its chips — and silently attach them — in the next new
+// chat. The IN-02 tamper clamp is pinned indirectly: any draft that DOES
+// reach the read effect is clamped to 5 before it can reach sendMessage.
+describe("ChatPanel attached-archives draft lifecycle (191-04)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    localStorage.clear();
+    mockChatState.currentChatId = "chat-001";
+  });
+
+  afterEach(() => {
+    mockChatState.currentChatId = "chat-001";
+  });
+
+  it("WR-02: a stale ':new' draft is cleared when a real chat id is active (cannot resurrect in the next new chat)", () => {
+    // Abandoned new-chat draft (user attached X, never sent, clicked a chat).
+    localStorage.setItem("attachedArchives:ws-001:new", JSON.stringify(["abandoned-id"]));
+    renderWithProvider(<ChatPanel />);
+
+    // currentChatId = "chat-001" (real id) → the read effect's cleanup arm
+    // removes the abandoned new-chat draft.
+    expect(localStorage.getItem("attachedArchives:ws-001:new")).toBeNull();
+    // An unrelated chat's draft is untouched by the same arm.
+    localStorage.setItem("attachedArchives:ws-001:chat-999", JSON.stringify(["other-id"]));
+    act(() => {
+      mockChatState.currentChatId = "chat-B";
+    });
+    expect(localStorage.getItem("attachedArchives:ws-001:chat-999")).not.toBeNull();
   });
 });

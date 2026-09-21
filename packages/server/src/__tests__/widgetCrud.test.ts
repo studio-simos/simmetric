@@ -70,6 +70,7 @@ jest.mock("../middleware/auth", () => ({
 }));
 
 import request from "supertest";
+import { Prisma } from "@prisma/client";
 import { createApp } from "../index";
 import prisma from "../utils/prisma";
 import { isFeatureEnabled, getFeatureLimit } from "../services/licenseService";
@@ -628,5 +629,313 @@ describe("Widget CRUD API", () => {
 
       expect(res.status).toBe(401);
     });
+  });
+});
+// ─── 260917-mz6: systemPrompt / contactConfig / leadCaptureTiming / ────
+//     leadCaptureTimeoutSeconds — create + update paths.
+
+describe("Widget CRUD API — 260917-mz6 grounding + contact + timing fields", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (isFeatureEnabled as jest.Mock).mockReturnValue(true);
+    (getFeatureLimit as jest.Mock).mockReturnValue(Infinity);
+  });
+
+  it("POST accepts a long systemPrompt and persists it via the spread", async () => {
+    (prisma.widget.count as jest.Mock).mockResolvedValue(0);
+    (prisma.widget.create as jest.Mock).mockImplementation(({ data }: any) => ({
+      ...mockWidget,
+      ...data,
+    }));
+
+    const longPrompt = "x".repeat(4000);
+    const res = await request(app)
+      .post("/api/widgets")
+      .set(adminAuth())
+      .send({ name: "Grounded", systemPrompt: longPrompt });
+
+    expect(res.status).toBe(201);
+    expect(prisma.widget.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ systemPrompt: longPrompt }),
+      }),
+    );
+    expect(res.body.systemPrompt).toBe(longPrompt);
+  });
+
+  it("POST rejects systemPrompt over 4000 chars (400)", async () => {
+    (prisma.widget.count as jest.Mock).mockResolvedValue(0);
+    const res = await request(app)
+      .post("/api/widgets")
+      .set(adminAuth())
+      .send({ name: "Too Long", systemPrompt: "x".repeat(4001) });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST accepts a valid contactConfig blob and persists it", async () => {
+    (prisma.widget.count as jest.Mock).mockResolvedValue(0);
+    (prisma.widget.create as jest.Mock).mockImplementation(({ data }: any) => ({
+      ...mockWidget,
+      ...data,
+    }));
+
+    const blob = {
+      formUrl: "https://example.com/contact",
+      email: "owner@example.com",
+    };
+    const res = await request(app)
+      .post("/api/widgets")
+      .set(adminAuth())
+      .send({ name: "Contact Widget", contactConfig: blob });
+
+    expect(res.status).toBe(201);
+    expect(prisma.widget.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ contactConfig: blob }),
+      }),
+    );
+  });
+
+  it("POST rejects a javascript: URL inside contactConfig (400)", async () => {
+    (prisma.widget.count as jest.Mock).mockResolvedValue(0);
+    const res = await request(app)
+      .post("/api/widgets")
+      .set(adminAuth())
+      .send({ name: "Bad Blob", contactConfig: { formUrl: "javascript:alert(1)" } });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST rejects a malformed contactConfig email (400)", async () => {
+    (prisma.widget.count as jest.Mock).mockResolvedValue(0);
+    const res = await request(app)
+      .post("/api/widgets")
+      .set(adminAuth())
+      .send({ name: "Bad Email", contactConfig: { email: "not-an-email" } });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST accepts leadCaptureTiming enum + timeout bounds; rejects out-of-bounds", async () => {
+    (prisma.widget.count as jest.Mock).mockResolvedValue(0);
+    (prisma.widget.create as jest.Mock).mockImplementation(({ data }: any) => ({
+      ...mockWidget,
+      ...data,
+    }));
+
+    const ok = await request(app)
+      .post("/api/widgets")
+      .set(adminAuth())
+      .send({ name: "Timed", leadCaptureTiming: "timeout", leadCaptureTimeoutSeconds: 45 });
+    expect(ok.status).toBe(201);
+    expect(ok.body.leadCaptureTiming).toBe("timeout");
+
+    const bad = await request(app)
+      .post("/api/widgets")
+      .set(adminAuth())
+      .send({ name: "Bad Timing", leadCaptureTimeoutSeconds: 3 });
+    expect(bad.status).toBe(400);
+  });
+
+  it("PUT persists all four fields and GET /api/widgets echoes them", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (prisma.widget.update as jest.Mock).mockImplementation(({ data }: any) => ({
+      ...mockWidget,
+      ...data,
+    }));
+    (prisma.widget.findMany as jest.Mock).mockResolvedValue([
+      {
+        ...mockWidget,
+        systemPrompt: "Be grounded",
+        contactConfig: { email: "owner@example.com" },
+        leadCaptureTiming: "start",
+        leadCaptureTimeoutSeconds: 30,
+      },
+    ]);
+
+    const update = await request(app)
+      .put("/api/widgets/widget-001")
+      .set(adminAuth())
+      .send({
+        systemPrompt: "Be grounded",
+        contactConfig: { email: "owner@example.com" },
+        leadCaptureTiming: "start",
+        leadCaptureTimeoutSeconds: 45,
+      });
+
+    expect(update.status).toBe(200);
+    expect(prisma.widget.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          systemPrompt: "Be grounded",
+          contactConfig: { email: "owner@example.com" },
+          leadCaptureTiming: "start",
+          leadCaptureTimeoutSeconds: 45,
+        }),
+      }),
+    );
+    expect(update.body.systemPrompt).toBe("Be grounded");
+    expect(update.body.contactConfig).toEqual({ email: "owner@example.com" });
+    expect(update.body.leadCaptureTiming).toBe("start");
+    expect(update.body.leadCaptureTimeoutSeconds).toBe(45);
+
+    (prisma.widget.findMany as jest.Mock).mockResolvedValue([
+      { ...mockWidget, systemPrompt: "Be grounded" },
+    ]);
+    const list = await request(app).get("/api/widgets").set(adminAuth());
+    expect(list.status).toBe(200);
+    expect(list.body[0].systemPrompt).toBe("Be grounded");
+  });
+
+  it("PUT with null clears systemPrompt/contactConfig (nullable write contract → SQL NULL)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
+      ...mockWidget,
+      systemPrompt: "old",
+      contactConfig: { email: "old@example.com" },
+    });
+    (prisma.widget.update as jest.Mock).mockImplementation(({ data }: any) => ({
+      ...mockWidget,
+      ...data,
+    }));
+
+    const res = await request(app)
+      .put("/api/widgets/widget-001")
+      .set(adminAuth())
+      .send({ systemPrompt: null, contactConfig: null });
+
+    expect(res.status).toBe(200);
+    // systemPrompt is a plain String? column — null flows through the spread.
+    // contactConfig is a Json? column — the route translates null to
+    // Prisma.DbNull (SQL NULL) via toJsonWriteValue (same as credits/blob).
+    expect(prisma.widget.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          systemPrompt: null,
+          contactConfig: Prisma.DbNull,
+        }),
+      }),
+    );
+  });
+
+  it("PUT without the four fields leaves them unchanged (partial-update semantics)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (prisma.widget.update as jest.Mock).mockResolvedValue({ ...mockWidget, name: "Renamed" });
+
+    const res = await request(app)
+      .put("/api/widgets/widget-001")
+      .set(adminAuth())
+      .send({ name: "Renamed Only" });
+
+    expect(res.status).toBe(200);
+    const updateData = (prisma.widget.update as jest.Mock).mock.calls[0][0].data;
+    expect(updateData.systemPrompt).toBeUndefined();
+    expect(updateData.contactConfig).toBeUndefined();
+    expect(updateData.leadCaptureTiming).toBeUndefined();
+    expect(updateData.leadCaptureTimeoutSeconds).toBeUndefined();
+  });
+});
+
+// ─── 260917-qoh: per-widget privacyUrl CRUD ─────────────────────────────
+
+describe("Widget CRUD API — 260917-qoh privacyUrl", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (isFeatureEnabled as jest.Mock).mockReturnValue(true);
+    (getFeatureLimit as jest.Mock).mockReturnValue(Infinity);
+  });
+
+  it("PUT accepts a valid http(s) privacyUrl and persists it via the spread", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (prisma.widget.update as jest.Mock).mockImplementation(({ data }: any) => ({
+      ...mockWidget,
+      ...data,
+    }));
+
+    const res = await request(app)
+      .put("/api/widgets/widget-001")
+      .set(adminAuth())
+      .send({ privacyUrl: "https://example.com/privacy" });
+
+    expect(res.status).toBe(200);
+    expect(prisma.widget.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ privacyUrl: "https://example.com/privacy" }),
+      }),
+    );
+    expect(res.body.privacyUrl).toBe("https://example.com/privacy");
+  });
+
+  it("PUT accepts an http:// privacyUrl (both schemes allowed)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (prisma.widget.update as jest.Mock).mockImplementation(({ data }: any) => ({
+      ...mockWidget,
+      ...data,
+    }));
+
+    const res = await request(app)
+      .put("/api/widgets/widget-001")
+      .set(adminAuth())
+      .send({ privacyUrl: "http://example.com/privacy" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.privacyUrl).toBe("http://example.com/privacy");
+  });
+
+  it("PUT rejects a javascript: privacyUrl (400 — the mandatory isHttpUrl refine)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+
+    const res = await request(app)
+      .put("/api/widgets/widget-001")
+      .set(adminAuth())
+      .send({ privacyUrl: "javascript:alert(1)" });
+
+    expect(res.status).toBe(400);
+    expect(prisma.widget.update).not.toHaveBeenCalled();
+  });
+
+  it("PUT rejects a data: privacyUrl (400)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+
+    const res = await request(app)
+      .put("/api/widgets/widget-001")
+      .set(adminAuth())
+      .send({ privacyUrl: "data:text/html,<script>alert(1)</script>" });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("PUT with null clears privacyUrl (nullable write contract → SQL NULL)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
+      ...mockWidget,
+      privacyUrl: "https://example.com/privacy",
+    });
+    (prisma.widget.update as jest.Mock).mockImplementation(({ data }: any) => ({
+      ...mockWidget,
+      ...data,
+    }));
+
+    const res = await request(app)
+      .put("/api/widgets/widget-001")
+      .set(adminAuth())
+      .send({ privacyUrl: null });
+
+    expect(res.status).toBe(200);
+    expect(prisma.widget.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ privacyUrl: null }),
+      }),
+    );
+  });
+
+  it("PUT without privacyUrl leaves it unchanged (partial-update semantics)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (prisma.widget.update as jest.Mock).mockResolvedValue({ ...mockWidget, name: "Renamed" });
+
+    const res = await request(app)
+      .put("/api/widgets/widget-001")
+      .set(adminAuth())
+      .send({ name: "Renamed Only" });
+
+    expect(res.status).toBe(200);
+    const updateData = (prisma.widget.update as jest.Mock).mock.calls[0][0].data;
+    expect(updateData.privacyUrl).toBeUndefined();
   });
 });

@@ -27,6 +27,7 @@ import path from "path";
 import fs from "fs/promises";
 import crypto from "crypto";
 import { logger } from "../utils/logger";
+import { getPdfStandardFontDataUrl } from "../utils/pdfjsFonts";
 import { renderPageToPng } from "../ocr/pdfRenderer";
 import { ocrPage } from "../ocr/ollamaVisionClient";
 import { resolveModelConfig } from "../ocr/modelRegistry";
@@ -71,6 +72,7 @@ export async function extractTextFromPdf(
       data: new Uint8Array(pdfBuffer),
       disableAutoFetch: true,
       disableStream: true,
+      standardFontDataUrl: getPdfStandardFontDataUrl(),
     })
     .promise;
 

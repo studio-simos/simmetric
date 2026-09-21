@@ -5,15 +5,17 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { AlertTriangle } from "lucide-react";
 import { showSuccess, showError } from "../lib/toast";
 import { useFeature } from "../hooks/useFeature";
 import { usePageMeta } from "@/hooks/usePageMeta";
 import type { Widget } from "@simmetric-chat/shared";
 import { useWidgets, useDeleteWidget } from "../queries/useWidgets";
+import WidgetWorkspaceArchive from "./WidgetWorkspaceArchive";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,9 +28,17 @@ import {
 } from "@/components/ui/alert-dialog";
 import { getErrorMessage } from "../utils/errorUtils";
 
+// WGTA-01 (188-02): page-level tabs — "list" is the pre-existing single view
+// (byte-unchanged content inside the tab), "archive" renders the read-only
+// WidgetWorkspaceArchive. ?tab= persists for E2E deep-linking (WidgetDetailPage
+// VALID_TABS precedent).
+const VALID_TABS = ["list", "archive"] as const;
+type PageTab = (typeof VALID_TABS)[number];
+
 export default function WidgetsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   usePageMeta(t("widgets.pageTitle"), [
     { label: t("breadcrumb.home"), path: "/" },
     { label: t("breadcrumb.widgets") },
@@ -38,6 +48,15 @@ export default function WidgetsPage() {
   const widgetEnabled = useFeature("widget_enabled");
 
   const [widgetToDelete, setWidgetToDelete] = useState<Widget | null>(null);
+
+  // ?tab= resolution per the WidgetDetailPage precedent: validate against the
+  // 2-value union, fall back to "list" when missing/invalid.
+  const rawTab = searchParams.get("tab");
+  const tab: PageTab = VALID_TABS.includes(rawTab as PageTab) ? (rawTab as PageTab) : "list";
+
+  const handleTabChange = (next: string) => {
+    setSearchParams({ tab: next }, { replace: true });
+  };
 
   const handleDelete = async () => {
     if (!widgetToDelete) return;
@@ -133,6 +152,16 @@ export default function WidgetsPage() {
   return (
     <div className="h-full overflow-y-auto p-6 sm:p-8">
     <div className="w-full space-y-6">
+      <Tabs value={tab} onValueChange={handleTabChange}>
+        <TabsList className="mb-4">
+          <TabsTrigger value="list">{t("widgets.tabs.list")}</TabsTrigger>
+          <TabsTrigger value="archive">{t("widgets.archive.tabLabel")}</TabsTrigger>
+        </TabsList>
+
+        {/* LIST tab — the pre-existing single view, byte-unchanged content.
+            No forceMount: the two tabs are independent query-backed views
+            (no shared form state), so the inactive tab unmounts. */}
+        <TabsContent value="list">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold text-foreground">
           {t("settings.widget.title")}
@@ -254,6 +283,13 @@ export default function WidgetsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+        </TabsContent>
+
+        {/* ARCHIVE tab — read-only workspace archive (D-03/D-06/D-07). */}
+        <TabsContent value="archive">
+          <WidgetWorkspaceArchive />
+        </TabsContent>
+      </Tabs>
     </div>
     </div>
   );

@@ -101,6 +101,7 @@ Everything below mirrors the root `.env.example` and the Zod schemas (`packages/
 | `AGENT_MEMORY_DEDUP_THRESHOLD` | No | `0.92` | Cosine-similarity dedup threshold (tunable 0.85–0.99). |
 | `OCR_MODEL` | No | `glm-ocr:latest` | Vision OCR model (supports `model:version`). |
 | `OCR_TIMEOUT` | No | `600000` | OCR timeout (10 min — vision models are slow). |
+| `COLLECTOR_INGEST_TIMEOUT_MS` | No | unset — no cap | Optional server→collector ingest POST wait cap. Default is UNLIMITED (quick 260918-p3h): large PDFs + local embedding legitimately exceed any fixed limit, and the per-document cancel endpoints are the relief valve. Set the key (ms) to restore a wait cap; `0` also disables it. ENV-only infra key (never DB/UI). |
 | `OCR_NUM_PREDICT` | No | `8192` | Max output tokens for the OCR model (min 256). |
 | `SYNTHESIS_LLM_MODEL` | No | `gemma4:latest` | Model for the auto-synthesis pipeline. |
 | `EMBEDDING_PROVIDER` | server, collector | No | `local` | `local` / `openai` / `ollama` / `hf-local` (shared schema). |
@@ -125,6 +126,16 @@ Everything below mirrors the root `.env.example` and the Zod schemas (`packages/
 | `OIDC_CLIENT_SECRET` | No | — | Plaintext env secret (no at-rest encryption on the env path; the DB path encrypts). Empty string = unset. |
 | `OIDC_REDIRECT_URI` | No | — | Valid URL. |
 | `OIDC_SCOPE` | No | — | Space-delimited; consumption default `openid email profile`. |
+| `LDAP_URL` | No | — | LDAP directory URL (Enterprise). `ldap://host:389` (with `LDAP_USE_TLS=true` for STARTTLS) or `ldaps://host:636`. Any `LDAP_*` key set marks the env layer active — env overrides the DB `SsoConfig` row per-field (the admin SSO panel is the DB path). |
+| `LDAP_BIND_DN` | No | — | Service-account bind DN (read/service user, not an end user). |
+| `LDAP_BIND_PASSWORD` | No | — | Plaintext env secret for the service bind (no at-rest encryption on the env path; the DB path encrypts via `ENCRYPTION_KEY`). Empty string = unset. Preferred carrier over DB ciphertext (env file secrecy is the operator's responsibility). |
+| `LDAP_SEARCH_BASE` | No | — | User search base DN (e.g. `dc=example,dc=com`). |
+| `LDAP_SEARCH_FILTER` | No | `(uid={{username}})` | User search filter; `{{username}}` substituted at login with the RFC-4515-escaped entered username. AD default `(sAMAccountName={{username}})`. |
+| `LDAP_GROUP_SEARCH_BASE` | No | — | Group search base DN. |
+| `LDAP_GROUP_SEARCH_FILTER` | No | `(member={{dn}})` | Group-side membership filter; `{{dn}}` = the user's DN. AD nested groups need `(member:1.2.840.113556.1.4.1941:={{dn}})`. |
+| `LDAP_USE_TLS` | No | `true` | STARTTLS upgrade on `ldap://` URLs (`ldaps://` ignores it — mutual exclusivity enforced by the config validator). Disabled by `false` / `0` / `no` / `off` / empty. |
+| `LDAP_ACCEPT_CERT` | No | — | Custom CA PEM (concatenate blocks for chains) for certificate-validated TLS. Strict validation by default — there is no TLS-bypass switch. |
+| `LDAP_FALLBACK_TO_LOCAL` | No | `true` | Break-glass: fall back to local auth when LDAP is unreachable/bind-fails. Disabled by `false` / `0` / `no` / `off` / empty. See [`docs/LDAP.md`](LDAP.md). |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | No | — | VAPID web-push keypair. Unset = ephemeral dev keys generated with a warning. |
 | `VAPID_SUBJECT` | No | — | Push subject; consumption default `mailto:admin@simmetric-chat.local`. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | No | — | SMTP for password reset + backup notifications. Unset = the related features log-and-skip instead of failing. `SMTP_PORT` validated 1–65535. |
@@ -201,3 +212,4 @@ Three test suites — `packages/server/src/__tests__/envExampleParity.test.ts` (
 - [`docs/SCALING.md`](SCALING.md) — Redis-backed horizontal scaling.
 - [`docs/ENCRYPTION_KEY_ROTATION.md`](ENCRYPTION_KEY_ROTATION.md) — `ENCRYPTION_KEY` / `LEGACY_PREVIOUS_ENCRYPTION_KEYS` rotation procedure.
 - [`docs/ENTERPRISE_PLUGIN.md`](ENTERPRISE_PLUGIN.md) — `LICENSE_KEY` JWT shape and air-gap install.
+- [`docs/LDAP.md`](LDAP.md) — per-IdP LDAP connection guides (AD/OpenLDAP/FreeIPA): cert trust, filters, group mapping, reachability, and the fallback semantics for the `LDAP_*` keys above.

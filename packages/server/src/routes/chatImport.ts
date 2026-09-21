@@ -6,7 +6,10 @@
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { tenantContextMiddleware } from "../middleware/tenantContext";
-import { requireWorkspaceAccess } from "../middleware/rbac";
+// Phase 189 (D-13, Plan 04 gate swap): requireWorkspaceWriteAccess is the SOLE
+// enforcement gate on the import routes (the binary gate retired at the flip —
+// flag persisted "true").
+import { requireWorkspaceWriteAccess } from "../middleware/rbac";
 import { generateImportPreview, importChats } from "../services/chatImportService";
 import multer from "multer";
 
@@ -26,7 +29,7 @@ router.use(authMiddleware);
 router.use(tenantContextMiddleware);
 
 // POST /:workspaceId/chats/import/preview — preview import before confirming (per D-14)
-router.post("/:workspaceId/chats/import/preview", requireWorkspaceAccess, importUpload.single("file"), async (req: Request, res: Response) => {
+router.post("/:workspaceId/chats/import/preview", requireWorkspaceWriteAccess(), importUpload.single("file"), async (req: Request, res: Response) => {
 
   try {
     if (!req.file) {
@@ -55,7 +58,7 @@ router.post("/:workspaceId/chats/import/preview", requireWorkspaceAccess, import
 });
 
 // POST /:workspaceId/chats/import/confirm — confirm and create imported chats (per D-13)
-router.post("/:workspaceId/chats/import/confirm", requireWorkspaceAccess, importUpload.single("file"), async (req: Request, res: Response) => {
+router.post("/:workspaceId/chats/import/confirm", requireWorkspaceWriteAccess(), importUpload.single("file"), async (req: Request, res: Response) => {
   const workspaceId = req.params.workspaceId as string;
   const userId = req.userId!;
   const format = req.body.format;

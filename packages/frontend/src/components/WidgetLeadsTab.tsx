@@ -128,7 +128,10 @@ export default function WidgetLeadsTab({ widgetId }: WidgetLeadsTabProps) {
               {t("settings.widget.columns")}
             </label>
             <div className="flex gap-4">
-              {["email", "name", "transcript", "date"].map((col) => (
+              {/* 260917-qoh: privacyConsent added to the export column picker
+                  (the server CSV switch renders it "yes"/"no"). The label
+                  shares the leadsPrivacyConsent key with the table header. */}
+              {["email", "name", "transcript", "date", "privacyConsent"].map((col) => (
                 <label
                   key={col}
                   className="flex items-center gap-1.5 text-sm text-foreground"
@@ -137,9 +140,11 @@ export default function WidgetLeadsTab({ widgetId }: WidgetLeadsTabProps) {
                     checked={exportColumns.includes(col)}
                     onCheckedChange={() => toggleColumn(col)}
                   />
-                  {t(
-                    `settings.widget.column${col.charAt(0).toUpperCase() + col.slice(1)}`,
-                  )}
+                  {col === "privacyConsent"
+                    ? t("settings.widget.leadsPrivacyConsent")
+                    : t(
+                        `settings.widget.column${col.charAt(0).toUpperCase() + col.slice(1)}`,
+                      )}
                 </label>
               ))}
             </div>
@@ -187,6 +192,10 @@ export default function WidgetLeadsTab({ widgetId }: WidgetLeadsTabProps) {
                 <TableHead className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">
                   {t("settings.widget.columnDate")}
                 </TableHead>
+                {/* 260917-qoh: archived privacy-consent decision per contact. */}
+                <TableHead className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">
+                  {t("settings.widget.leadsPrivacyConsent")}
+                </TableHead>
                 <TableHead className="text-left px-4 py-2 text-xs font-medium text-muted-foreground"></TableHead>
               </TableRow>
             </TableHeader>
@@ -205,6 +214,11 @@ export default function WidgetLeadsTab({ widgetId }: WidgetLeadsTabProps) {
                   <TableCell className="px-4 py-2 text-muted-foreground">
                     {new Date(lead.createdAt).toLocaleDateString()}
                   </TableCell>
+                  {/* 260917-qoh: consent check mark / "--" (mirror the
+                      name/email/date cell styling). */}
+                  <TableCell className="px-4 py-2 text-foreground">
+                    {lead.privacyConsented ? "✓" : "--"}
+                  </TableCell>
                   <TableCell className="px-4 py-2">
                     <Button
                       variant="link"
@@ -220,7 +234,7 @@ export default function WidgetLeadsTab({ widgetId }: WidgetLeadsTabProps) {
                   </TableCell>
                   {expandedLeadId === lead.id &&
                     selectedLead?.id === lead.id && (
-                      <TableCell colSpan={4} className="px-4 py-2">
+                      <TableCell colSpan={5} className="px-4 py-2">
                         <div className="mt-2 p-3 bg-muted rounded text-xs space-y-2">
                           {(selectedLead.transcript || []).map(
                             (msg, i) => (

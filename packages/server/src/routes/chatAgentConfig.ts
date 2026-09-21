@@ -6,7 +6,11 @@
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { tenantContextMiddleware } from "../middleware/tenantContext";
-import { requireWorkspaceAccess } from "../middleware/rbac";
+// Phase 189 (D-13, Plan 04 gate swap): requireWorkspaceWriteAccess is the SOLE
+// enforcement gate on the agent-config PUT (the binary gate retired at the
+// flip — flag persisted "true"); the GET stays binary on requireWorkspaceAccess
+// (D-11 read half).
+import { requireWorkspaceAccess, requireWorkspaceWriteAccess } from "../middleware/rbac";
 import prisma from "../utils/prisma";
 import { scopeToOrg } from "../utils/tenantContext";
 
@@ -45,7 +49,7 @@ router.get("/:workspaceId/agent-config", requireWorkspaceAccess, async (req: Req
 });
 
 // PUT /api/workspaces/:workspaceId/agent-config — update workspace agent config
-router.put("/:workspaceId/agent-config", requireWorkspaceAccess, async (req: Request, res: Response) => {
+router.put("/:workspaceId/agent-config", requireWorkspaceWriteAccess(), async (req: Request, res: Response) => {
   const workspaceId = req.params.workspaceId as string;
   // NOTE: `maxIterations` is still accepted here for backward compatibility
   // (the DB column remains) but is IGNORED by the orchestrator since the
@@ -56,10 +60,11 @@ router.put("/:workspaceId/agent-config", requireWorkspaceAccess, async (req: Req
   try {
     // T-185-10 (Pitfall-2 grep-gate): the upsert's PK-keyed where cannot
     // carry the org filter — the workspace binding is proven by
-    // requireWorkspaceAccess upstream (the workspaceId param IS the
-    // access-checked row), so the create/update arms write inside the
-    // caller's already-verified workspace. Documented disposition:
-    // access-verified parent, no post-fetch assert needed.
+    // requireWorkspaceWriteAccess upstream (the workspaceId param IS the
+    // access-checked row; the graded gate resolves the role per request), so
+    // the create/update arms write inside the caller's already-verified
+    // workspace. Documented disposition: access-verified parent, no
+    // post-fetch assert needed.
     const config = await prisma.workspaceAgentConfig.upsert({
       where: { workspaceId },
       create: {

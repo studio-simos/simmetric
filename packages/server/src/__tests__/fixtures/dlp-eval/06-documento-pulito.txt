@@ -1,0 +1,5 @@
+Manuale di sicurezza informatica.
+
+Le procedure di backup settimanale vanno verificate ogni venerdì.
+La rotazione delle credenziali segue la policy interna n. 7.3.
+Nessun dato personale è presente in questo documento.

@@ -72,6 +72,9 @@ jest.mock("../../services/ocrJobService", () => ({
   completeOcrJob: (...args: any[]) => mockCompleteOcrJob(...args),
   failOcrJob: (...args: any[]) => mockFailOcrJob(...args),
   parseOcrJobResult: (result: unknown) => mockParseOcrJobResult(result),
+  // quick 260918-p3h (D-3): the page loop's cooperative cancellation check —
+  // default to a running (non-CANCELLED) status so the pinned flows proceed.
+  getOcrJobStatus: jest.fn().mockResolvedValue("PROCESSING"),
 }));
 
 // Mock pdfRenderer

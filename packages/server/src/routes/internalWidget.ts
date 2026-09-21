@@ -17,6 +17,7 @@ import prisma from "../utils/prisma";
 import { runInTenant } from "../utils/tenantContext";
 import { logger } from "../utils/logger";
 import { handleChatStream } from "./chat";
+import { resolveWidgetSystemPrompt } from "../services/widgetChatPrompt";
 
 // Widget-side body schema for PATCH /session/:token/chat/archive (D-10).
 // The JWT route (80-02) takes chatId from the path; the widget route takes it
@@ -87,6 +88,13 @@ interface WidgetWithWhitelist {
   archiveId: string | null;
   responseProviderId: string | null;
   responseModel: string | null;
+  // 260917-mz6: grounding prompt + contact options + lead timing columns.
+  systemPrompt: string | null;
+  contactConfig: unknown;
+  leadCaptureTiming: string | null;
+  leadCaptureTimeoutSeconds: number | null;
+  // 260917-qoh: per-widget privacy URL for the lead-card consent link.
+  privacyUrl: string | null;
   workspaces: Array<{ workspaceId: string }>;
   // The config handler passes ~20 further columns through to res.json
   // verbatim (branding/triggers/localization) — index signature keeps the
@@ -278,9 +286,20 @@ router.post("/chat/stream", async (req: Request, res: Response) => {
     // these fields (it builds a fresh body from schema fields only), so this
     // is defense-in-depth against a compromised proxy or leaked API key —
     // pinned by widgetChatStream.test.ts (c).
+    // Phase 191 (CR-01 review fix, T-hgy-01 parity): the same seam extends to
+    // attachedArchiveIds and skillCall — chatRequestSchema ACCEPTS both for
+    // the JWT path, so a raw body POSTed here with those fields would
+    // otherwise survive the proxy hop (this route forwards req.body, not
+    // parsed.data) and drive the widget's RAG union / skill invocation.
+    // Stripping keeps the widget's archive scope DB-resolved ONLY (the
+    // whitelist workspace + the DB-bound archiveId) — the second hop of the
+    // D-08 invariant (the proxy's widgetChatRequestSchema strip is the first).
+    // Pinned by widgetChatStream.test.ts (archive/skill tamper pins).
     const body = req.body as Record<string, unknown>;
     delete body.providerId;
     delete body.model;
+    delete body.attachedArchiveIds;
+    delete body.skillCall;
 
     // WR-05 (185-05): consume the widget row stashed by widgetTenantContext —
     // the header resolution ALREADY ran in the slot (this endpoint's identity
@@ -314,7 +333,19 @@ router.post("/chat/stream", async (req: Request, res: Response) => {
     // schema strips any body providerId/model the proxy might forward).
     // Unset columns are null → the core falls through to the existing
     // workspace/global resolution chain.
-    await handleChatStream(req, res, targetWorkspaceId, widget.archiveId ?? null, parsed.data.locale, { providerId: widget.responseProviderId ?? null, model: widget.responseModel ?? null });
+    // 260917-mz6: the grounding system prompt rides the same 6th arg object —
+    // DB-resolved from the Widget row (admin-authored, max 4000 chars),
+    // NEVER client-supplied (T-Q02; the composed body schema strips unknown
+    // keys). 260917-qoh: a null/blank column resolves through
+    // resolveWidgetSystemPrompt to the module-private grounding floor (NO
+    // exported global default exists anymore), so unpinned unprompted
+    // widgets stay grounded; the reply-language directive is composed
+    // DOWNSTREAM in the orchestrator from the visitor locale.
+    await handleChatStream(req, res, targetWorkspaceId, widget.archiveId ?? null, parsed.data.locale, {
+      providerId: widget.responseProviderId ?? null,
+      model: widget.responseModel ?? null,
+      systemPrompt: resolveWidgetSystemPrompt(widget.systemPrompt),
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error("[internalWidget] Error in chat stream", { error: message });
@@ -386,6 +417,12 @@ router.post("/lead", widgetLeadLimiter, async (req: Request, res: Response) => {
     }
     const { email, name, transcript } = parsed.data;
 
+    // 260917-qoh (T-Q02/T-Q04): privacyConsented is a z.literal(true) field
+    // of the shared schema — parsed.data only reaches here when the visitor
+    // consented (fail-closed 400 arm above). No additional check needed.
+    // privacyConsentAt is stamped from the SERVER clock (never
+    // client-supplied) so the archived consent is non-repudiable.
+
     // widgetId from request body -- must match an active widget
     const widgetId = req.body.widgetId;
     if (!widgetId || typeof widgetId !== "string") {
@@ -414,6 +451,9 @@ router.post("/lead", widgetLeadLimiter, async (req: Request, res: Response) => {
         email,
         name: name || null,
         transcript,
+        // 260917-qoh: the archived consent decision + server timestamp.
+        privacyConsented: true,
+        privacyConsentAt: new Date(),
       },
     });
 
@@ -484,6 +524,18 @@ router.get("/:id/config", async (req: Request, res: Response) => {
       // 260809-uxk T3: bound knowledge archive (null when unbound) — raw
       // pass-through, server-derived from the DB row (never client-supplied).
       archiveId: widget.archiveId ?? null,
+      // 260917-mz6: contact options + lead timing — raw pass-through from
+      // the Widget row, never client-derived (same IDOR philosophy as
+      // archiveId; the WidgetWithWhitelist typed fields carry the extra
+      // columns). leadCaptureTiming falls back to "end" when the column is
+      // at its default (the pre-feature behavior).
+      contactConfig: widget.contactConfig ?? null,
+      leadCaptureTiming: widget.leadCaptureTiming || "end",
+      leadCaptureTimeoutSeconds: widget.leadCaptureTimeoutSeconds ?? null,
+      // 260917-qoh: the per-widget privacy URL for the lead-card consent
+      // link — raw pass-through from the DB row, never client-derived (same
+      // IDOR philosophy as contactConfig). null = not configured.
+      privacyUrl: widget.privacyUrl ?? null,
     });
   } catch (err: unknown) {
   const message = err instanceof Error ? err.message : String(err);

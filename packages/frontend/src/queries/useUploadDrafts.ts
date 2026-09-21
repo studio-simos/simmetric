@@ -49,8 +49,16 @@ export interface UploadDraft {
   fileSize: number;
   mimeType: string;
   expiresAt: string;
-  ragStatus: string | null; // Document.status (pending|processing|completed|failed) | null
+  ragStatus: string | null; // Document.status (pending|processing|completed|failed|cancelled) | null
   kbStatus: string | null; // OcrJob.status (PENDING|PROCESSING|COMPLETED|FAILED|CANCELLED) | null
+  /**
+   * quick 260918-p3h (D-2) — live ingestion progress per leg (0-100), fed by
+   * the collector's boundary callbacks (RAG) / the OCR page-loop mirror (KB).
+   * null/undefined when the leg has not started or the server hasn't
+   * reported a percentage yet.
+   */
+  ragProgress?: number | null;
+  kbProgress?: number | null;
   /**
    * Phase 71-05 — assigned-leg flags + target archive. Populated by the
    * server when the draft is assigned (POST /:id/assign). `ragEnabled` /
@@ -63,7 +71,7 @@ export interface UploadDraft {
 }
 
 /** Terminal status sets — anything outside these means the leg is in-flight. */
-const RAG_TERMINAL = new Set(["completed", "failed"]);
+const RAG_TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const KB_TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
 
 /**
@@ -320,6 +328,38 @@ export function useRenameDraft(workspaceId: string) {
   >({
     mutationFn: ({ id, originalName }) =>
       apiPatch(`/uploads/${id}`, { originalName }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.uploadDrafts.list(workspaceId),
+      });
+    },
+  });
+}
+
+/**
+ * useCancelDraftLeg — quick 260918-p3h (D-3). POST /api/uploads/:id/cancel
+ * with the cancelDraftLegSchema body ({ leg?: "rag" | "kb" }; omitted leg =
+ * cancel every in-flight enabled leg). On success invalidates the pending
+ * list so the cancelled badges render on the next 3s poll. Mirrors the
+ * useDeleteDraft pattern exactly (no optimistic setQueryData — the 3s poll
+ * would race it).
+ *
+ * Toast/error handling is left to the call site, matching the hook
+ * conventions above.
+ */
+export function useCancelDraftLeg(workspaceId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { id: string; cancelled: string[] },
+    Error,
+    { id: string; leg?: "rag" | "kb" }
+  >({
+    mutationFn: ({ id, leg }) =>
+      apiPost<{ id: string; cancelled: string[] }>(
+        `/uploads/${id}/cancel`,
+        leg ? { leg } : {},
+      ),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: queryKeys.uploadDrafts.list(workspaceId),

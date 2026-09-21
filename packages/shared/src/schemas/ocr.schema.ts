@@ -106,3 +106,25 @@ export const ocrPreferencesSchema = z.object({
   customInstructions: z.string().max(10000).optional(),
 });
 type OcrPreferencesInput = z.infer<typeof ocrPreferencesSchema>;
+
+// POST /api/archives/:id/jobs/:jobId/pages/retry — re-OCR failed pages
+// (260919-kvm). `pages` omitted = every page whose markdown starts with
+// [FAILED:; explicit list = only those pages (intersected with what exists).
+export const ocrPageRetryRequestSchema = z.object({
+  pages: z.array(z.number().int().positive()).min(1).max(50).optional(),
+});
+export type OcrPageRetryRequest = z.infer<typeof ocrPageRetryRequestSchema>;
+
+// Repair response — per-page outcome + recomputed document tallies.
+export const ocrPageRepairResultSchema = z.object({
+  repaired: z.array(
+    z.object({
+      pageNumber: z.number().int().positive(),
+      markdown: z.string(),
+      stillFailed: z.boolean(),
+    })
+  ),
+  failedPages: z.number().int().nonnegative(),
+  qualityScore: z.number().nullable(),
+});
+export type OcrPageRepairResult = z.infer<typeof ocrPageRepairResultSchema>;

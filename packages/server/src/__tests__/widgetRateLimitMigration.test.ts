@@ -174,8 +174,60 @@ describe("updateWidgetSchema rateLimitPerMinute validation", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects zero (must be positive, not just non-negative)", () => {
+  // 260916-pwd: tri-state convention — 0 = unlimited ("no limits"), NOT a
+  // rejection. The widget limiter (not the schema) translates 0 →
+  // WIDGET_UNLIMITED_MAX because express-rate-limit v7+ blocks all on max=0.
+  it("accepts zero (unlimited — no limits)", () => {
     const result = updateWidgetSchema.safeParse({ rateLimitPerMinute: 0 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.rateLimitPerMinute).toBe(0);
+    }
+  });
+});
+
+// 260916-pwd: sessionLimitPerDay mirrors the rateLimitPerMinute tri-state at
+// the schema level (the file previously covered it only in the PUT passthrough).
+describe("updateWidgetSchema sessionLimitPerDay validation", () => {
+  it("accepts null (use global default)", () => {
+    const result = updateWidgetSchema.safeParse({ sessionLimitPerDay: null });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.sessionLimitPerDay).toBeNull();
+    }
+  });
+
+  it("accepts positive integer (custom limit)", () => {
+    const result = updateWidgetSchema.safeParse({ sessionLimitPerDay: 25 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.sessionLimitPerDay).toBe(25);
+    }
+  });
+
+  it("accepts omission (field is optional — leave unchanged)", () => {
+    const result = updateWidgetSchema.safeParse({ name: "Updated Name" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.sessionLimitPerDay).toBeUndefined();
+    }
+  });
+
+  it("accepts zero (unlimited — no limits)", () => {
+    const result = updateWidgetSchema.safeParse({ sessionLimitPerDay: 0 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.sessionLimitPerDay).toBe(0);
+    }
+  });
+
+  it("rejects negative numbers", () => {
+    const result = updateWidgetSchema.safeParse({ sessionLimitPerDay: -1 });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-integer values (decimals)", () => {
+    const result = updateWidgetSchema.safeParse({ sessionLimitPerDay: 5.5 });
     expect(result.success).toBe(false);
   });
 });
@@ -228,6 +280,32 @@ describe("PUT /api/widgets/:id rateLimitPerMinute passthrough", () => {
       })
     );
   });
+
+  // 260916-pwd: 0 = unlimited — the route spreads parsed.data verbatim, so a
+  // PUT carrying both zeros must persist BOTH zeros (no coercion to null) and
+  // echo them in the response body.
+  it("updates both limits to 0 (unlimited) and echoes them in the response", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (prisma.widget.update as jest.Mock).mockResolvedValue({
+      ...mockWidget,
+      rateLimitPerMinute: 0,
+      sessionLimitPerDay: 0,
+    });
+
+    const res = await request(app)
+      .put("/api/widgets/widget-001")
+      .set(adminAuth())
+      .send({ rateLimitPerMinute: 0, sessionLimitPerDay: 0 });
+
+    expect(res.status).toBe(200);
+    expect(prisma.widget.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ rateLimitPerMinute: 0, sessionLimitPerDay: 0 }),
+      })
+    );
+    expect(res.body.rateLimitPerMinute).toBe(0);
+    expect(res.body.sessionLimitPerDay).toBe(0);
+  });
 });
 
 // ─── Test 4: GET /api/internal/widget/:id/config includes rateLimitPerMinute ───
@@ -272,6 +350,28 @@ describe("GET /api/internal/widget/:id/config includes rateLimitPerMinute", () =
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty("rateLimitPerMinute");
     expect(res.body.rateLimitPerMinute).toBeNull();
+  });
+
+  // 260916-pwd: 0 = unlimited — the internal config route passes the columns
+  // through raw; a DB row holding zeros must return 0/0 verbatim (no coercion
+  // to null — the widget limiter depends on seeing 0 to grant the unlimited
+  // bypass).
+  it("returns rateLimitPerMinute: 0 and sessionLimitPerDay: 0 verbatim when the DB row holds zeros", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
+      ...mockWidget,
+      rateLimitPerMinute: 0,
+      sessionLimitPerDay: 0,
+    });
+
+    const res = await request(app)
+      .get("/api/internal/widget/widget-001/config")
+      .set("X-Api-Key", "sk-test-key");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("rateLimitPerMinute");
+    expect(res.body).toHaveProperty("sessionLimitPerDay");
+    expect(res.body.rateLimitPerMinute).toBe(0);
+    expect(res.body.sessionLimitPerDay).toBe(0);
   });
 });
 

@@ -67,4 +67,29 @@ describe("validateWritablePath", () => {
       /traversal|outside/i,
     );
   });
+
+  // Phase 187 (WIKS-02/D-06a, RESEARCH Pitfall 8): message-identifying pin —
+  // the guard's rejection carries the immutability-identifying substring so
+  // any future API-level mapping surfaces an actionable reason. NO status-code
+  // pin and NO route change this phase (audit-only, additive tests).
+  it("raw_sources rejection message contains the immutability identifier 'raw_sources/ is immutable'", () => {
+    expect(() => validateWritablePath(tmpBase, "raw_sources/foo.md")).toThrow(
+      /raw_sources\/ is immutable/,
+    );
+  });
+
+  // Phase 187 (D-02): the rawSourcesImmutable documentation flag is inert —
+  // validateWritablePath's signature takes no config, so a `false` flag can
+  // never unlock raw_sources writes. Behavioral pin of the D-02 invariant.
+  it("rawSourcesImmutable: false never alters guard behavior (flag is documentation only, D-02)", () => {
+    // The flag lives in ArchiveConfig.config — passed nowhere near this guard.
+    // The load-bearing assertion is that rejection semantics are unchanged.
+    const docFlag = { rawSourcesImmutable: false };
+    expect(docFlag.rawSourcesImmutable).toBe(false);
+    expect(() => validateWritablePath(tmpBase, "raw_sources/foo.md")).toThrow(
+      /raw_sources\/ is immutable/,
+    );
+    // And a wiki/ target still passes with the flag false in the (unused) fixture.
+    expect(() => validateWritablePath(tmpBase, "wiki/entities/ok.md")).not.toThrow();
+  });
 });

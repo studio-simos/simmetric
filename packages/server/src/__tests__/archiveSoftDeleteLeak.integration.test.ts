@@ -21,6 +21,7 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import request from "supertest";
+import { ensureOrgMembership } from "../../jest.setup.integration";
 import fs from "fs";
 import path from "path";
 import { Prisma } from "@prisma/client";
@@ -72,6 +73,7 @@ beforeAll(async () => {
       data: { userId: admin.id, roleId: adminRole.id },
     });
   }
+  await ensureOrgMembership(prisma, admin.id);
 
   // Seed tombstoned archive
   const tombstoned = await prisma.archive.create({
@@ -204,11 +206,11 @@ describe("KB-02 soft-delete leak prevention", () => {
       .set(adminAuth())
       .query({ query: "KB02_UNIQUE_TOMBSTONED_ARCHIVE_PAGE_BODY" });
 
-    // Search route returns 200 with an array (it does NOT 404 on tombstoned archive —
-    // it goes straight to raw SQL). The JOIN must filter out the page.
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body.length).toBe(0);
+    // CR-04 (185-05): the search route resolves the archive org-side with
+    // `deletedAt: null` BEFORE the raw SQL — a tombstoned archive 404s
+    // (cross-tenant fail-closed shape), which subsumes the original JOIN-filter
+    // contract: the tombstoned page can NEVER leak either way.
+    expect(res.status).toBe(404);
     // Defense: the unique term must not appear anywhere in the response body
     expect(JSON.stringify(res.body)).not.toContain("KB02_UNIQUE_TOMBSTONED_ARCHIVE_PAGE_BODY");
   });

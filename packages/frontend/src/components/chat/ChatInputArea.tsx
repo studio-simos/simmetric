@@ -5,7 +5,7 @@
 
 import { useRef, useState, useEffect, useMemo, type KeyboardEvent, type ChangeEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Send, Square, Paperclip, Mic, X, Plus } from "lucide-react";
+import { Send, Square, Paperclip, Mic, X, Plus, Library, ChevronRight, ArrowLeft } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -69,6 +69,35 @@ export interface ChatInputAreaProps {
    * item hides itself for non-admins via its own `visible` gate.
    */
   dlpToggle?: ReactNode;
+  /**
+   * Phase 191 (D-06), restructured by quick 260919-qjg: the "Knowledge"
+   * menu item in the more-actions Popover (after `actions`). Clicking it
+   * OPENS the in-popover Knowledge submenu (the popover stays open — the
+   * submenu lives inside PopoverContent) and notifies the parent via the
+   * same handler (ChatPanel still owns the archivePickerOpen flag so the
+   * chips slot above the input stays composed).
+   */
+  onAttachArchive?: () => void;
+  /**
+   * quick 260919-qjg: called when the user navigates back from the
+   * Knowledge submenu to the main menu (ChatPanel resets its
+   * archivePickerOpen flag so the panel slot stops rendering).
+   */
+  onKnowledgeBack?: () => void;
+  /**
+   * quick 260919-qjg: the archive-attach CHIPS slot, rendered ABOVE the
+   * input row — composed by ChatPanel as ArchiveAttachPicker mode="chips".
+   * The archive list panel itself renders INSIDE the popover via
+   * `archivePickerPanel` (never above the input).
+   */
+  archivePicker?: ReactNode;
+  /**
+   * quick 260919-qjg: the Knowledge submenu body (ArchiveAttachPicker
+   * mode="panel"), rendered INSIDE the more-actions PopoverContent below
+   * the attach-document/mic rows while the submenu is open. Composed by
+   * ChatPanel so the useArchives mount follows its open flag.
+   */
+  archivePickerPanel?: ReactNode;
 }
 
 const PLACEHOLDER_ROTATION_MS = 4000;
@@ -94,12 +123,30 @@ export function ChatInputArea({
   isHackerTheme,
   actions,
   dlpToggle,
+  onAttachArchive,
+  onKnowledgeBack,
+  archivePicker,
+  archivePickerPanel,
 }: ChatInputAreaProps) {
   const { t } = useTranslation();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [pulse, setPulse] = useState(false);
   const pulseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 191-05 (WR-03 review fix): the more-actions Popover is CONTROLLED. As of
+  // quick 260919-qjg the archive picker no longer renders above the input —
+  // it is a submenu nested INSIDE this popover, so the Knowledge item keeps
+  // the popover open and the local submenu state below switches the body.
+  const [moreOpen, setMoreOpen] = useState(false);
+  // quick 260919-qjg: in-popover Knowledge submenu state. Reset to the main
+  // menu whenever the popover closes (outside click / Escape / back row) so
+  // reopening never lands stuck on the submenu.
+  const [knowledgeSubmenuOpen, setKnowledgeSubmenuOpen] = useState(false);
+
+  const closeMoreMenu = () => {
+    setMoreOpen(false);
+    setKnowledgeSubmenuOpen(false);
+  };
 
   // 4.3.3: rotating placeholder. Index 0 is the canonical "Type a message..."
   // so callers/tests that look up that exact text still match at initial render.
@@ -188,6 +235,12 @@ export function ChatInputArea({
         "bg-[var(--chat-input-bg)] transition-theme",
       )}
     >
+      {/* Phase 191 (D-06) slot, quick 260919-qjg: archive-attach CHIPS
+          render above the input row, beside the attached-document chip.
+          The archive list panel itself lives INSIDE the popover submenu
+          (archivePickerPanel slot) — never above the input. */}
+      {archivePicker}
+
       {attachedDocName && (
         <div className="mb-2 flex items-center gap-2">
           <Badge variant="secondary" className="truncate">
@@ -222,7 +275,19 @@ export function ChatInputArea({
           aria-describedby="chat-input-hint"
         />
 
-        <Popover>
+        <Popover
+          open={moreOpen}
+          onOpenChange={(open) => {
+            if (open) {
+              setMoreOpen(true);
+            } else {
+              // quick 260919-qjg: closing the popover (outside click /
+              // Escape / item) also resets the submenu so reopening starts
+              // at the main menu — never stuck on the submenu.
+              closeMoreMenu();
+            }
+          }}
+        >
           <PopoverTrigger asChild>
             <Button
               variant="ghost"
@@ -240,7 +305,7 @@ export function ChatInputArea({
               (uploading || isStreaming) && "opacity-50 pointer-events-none"
             )}>
               <Paperclip className="w-4 h-4 shrink-0 text-muted-foreground" />
-              <span>{t("chat.input.attach", "Attach a document")}</span>
+              <span>{t("chat.input.attach", "Attach")}</span>
               <Input
                 ref={fileInputRef}
                 type="file"
@@ -248,7 +313,7 @@ export function ChatInputArea({
                 onChange={handleFileChange}
                 accept={accept}
                 disabled={uploading || isStreaming}
-                aria-label={t("chat.input.attach", "Attach a document")}
+                aria-label={t("chat.input.attach", "Attach")}
               />
             </label>
 
@@ -270,9 +335,55 @@ export function ChatInputArea({
 
             {actions}
 
+            {/* quick 260919-qjg: Knowledge submenu row. Clicking it opens the
+                in-popover submenu and calls the parent handler (ChatPanel
+                sets its open flag so the chips slot stays composed). The
+                popover is NOT closed — the submenu lives inside it. */}
+            {onAttachArchive && (
+              <button
+                type="button"
+                onClick={() => {
+                  setKnowledgeSubmenuOpen(true);
+                  onAttachArchive();
+                }}
+                aria-label={t("chat.attach.menuItem", "Knowledge")}
+                aria-expanded={knowledgeSubmenuOpen}
+                className="flex items-center gap-3 w-full px-3 py-2 rounded-md text-sm transition-colors hover:bg-accent/40"
+              >
+                <Library className="w-4 h-4 shrink-0 text-muted-foreground" />
+                <span className="flex-1 text-left">{t("chat.attach.menuItem", "Knowledge")}</span>
+                <ChevronRight className="w-4 h-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              </button>
+            )}
+
+            {/* quick 260919-qjg: the Knowledge submenu — rendered INSIDE the
+                same PopoverContent (below the attach-document/mic rows) while
+                open: a back row + the parent-composed archive list body. The
+                DLP toggle hides while the submenu is open (they never show
+                together). */}
+            {knowledgeSubmenuOpen && (
+              <div role="group" aria-label={t("chat.attach.menuItem", "Knowledge")} className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onKnowledgeBack) onKnowledgeBack();
+                    setKnowledgeSubmenuOpen(false);
+                  }}
+                  aria-label={t("chat.attach.back", "Back")}
+                  className="flex items-center gap-3 w-full px-3 py-2 rounded-md text-sm transition-colors hover:bg-accent/40"
+                >
+                  <ArrowLeft className="w-4 h-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span>{t("chat.attach.back", "Back")}</span>
+                </button>
+                {archivePickerPanel}
+              </div>
+            )}
+
             {/* Quick 260829-spj: admin-gated global DLP-text reveal toggle.
-                Renders nothing when the parent passes no item or gates it off. */}
-            {dlpToggle}
+                Renders nothing when the parent passes no item or gates it
+                off; hidden while the Knowledge submenu is open (never shown
+                together). */}
+            {!knowledgeSubmenuOpen && dlpToggle}
           </PopoverContent>
         </Popover>
 

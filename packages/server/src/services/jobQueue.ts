@@ -23,8 +23,9 @@
 //     back to `setInterval` (same shape as `getRedis() === null`).
 //
 // Phase 164 is FOUNDATION ONLY: `schedule()` and `createQueue()` are exported
-// as thin delegators for Phase 165 to call, but are NOT invoked in this phase
-// (scope fence — see 164-01-PLAN.md prohibitions).
+// as thin delegators for Phase 165 to call. Phase 192 (D-01) adds the one-shot
+// `send()` delegator — the first one-shot send/work seam in the repo (the
+// prior consumers are cron-only).
 
 import { PgBoss } from "pg-boss";
 import { getEnv } from "../config/env";
@@ -148,12 +149,32 @@ export async function schedule(
  * Thin delegator to `boss.createQueue(name)`. Phase 165 calls this before
  * `schedule(name, ...)` (RESEARCH Pitfall 7: a schedule references a queue by
  * name; the queue must exist first). Phase 164 does NOT call this.
+ *
+ * Phase 192 (Pitfall 6): an optional options object is passable —
+ * `expireInSeconds` MUST be raised on long-running queues (default 900s
+ * active-cap would retry a still-running scan; the AI-ACT.pdf incident).
  */
-export async function createQueue(name: string): Promise<void> {
+export async function createQueue(name: string, opts?: Record<string, unknown>): Promise<void> {
   assertValidQueueName(name);
   const boss = getBoss();
   if (!boss) {
     throw new Error("[jobQueue] pg-boss not available — cannot create queue");
   }
-  await boss.createQueue(name);
+  await boss.createQueue(name, opts as Parameters<typeof boss.createQueue>[1]);
+}
+
+/**
+ * Phase 192 (D-01): one-shot send delegator — mirrors the schedule() shape
+ * (charset guard + null-boss throw). The FIRST one-shot send seam in the
+ * repo; the dlp_document_scan consumer (dlpDocumentScanJob.ts) calls this
+ * per completed document. The queue must already exist (createQueue at
+ * consumer init — same Pitfall 7 discipline as schedule()).
+ */
+export async function send(queueName: string, data: unknown): Promise<string | null> {
+  assertValidQueueName(queueName);
+  const boss = getBoss();
+  if (!boss) {
+    throw new Error("[jobQueue] pg-boss not available — cannot send");
+  }
+  return boss.send(queueName, data as object);
 }

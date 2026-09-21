@@ -66,6 +66,7 @@ import request from "supertest";
 import { createApp } from "../index";
 import prisma from "../utils/prisma";
 import { generateTestToken } from "./helpers/mockAuth";
+import { archiveConfigSchema } from "@simmetric-chat/shared";
 
 const app = createApp();
 
@@ -80,15 +81,15 @@ beforeEach(() => {
 });
 
 describe("GET /api/archives/:archiveId/config", () => {
-  it("should return 404 when no config exists", async () => {
+  it("should return 200 with the schema-default empty config when no config exists (Phase 187 gap closure — first-save hydration)", async () => {
     (prisma.archiveConfig.findUnique as jest.Mock).mockResolvedValue(null);
 
     const res = await request(app)
       .get(`/api/archives/${ARCHIVE_ID}/config`)
       .set(adminAuth())
-      .expect(404);
+      .expect(200);
 
-    expect(res.body.error).toBe("Archive config not found");
+    expect(res.body).toEqual(archiveConfigSchema.parse({}));
   });
 
   it("should return config JSON when it exists", async () => {
@@ -138,6 +139,38 @@ describe("PUT /api/archives/:archiveId/config", () => {
 
     expect(res.body.error).toBe("Invalid config");
     expect(res.body.details).toBeDefined();
+  });
+
+  // Phase 187 (WIKS-01/D-01): schemaPrompt max(10000) is enforced at the route
+  // via safeParse — 400 with details.schemaPrompt defined (no route code change).
+  it("should return 400 with details.schemaPrompt when schemaPrompt exceeds 10000 chars", async () => {
+    const res = await request(app)
+      .put(`/api/archives/${ARCHIVE_ID}/config`)
+      .set(adminAuth())
+      .send({ schemaPrompt: "x".repeat(10001) })
+      .expect(400);
+
+    expect(res.body.error).toBe("Invalid config");
+    expect(res.body.details).toBeDefined();
+    expect(res.body.details.schemaPrompt).toBeDefined();
+  });
+
+  it("should accept a schemaPrompt of exactly 10000 chars (200)", async () => {
+    const config = { schemaPrompt: "x".repeat(10000) };
+    (prisma.archiveConfig.upsert as jest.Mock).mockResolvedValue({
+      id: "cfg-003",
+      archiveId: ARCHIVE_ID,
+      config,
+    });
+
+    const res = await request(app)
+      .put(`/api/archives/${ARCHIVE_ID}/config`)
+      .set(adminAuth())
+      .send(config)
+      .expect(200);
+
+    expect(res.body.message).toBe("Config updated successfully");
+    expect(prisma.archiveConfig.upsert).toHaveBeenCalled();
   });
 });
 

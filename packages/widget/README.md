@@ -231,15 +231,15 @@ Rate limiting is enforced at two layers — widget middleware and server-side (D
 
 | Limiter | Scope | Limit (prod / dev) | Window | Key |
 |---------|-------|--------------------|--------|-----|
-| `widgetDailyMessageLimiter` | Per visitor per widget | 5 / 50 (or per-widget `sessionLimitPerDay` from Redis config) | 24 hours | `widgetId` + IP composite (from `req.originalUrl` URL path; falls back to IP via `ipKeyGenerator`, then `"unknown"`) |
-| `widgetChatLimiter` | Per tenant (Widget) | 30 / 200 (or per-widget `rateLimitPerMinute` from Redis config) | 1 minute | `widgetId` (from `req.originalUrl` URL path; falls back to IP via `ipKeyGenerator`, then `"unknown"`) |
+| `widgetDailyMessageLimiter` | Per visitor per widget | 5 / 50 (or per-widget `sessionLimitPerDay` from Redis config: 0 = unlimited, positive int = custom limit) | 24 hours | `widgetId` + IP composite (from `req.originalUrl` URL path; falls back to IP via `ipKeyGenerator`, then `"unknown"`) |
+| `widgetChatLimiter` | Per tenant (Widget) | 30 / 200 (or per-widget `rateLimitPerMinute` from Redis config: 0 = unlimited, positive int = custom limit) | 1 minute | `widgetId` (from `req.originalUrl` URL path; falls back to IP via `ipKeyGenerator`, then `"unknown"`) |
 | `widgetSessionLimiter` | Per IP | 50 / 500 | 24 hours | IP |
 | `widgetLeadLimiter` | Per IP | 3 / 30 | 1 hour | IP |
 | Server session counters | Per session | 20 messages (hourly) / 5 conversations (daily) | Session-lifetime (session expires after 24h) | DB counters on `WidgetSession` (`hourlyRemaining` / `dailyRemaining` returned to the client; the server rejects with 429 when a counter is exhausted) |
 
 Development (NODE_ENV !== "production") raises middleware limits to the dev values in the table above — a 10x multiplier for the daily/session/lead limiters, but ~6.7x for `widgetChatLimiter` (30/min prod → 200/min dev). Server-side limits are checked in the chat route before SSE proxying starts.
 
-Since v0.19, `widgetChatLimiter` and `widgetDailyMessageLimiter` use a **Redis-backed store** (`rate-limit-redis`, prefix `rl:`) when Redis is available, and their `max` is a function that reads `rateLimitPerMinute` / `sessionLimitPerDay` from the Redis widget-config cache (`widget:config:{widgetId}`) — falling back to the global defaults (30/5 prod, 200/50 dev) on cache miss or Redis unavailability. The limiters run **before** `sessionMiddleware`, so they read Redis directly rather than `req.widgetConfig`. The other limiters remain in-memory (`express-rate-limit` default store).
+Since v0.19, `widgetChatLimiter` and `widgetDailyMessageLimiter` use a **Redis-backed store** (`rate-limit-redis`, prefix `rl:`) when Redis is available, and their `max` is a function that reads `rateLimitPerMinute` / `sessionLimitPerDay` from the Redis widget-config cache (`widget:config:{widgetId}`) — falling back to the global defaults (30/5 prod, 200/50 dev) on cache miss or Redis unavailability. Per-widget overrides follow the tri-state convention: a **null/absent value means the global default**, a **positive int is the custom limit**, and **0 means unlimited ("no limits")** — the limiter is effectively bypassed by returning `WIDGET_UNLIMITED_MAX` (Int32 max) instead of 0, because express-rate-limit v7+ treats a computed `max` of 0 as blocking ALL requests. The limiters run **before** `sessionMiddleware`, so they read Redis directly rather than `req.widgetConfig`. The other limiters remain in-memory (`express-rate-limit` default store).
 
 ## Testing
 

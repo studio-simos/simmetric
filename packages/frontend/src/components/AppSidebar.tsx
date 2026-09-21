@@ -23,10 +23,11 @@
  */
 
 import { useState, useEffect } from "react";
-import { PanelLeftClose, PanelLeftOpen, Menu } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, Menu, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import Monogram from "./Monogram";
+import WorkspaceAccessDialog from "./WorkspaceAccessDialog";
 import { cn } from "@/lib/utils";
 
 export interface AppSidebarProps {
@@ -54,6 +55,18 @@ export interface AppSidebarProps {
   children?: React.ReactNode;
 }
 
+/**
+ * Phase 189 (WSIS-03, D-20): the owner share surface rides the sidebar as
+ * optional props — the caller (App.tsx) resolves ownership (UX-only gate:
+ * every grant/revoke/list call re-gates server-side, owner-or-admin, so a
+ * spoofed flag cannot widen anything) and passes the active workspace only
+ * when the user owns its project. `null` shareTarget → no Share affordance.
+ */
+export interface SidebarShareTarget {
+  workspaceId: string;
+  workspaceName: string;
+}
+
 export default function AppSidebar({
   appName,
   primaryColor,
@@ -66,14 +79,19 @@ export default function AppSidebar({
   sidebarOpen,
   setSidebarOpen,
   isMobile = false,
+  shareTarget = null,
   children,
-}: AppSidebarProps) {
+}: AppSidebarProps & { shareTarget?: SidebarShareTarget | null }) {
   // Cache-busting token for the white-label app icon (Feature 8 Slice C).
   // `branding-changed` bumps the bust on every upload; persisted to
   // localStorage so a reload still requests the fresh URL.
   const [iconBust, setIconBust] = useState(
     () => Number(localStorage.getItem("branding-icon-bust")) || 0,
   );
+  // Phase 189 (D-20): the share dialog's open state — the second mount of
+  // the SAME WorkspaceAccessDialog component (one grants-list implementation,
+  // two surfaces: WorkspaceRow's pre-existing mount + this owner surface).
+  const [shareOpen, setShareOpen] = useState(false);
   useEffect(() => {
     const onBranding = (e: Event) => {
       const detail = (e as CustomEvent).detail;
@@ -177,6 +195,26 @@ export default function AppSidebar({
           rail: the 60px strip cannot host the list; the rail keeps only the
           brand mark, the expand toggle, the menu and the user buttons. */}
       <div className={cn("flex-1 min-h-0 flex flex-col overflow-hidden", collapsed && "hidden")}>
+        {/* D-20: owner share affordance — visible ONLY when the caller
+            resolved an owned active workspace (client gate is UX-only). */}
+        {shareTarget && (
+          <div className="px-2 pt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShareOpen(true)}
+              aria-label={t("workspace.access.button")}
+              title={t("workspace.access.button")}
+              className={cn(
+                "w-full text-muted-foreground hover:text-foreground justify-start gap-2",
+                collapsed && "justify-center px-0",
+              )}
+            >
+              <Share2 className="w-4 h-4 flex-none" />
+              {!collapsed && <span className="text-sm truncate">{t("workspace.access.button")}</span>}
+            </Button>
+          </div>
+        )}
         {children}
       </div>
 
@@ -228,6 +266,17 @@ export default function AppSidebar({
           )}
         </Button>
       </div>
+      {/* D-20: second mount of WorkspaceAccessDialog (the pre-existing
+          WorkspaceRow 'Access' button is the first) — one component, two
+          surfaces. */}
+      {shareTarget && (
+        <WorkspaceAccessDialog
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+          workspaceId={shareTarget.workspaceId}
+          workspaceName={shareTarget.workspaceName}
+        />
+      )}
     </div>
   );
 }

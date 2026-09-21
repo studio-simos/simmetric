@@ -55,6 +55,8 @@ jest.mock("../../queries/useUploadDrafts", () => ({
   useRetryBoth: () => ({ mutateAsync: jest.fn() }),
   useDeleteDraft: () => ({ mutateAsync: mockDeleteMutateAsync }),
   useRenameDraft: () => ({ mutateAsync: jest.fn() }),
+  // quick 260918-p3h (D-3) — the panel now consumes useCancelDraftLeg.
+  useCancelDraftLeg: () => ({ mutateAsync: jest.fn(), isPending: false }),
 }));
 
 // Mock useArchives — empty list is fine for these visibility tests.

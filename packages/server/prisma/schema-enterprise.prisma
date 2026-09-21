@@ -42,7 +42,7 @@
 // encryptionService) — never stored in plaintext (T-113-01-01).
 model SsoConfig {
   id                    String   @id @default(uuid())
-  provider              String // "saml" | "oidc"
+  provider              String // "saml" | "oidc" | "ldap"
   enabled               Boolean  @default(false)
   clientId              String?
   clientSecretEncrypted String? // AES-256-GCM ciphertext "iv:authTag:ciphertext"
@@ -51,10 +51,47 @@ model SsoConfig {
   cert                  String? // SAML IdP signing certificate
   entityId              String? // SAML SP entity ID (default "simmetric-chat")
   redirectUri           String? // SAML assertion consumer service URL
+  // Phase 193 (LDAP-01, D-03): additive nullable LDAP provider fields —
+  // mirrors the SAML/OIDC column set above; NULL = not configured.
+  ldapUrl               String? // LDAP server URL (ldap:// or ldaps://)
+  ldapBindDn            String? // service-account bind DN (read/service user)
+  // AES-256-GCM ciphertext "iv:authTag:ciphertext" — encrypted at rest via
+  // ctx.encrypt (same format as clientSecretEncrypted); plaintext lives in
+  // the LDAP_BIND_PASSWORD env var only (D-05 posture, T-193-01).
+  ldapBindPasswordEncrypted String?
+  ldapSearchBase        String? // LDAP user search base DN
+  ldapSearchFilter      String? // LDAP user search filter; default "(uid={{username}})" at the consumption site
+  ldapGroupSearchBase   String? // LDAP group search base DN
+  ldapGroupSearchFilter String? // LDAP group search filter; default "(member={{dn}})" at the consumption site
+  ldapUseTls            Boolean  @default(true) // STARTTLS upgrade on ldap:// URLs (ldaps:// ignores this — D-06)
+  ldapAcceptCert        String?  @db.Text // custom CA PEM for certificate-validated TLS (D-08 — never rejectUnauthorized:false)
+  ldapFallbackToLocal   Boolean  @default(true) // fall back to local auth when LDAP is unreachable/bind-fails (D-13)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
   @@map("sso_configs")
+}
+
+// ============================================================
+// Phase 193 (LDAP-02, D-04): admin-configurable LDAP group → role
+// mapping. One row per (ldapGroupDn, roleId); on-login sync (D-09)
+// upserts UserRole rows with assignedVia: "ldap" from these rows and
+// removes only assignedVia: "ldap" rows that no longer match. Admin
+// grants (assignedVia: "manual") are never touched by the sync.
+// The Role relation crosses the fragment boundary (Role lives in
+// schema.prisma); it resolves at generate time per the Phase 141
+// verdict (same as IdentityProvider.user). Role.ldapGroupRoleMaps
+// is the schema.prisma back-relation.
+// ============================================================
+model LdapGroupRoleMap {
+  id          String @id @default(uuid())
+  ldapGroupDn String
+  roleId      String
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([ldapGroupDn, roleId])
+  @@map("ldap_group_role_map")
 }
 
 // Phase 113 (SSO — AUTH-02): external identity provider link per user.
@@ -63,7 +100,7 @@ model SsoConfig {
 // on login via an existing link; user deletion cascades their IdP links (D-03).
 model IdentityProvider {
   id             String   @id @default(uuid())
-  provider       String // "saml" | "oidc"
+  provider       String // "saml" | "oidc" | "ldap" — Phase 193 adds the "ldap" value (string column, no constraint migration)
   providerUserId String // stable external subject identifier from the IdP
   userId         String
   createdAt      DateTime @default(now())

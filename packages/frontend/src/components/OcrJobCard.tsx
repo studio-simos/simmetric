@@ -4,7 +4,7 @@
 // See LICENSE and NOTICE at the repository root for full terms.
 
 import { useTranslation } from "react-i18next";
-import { Clock, Loader2, CheckCircle2, XCircle, ScanLine, Globe, Eye, Trash2 } from "lucide-react";
+import { Clock, Loader2, CheckCircle2, XCircle, ScanLine, Globe, Eye, Trash2, X, RefreshCw } from "lucide-react";
 import { Card, CardContent } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Progress } from "./ui/progress";
@@ -20,7 +20,7 @@ import {
   AlertDialogTitle,
 } from "./ui/alert-dialog";
 import { useState } from "react";
-import { useDeleteOcrJob } from "../queries/useOcrJobs";
+import { useDeleteOcrJob, useCancelOcrJob, useRepairOcrPages } from "../queries/useOcrJobs";
 import { showSuccess, showError } from "../lib/toast";
 import type { OcrJob } from "../queries/useOcrJobs";
 
@@ -36,6 +36,35 @@ export default function OcrJobCard({ job, archiveId, onPreview }: Props) {
   const { t } = useTranslation();
   const [showDelete, setShowDelete] = useState(false);
   const deleteMutation = useDeleteOcrJob();
+  // quick 260918-p3h (D-3): cooperative cancel for a running job.
+  const cancelMutation = useCancelOcrJob();
+  // 260919-kvm: re-OCR failed pages of a COMPLETED job (all-failed targets).
+  const repairMutation = useRepairOcrPages();
+
+  const handleCancel = async () => {
+    try {
+      await cancelMutation.mutateAsync({ archiveId, jobId: job.id });
+      showSuccess(t("uploads.ingest.cancelled", { defaultValue: "Job cancelled" }));
+    } catch (err: unknown) {
+      showError(
+        t("uploads.ingest.cancelFailed", { error: getErrorMessage(err, "") }),
+      );
+    }
+  };
+
+  const handleRepair = async () => {
+    try {
+      const outcome = await repairMutation.mutateAsync({ archiveId, jobId: job.id });
+      const repairedCount = outcome.repaired.filter((r) => !r.stillFailed).length;
+      if (repairedCount > 0) {
+        showSuccess(t("ocr.repairSuccess", { repaired: repairedCount }));
+      } else {
+        showError(t("ocr.repairStillFailed"));
+      }
+    } catch (err: unknown) {
+      showError(getErrorMessage(err, t("ocr.repairStillFailed")));
+    }
+  };
 
   const handleDelete = async () => {
     try {
@@ -134,7 +163,8 @@ export default function OcrJobCard({ job, archiveId, onPreview }: Props) {
           <div className="space-y-1">
             <Progress value={job.progress} className="h-2" />
             <p className="text-xs text-muted-foreground">
-              {job.progress}%{" "}
+              {/* quick 260918-p3h (D-2): numeric % beside the processing label. */}
+              {job.progress > 0 && <span>{job.progress}% </span>}
               {isOcr && job.currentPage && job.totalPages
                 ? t("ocr.status.PROCESSING", {
                     currentPage: job.currentPage,
@@ -172,6 +202,35 @@ export default function OcrJobCard({ job, archiveId, onPreview }: Props) {
                 <Clock className="h-3 w-3" />
                 <span className="ml-1">{t("ocr.outcome.pendingReview")}</span>
               </Badge>
+            )}
+            {/* 260919-kvm: failed-page count badge + retry button */}
+            {!isRejected && (job.result?.failedPages ?? 0) > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className="flex-shrink-0 bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                  <XCircle className="h-3 w-3" />
+                  <span className="ml-1">
+                    {t("ocr.failedPagesBadge", { count: job.result?.failedPages })}
+                  </span>
+                </Badge>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={repairMutation.isPending}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRepair();
+                  }}
+                >
+                  {repairMutation.isPending ? (
+                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3 w-3 mr-1" />
+                  )}
+                  {repairMutation.isPending
+                    ? t("ocr.repairing")
+                    : t("ocr.retryFailedPages")}
+                </Button>
+              </div>
             )}
             {job.result && (
               <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
@@ -240,8 +299,28 @@ export default function OcrJobCard({ job, archiveId, onPreview }: Props) {
           {new Date(job.createdAt).toLocaleString()}
         </p>
 
-        {/* Delete button */}
-        <div className="flex justify-end">
+        {/* Action row: cancel (PENDING/PROCESSING) + delete */}
+        <div className="flex justify-end gap-2">
+          {/* quick 260918-p3h (D-3): cancel while the job runs. Shared i18n
+              keys from the uploads namespace (that namespace is in the
+              parity list; ocr.* is not). */}
+          {(job.status === "PENDING" || job.status === "PROCESSING") && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs text-destructive hover:text-destructive"
+              disabled={cancelMutation.isPending}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCancel();
+              }}
+            >
+              <X className="h-3 w-3 mr-1" />
+              {cancelMutation.isPending
+                ? t("uploads.ingest.cancelling")
+                : t("uploads.ingest.cancel")}
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"

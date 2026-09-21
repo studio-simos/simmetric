@@ -1,0 +1,8 @@
+Bonifico in uscita.
+
+Beneficiario: Ferro Spa
+IBAN: IT60X0542811101000000123456
+Importo: 45.600 EUR
+Causale: saldo fattura n. 118
+
+Partita IVA beneficiario: 00743110157

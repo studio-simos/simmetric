@@ -28,6 +28,10 @@ router.get("/", authMiddleware, tenantContextMiddleware, async (req: Request, re
     const workspaceId = req.query.workspaceId as string | undefined;
 
     const entries = await prisma.mcpCatalogEntry.findMany({
+      // quick 260918-qts (D-2): soft-deleted entries are invisible to every
+      // catalog reader — the filter also blocks boot-seed resurrection from
+      // ever being surfaced to admins
+      where: { deletedAt: null },
       orderBy: { name: "asc" },
     });
 
@@ -79,7 +83,7 @@ router.get("/:entryId", authMiddleware, tenantContextMiddleware, async (req: Req
       where: { id: entryId },
     });
 
-    if (!entry) {
+    if (!entry || entry.deletedAt) {
       res.status(404).json({ error: "Catalog entry not found" });
       return;
     }
@@ -199,7 +203,8 @@ router.post("/:entryId/install", async (req: Request, res: Response) => {
     const catalogEntry = await prisma.mcpCatalogEntry.findUnique({
       where: { id: entryId },
     });
-    if (!catalogEntry) {
+    // quick 260918-qts: soft-deleted entries cannot be installed (D-2)
+    if (!catalogEntry || catalogEntry.deletedAt) {
       res.status(404).json({ error: "Catalog entry not found" });
       return;
     }
@@ -355,6 +360,67 @@ router.post("/:entryId/uninstall", async (req: Request, res: Response) => {
   } catch (err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
     logger.error("[marketplace] Error uninstalling MCP server", { error: message });
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DELETE /:entryId — Delete a single catalog entry (quick 260918-qts, D-1)
+// Inherits the router.use(authMiddleware, tenantContextMiddleware, requireAdmin)
+// chain above — admin-only, exactly like install/uninstall.
+router.delete("/:entryId", async (req: Request, res: Response) => {
+  try {
+    // 1. Validate entryId param (UUID)
+    const paramResult = mcpCatalogEntryIdParamSchema.safeParse(req.params);
+    if (!paramResult.success) {
+      res.status(400).json({
+        error: "Invalid request body",
+        details: paramResult.error.flatten().fieldErrors,
+      });
+      return;
+    }
+    const { entryId } = paramResult.data;
+
+    // 2. Load the entry — 404 when missing OR already soft-deleted
+    // T-185-10 disposition: exempt global catalog model (rationale above).
+    const entry = await prisma.mcpCatalogEntry.findUnique({
+      where: { id: entryId },
+    });
+    if (!entry || entry.deletedAt) {
+      res.status(404).json({ error: "Catalog entry not found" });
+      return;
+    }
+
+    // 3. In-use guard (T-QTS-02): a catalog entry still referenced by any
+    // MCPConnection cannot be deleted — the admin must uninstall it from
+    // those workspaces first. No cascade surprise (explicit D-1 disposition).
+    const inUseCount = await prisma.mCPConnection.count({
+      where: { catalogEntryId: entryId },
+    });
+    if (inUseCount > 0) {
+      res.status(409).json({
+        error:
+          "This catalog entry is still installed in one or more workspaces. Uninstall it from those workspaces before deleting it from the marketplace.",
+      });
+      return;
+    }
+
+    // 4. Soft delete (repo norm + D-2): update deletedAt instead of a hard
+    // delete so the boot-time seed upsert (whose update clause never touches
+    // deletedAt) cannot resurrect the entry on restart.
+    await prisma.mcpCatalogEntry.update({
+      where: { id: entryId },
+      data: { deletedAt: new Date() },
+    });
+
+    // 5. Audit log (T-QTS-03): mirrors install/uninstall audit discipline
+    await logEvent("mcp_catalog_entry", entryId, "mcp.catalog_entry_deleted", req.userId!, {
+      name: entry.name,
+    });
+
+    res.json({ message: "Catalog entry deleted" });
+  } catch (err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+    logger.error("[marketplace] Error deleting catalog entry", { error: message });
     res.status(500).json({ error: "Internal server error" });
   }
 });

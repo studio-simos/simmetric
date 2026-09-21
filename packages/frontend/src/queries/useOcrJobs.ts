@@ -28,6 +28,8 @@ export interface OcrJob {
     totalTokens?: number;
     totalDurationMs?: number;
     hasUnverified?: boolean;
+    /** 260919-kvm: pages whose markdown carries a [FAILED: marker */
+    failedPages?: number;
     pageResults?: Array<{
       pageNumber: number;
       markdown: string;
@@ -110,6 +112,48 @@ export function useDeleteOcrJob() {
       apiDelete(`/archives/${archiveId}/jobs/${jobId}`),
     onSuccess: (_, { archiveId }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.ocrJobs.list(archiveId) });
+    },
+  });
+}
+
+/**
+ * quick 260918-p3h (D-3): cancel a running OCR job (PENDING/PROCESSING →
+ * CANCELLED). Posts to the dedicated cancel endpoint; the OCR pipeline stops
+ * cooperatively at the next page boundary. On success invalidates the jobs
+ * list so the card re-renders with the cancelled badge.
+ */
+export function useCancelOcrJob() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ message: string }, Error, { archiveId: string; jobId: string }>({
+    mutationFn: ({ archiveId, jobId }) =>
+      apiPost<{ message: string }>(`/archives/${archiveId}/jobs/${jobId}/cancel`, {}),
+    onSuccess: (_, { archiveId }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.ocrJobs.list(archiveId) });
+    },
+  });
+}
+
+/**
+ * 260919-kvm: re-OCR failed pages of a COMPLETED job. Omitted `pages` = all
+ * [FAILED: pages; explicit list = single-page repair from the preview modal.
+ */
+export function useRepairOcrPages() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { repaired: Array<{ pageNumber: number; markdown: string; stillFailed: boolean }>; failedPages: number; qualityScore: number | null },
+    Error,
+    { archiveId: string; jobId: string; pages?: number[] }
+  >({
+    mutationFn: ({ archiveId, jobId, pages }) =>
+      apiPost(
+        `/archives/${archiveId}/jobs/${jobId}/pages/retry`,
+        pages ? { pages } : {},
+      ),
+    onSuccess: (_, { archiveId, jobId }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.ocrJobs.list(archiveId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ocrJobs.detail(archiveId, jobId) });
     },
   });
 }

@@ -90,4 +90,124 @@ describe("ChatInputArea", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove attachment" }));
     expect(onRemoveAttachment).toHaveBeenCalledTimes(1);
   });
+
+  // ── quick 260919-qjg: Knowledge submenu inside the more-actions popover ──
+  // (supersedes the 191-05 WR-03 close-on-click contract: the archive list
+  // moved INTO the popover, so the Knowledge item now KEEPS it open and
+  // reveals the submenu group; the popover close + back row reset it.)
+
+  function submenuProps() {
+    return setup({
+      onAttachArchive: jest.fn(),
+      onKnowledgeBack: jest.fn(),
+      archivePickerPanel: <div data-testid="panel-slot">PANEL</div>,
+    });
+  }
+
+  it("keeps the popover open on the Knowledge item click and reveals the submenu (260919-qjg)", async () => {
+    const { props } = submenuProps();
+    const { act } = await import("@testing-library/react");
+    render(<ChatInputArea {...(props as Record<string, unknown>)} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    });
+    const knowledgeItem = screen.getByRole("button", { name: "Knowledge" });
+    expect(knowledgeItem).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(knowledgeItem);
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    // The popover stays open and the submenu group renders INSIDE it.
+    expect(knowledgeItem).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Knowledge" })).toBeInTheDocument();
+    expect(screen.getByTestId("panel-slot")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
+    expect((props as { onAttachArchive: jest.Mock }).onAttachArchive).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicking the Back row calls onKnowledgeBack and returns to the main menu", async () => {
+    const { props } = submenuProps();
+    const { act } = await import("@testing-library/react");
+    render(<ChatInputArea {...(props as Record<string, unknown>)} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Knowledge" }));
+    });
+    expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    });
+    expect((props as { onKnowledgeBack: jest.Mock }).onKnowledgeBack).toHaveBeenCalledTimes(1);
+    // Back to the main menu: Knowledge row visible, submenu group gone.
+    expect(screen.getByRole("button", { name: "Knowledge" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Knowledge" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("panel-slot")).not.toBeInTheDocument();
+  });
+
+  it("hides the DLP toggle slot while the submenu is open", async () => {
+    const { props } = submenuProps();
+    (props as Record<string, unknown>).dlpToggle = <div data-testid="dlp-slot">DLP</div>;
+    const { act } = await import("@testing-library/react");
+    render(<ChatInputArea {...(props as Record<string, unknown>)} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    });
+    expect(screen.getByTestId("dlp-slot")).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Knowledge" }));
+    });
+    expect(screen.queryByTestId("dlp-slot")).not.toBeInTheDocument();
+  });
+
+  it("resets to the main menu after the popover closes and reopens", async () => {
+    const { props } = submenuProps();
+    const { act } = await import("@testing-library/react");
+    render(<ChatInputArea {...(props as Record<string, unknown>)} />);
+
+    // Open, enter the submenu.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Knowledge" }));
+    });
+    expect(screen.getByTestId("panel-slot")).toBeInTheDocument();
+
+    // Close the popover via Radix's outside-dismiss path: a pointerdown+
+    // pointerup OUTSIDE the popover content (jsdom lacks PointerEvent —
+    // synthesize it). The controlled state is driven through onOpenChange.
+    await act(async () => {
+      const evt = new CustomEvent("pointerdown", { bubbles: true });
+      (evt as unknown as { pointerId: number }).pointerId = 1;
+      document.dispatchEvent(evt);
+      const up = new CustomEvent("pointerup", { bubbles: true });
+      (up as unknown as { pointerId: number }).pointerId = 1;
+      document.dispatchEvent(up);
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByRole("button", { name: "Knowledge" })).not.toBeInTheDocument();
+
+    // Reopen → main menu, not the submenu.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByRole("button", { name: "Knowledge" })).toBeInTheDocument();
+    expect(screen.queryByTestId("panel-slot")).not.toBeInTheDocument();
+  });
+
+  it("renders the attach-document voice with the short 'Attach' label", () => {
+    const { props } = setup();
+    render(<ChatInputArea {...(props as Record<string, unknown>)} />);
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getAllByText("Attach").length).toBeGreaterThan(0);
+  });
 });

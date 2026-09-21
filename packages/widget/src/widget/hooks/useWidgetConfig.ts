@@ -5,7 +5,7 @@
 
 import { useMemo } from "preact/hooks";
 import { initWidgetI18n } from "../i18n";
-import type { WidgetCredits } from "@simmetric-chat/shared";
+import type { WidgetCredits, WidgetContactOptions } from "@simmetric-chat/shared";
 
 export interface WidgetConfig {
   widgetId: string;
@@ -38,6 +38,14 @@ export interface WidgetConfig {
   // client-supplied) + the admin-configured credits blob (raw pass-through).
   whiteLabel: boolean;
   credits: WidgetCredits | null;
+  // 260917-mz6: contact options shown at the daily limit + the lead-capture
+  // timing moment. Raw pass-through mapping — the client owns defaulting.
+  contactConfig: WidgetContactOptions | null;
+  leadCaptureTiming: "start" | "end" | "timeout";
+  leadCaptureTimeoutSeconds: number | null;
+  // 260917-qoh: per-widget privacy policy URL (renders as the link beside
+  // the lead-capture consent checkbox; null = not configured → no link).
+  privacyUrl: string | null;
 }
 
 // 129-01: exported so the node tests can assert the tri-state mapping
@@ -73,6 +81,14 @@ export const DEFAULT_CONFIG: WidgetConfig = {
   // credits null = neutral, credits always visible under Community.
   whiteLabel: false,
   credits: null,
+  // 260917-mz6: neutral defaults — no contact options configured, lead
+  // timing "end" (pre-feature behavior), no timeout.
+  contactConfig: null,
+  leadCaptureTiming: "end",
+  leadCaptureTimeoutSeconds: null,
+  // 260917-qoh: no privacy URL configured by default (the consent checkbox
+  // renders without a link).
+  privacyUrl: null,
 };
 
 // Validate URL scheme before setting CSS custom properties (defense-in-depth)
@@ -153,6 +169,30 @@ export function parseWidgetConfigBlock(textContent: string | null): WidgetConfig
           url: typeof raw.credits.url === "string" ? raw.credits.url : "",
         }
       : null,
+    // 260917-mz6: contact options — object-or-null pass-through with per-field
+    // typeof guards (mechanical mapping convention, no defaults injected).
+    // Unknown/absent fields map to undefined (the optional-key shape).
+    contactConfig: typeof raw.contactConfig === "object" && raw.contactConfig !== null
+      ? {
+          ...(typeof raw.contactConfig.formUrl === "string" ? { formUrl: raw.contactConfig.formUrl } : {}),
+          ...(typeof raw.contactConfig.bookingUrl === "string" ? { bookingUrl: raw.contactConfig.bookingUrl } : {}),
+          ...(typeof raw.contactConfig.email === "string" ? { email: raw.contactConfig.email } : {}),
+          ...(typeof raw.contactConfig.customUrl === "string" ? { customUrl: raw.contactConfig.customUrl } : {}),
+          ...(typeof raw.contactConfig.customLabel === "string" ? { customLabel: raw.contactConfig.customLabel } : {}),
+        }
+      : null,
+    // Timing accepted ONLY when exactly one of the three enum strings — else
+    // "end" (pre-feature behavior; the block may carry a tampered value).
+    leadCaptureTiming: raw.leadCaptureTiming === "start" || raw.leadCaptureTiming === "end" || raw.leadCaptureTiming === "timeout"
+      ? raw.leadCaptureTiming
+      : "end",
+    leadCaptureTimeoutSeconds: (() => {
+      const parsed = raw.leadCaptureTimeoutSeconds != null ? parseInt(String(raw.leadCaptureTimeoutSeconds), 10) : null;
+      return parsed != null && !isNaN(parsed) ? parsed : null;
+    })(),
+    // 260917-qoh: per-widget privacy URL — mechanical mapping with the
+    // typeof guard convention (missing → null, no defaults injected).
+    privacyUrl: typeof raw.privacyUrl === "string" ? raw.privacyUrl : null,
   };
 }
 
@@ -175,6 +215,43 @@ export function shouldRenderFab(hostFab: boolean): boolean {
 // it — same rationale as shouldRenderFab.
 export function shouldShowCredits(whiteLabel: boolean, credits: WidgetCredits | null): boolean {
   return !(whiteLabel === true && credits?.enabled === false);
+}
+
+// 188-03 (D-12): single-flag visibility predicate for the attribution links row.
+// Mirrors the shouldShowCredits byte-idiom but with NO second input — there is
+// no per-widget opt-out and no new Widget field (D-12: the Phase 130
+// white_label precedent). Community (whiteLabel false) shows the two product
+// attribution links; enterprise white-label removes them. The URLs themselves
+// are hardcoded component constants (D-13: no config-block field, no new cache
+// surface). Exported from the hook file (NOT the component) so jest node env
+// can test it — same rationale as shouldShowCredits/shouldRenderFab.
+export function shouldShowLinks(whiteLabel: boolean): boolean {
+  return !whiteLabel;
+}
+
+// 260917-mz6: single visibility predicate for the limit-reached contact
+// options card. True only when the daily session limit is reached AND at
+// least one option is usable: any contactConfig field configured (the blob
+// carries at least one non-empty field) OR lead capture available and not
+// yet submitted (the "leave your email" arm). Exported from the hook file
+// (NOT the component) so jest node env can test it — same rationale as
+// shouldRenderFab/shouldShowCredits.
+export function shouldShowContactOptions(
+  sessionLimitReached: boolean,
+  contactConfig: WidgetContactOptions | null,
+  leadCaptureEnabled: boolean,
+  leadSubmitted: boolean,
+): boolean {
+  if (!sessionLimitReached) return false;
+  const hasContactOption = !!contactConfig && (
+    (contactConfig.formUrl !== undefined && contactConfig.formUrl !== "") ||
+    (contactConfig.bookingUrl !== undefined && contactConfig.bookingUrl !== "") ||
+    (contactConfig.email !== undefined && contactConfig.email !== "") ||
+    (contactConfig.customUrl !== undefined && contactConfig.customUrl !== "") ||
+    (contactConfig.customLabel !== undefined && contactConfig.customLabel !== "")
+  );
+  const leadArm = leadCaptureEnabled && !leadSubmitted;
+  return hasContactOption || leadArm;
 }
 
 export function useWidgetConfig(): WidgetConfig {

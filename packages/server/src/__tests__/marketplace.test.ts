@@ -6,7 +6,8 @@
 /**
  * MCP Marketplace API integration tests
  *
- * Tests install (MCP-03) and uninstall (MCP-05) endpoints.
+ * Tests install (MCP-03), uninstall (MCP-05), and per-entry DELETE
+ * (quick 260918-qts, D-1/D-2).
  * MCP-04 (enable/disable toggle) is covered by the existing
  * POST /api/mcp-connections/:connectionId/toggle endpoint -- see mcpRoutes.test.ts.
  */
@@ -400,6 +401,184 @@ describe("POST /api/mcp-marketplace/:entryId/uninstall", () => {
 
     // The delete function should have been called (hard delete, not soft delete)
     expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ====================================================================
+// DELETE /api/mcp-marketplace/:entryId (quick 260918-qts, D-1)
+// ====================================================================
+
+describe("DELETE /api/mcp-marketplace/:entryId", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("returns 401 without auth header", async () => {
+    const res = await request(app)
+      .delete("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001");
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe("Authentication required");
+  });
+
+  it("returns 403 with non-admin token", async () => {
+    const res = await request(app)
+      .delete("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001")
+      .set(nonAdminAuth());
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("Admin access required");
+  });
+
+  it("returns 400 for invalid UUID in :entryId param", async () => {
+    const res = await request(app)
+      .delete("/api/mcp-marketplace/not-a-uuid")
+      .set(adminAuth());
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid request body");
+    expect(res.body.details).toBeDefined();
+  });
+
+  it("returns 404 for non-existent catalog entry", async () => {
+    (prisma.mcpCatalogEntry.findUnique as jest.Mock).mockResolvedValue(null);
+
+    const res = await request(app)
+      .delete("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440099")
+      .set(adminAuth());
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Catalog entry not found");
+    expect(prisma.mcpCatalogEntry.update).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for an already soft-deleted entry", async () => {
+    (prisma.mcpCatalogEntry.findUnique as jest.Mock).mockResolvedValue({
+      ...mockCatalogEntry,
+      deletedAt: new Date("2026-09-18T00:00:00.000Z"),
+    });
+
+    const res = await request(app)
+      .delete("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth());
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Catalog entry not found");
+    expect(prisma.mcpCatalogEntry.update).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when the entry is still installed in a workspace", async () => {
+    (prisma.mcpCatalogEntry.findUnique as jest.Mock).mockResolvedValue(mockCatalogEntry);
+    (prisma.mCPConnection.count as jest.Mock).mockResolvedValue(1);
+
+    const res = await request(app)
+      .delete("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth());
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain("still installed in one or more workspaces");
+    // T-QTS-02: no soft delete, no audit on the rejection path
+    expect(prisma.mcpCatalogEntry.update).not.toHaveBeenCalled();
+    expect(logEvent).not.toHaveBeenCalled();
+  });
+
+  it("soft-deletes via deletedAt and logs the audit event on success", async () => {
+    (prisma.mcpCatalogEntry.findUnique as jest.Mock).mockResolvedValue(mockCatalogEntry);
+    (prisma.mCPConnection.count as jest.Mock).mockResolvedValue(0);
+    (prisma.mcpCatalogEntry.update as jest.Mock).mockResolvedValue({
+      ...mockCatalogEntry,
+      deletedAt: new Date(),
+    });
+
+    const res = await request(app)
+      .delete("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth());
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toBe("Catalog entry deleted");
+    // T-QTS-04: the ONLY write shape the seed upsert cannot resurrect
+    expect(prisma.mcpCatalogEntry.update).toHaveBeenCalledTimes(1);
+    expect(prisma.mcpCatalogEntry.update).toHaveBeenCalledWith({
+      where: { id: "550e8400-e29b-41d4-a716-446655440001" },
+      data: { deletedAt: expect.any(Date) },
+    });
+    expect(prisma.mcpCatalogEntry.delete).not.toHaveBeenCalled();
+    expect(logEvent).toHaveBeenCalledWith(
+      "mcp_catalog_entry",
+      "550e8400-e29b-41d4-a716-446655440001",
+      "mcp.catalog_entry_deleted",
+      "admin-001",
+      { name: "Example MCP Server" }
+    );
+  });
+
+  it("probes the in-use guard with the full connection count", async () => {
+    (prisma.mcpCatalogEntry.findUnique as jest.Mock).mockResolvedValue(mockCatalogEntry);
+    (prisma.mCPConnection.count as jest.Mock).mockResolvedValue(0);
+    (prisma.mcpCatalogEntry.update as jest.Mock).mockResolvedValue(mockCatalogEntry);
+
+    await request(app)
+      .delete("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth());
+
+    expect(prisma.mCPConnection.count).toHaveBeenCalledWith({
+      where: { catalogEntryId: "550e8400-e29b-41d4-a716-446655440001" },
+    });
+  });
+});
+
+// ====================================================================
+// Deleted-state filters (quick 260918-qts, D-2)
+// ====================================================================
+
+describe("deleted-state honoring (GET list/detail, install)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("GET / list filters soft-deleted entries via deletedAt: null", async () => {
+    (prisma.mcpCatalogEntry.findMany as jest.Mock).mockResolvedValue([mockCatalogEntry]);
+
+    const res = await request(app)
+      .get("/api/mcp-marketplace")
+      .set(adminAuth());
+
+    expect(res.status).toBe(200);
+    expect(prisma.mcpCatalogEntry.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { deletedAt: null },
+      })
+    );
+  });
+
+  it("GET /:entryId returns 404 for a soft-deleted entry", async () => {
+    (prisma.mcpCatalogEntry.findUnique as jest.Mock).mockResolvedValue({
+      ...mockCatalogEntry,
+      deletedAt: new Date(),
+    });
+
+    const res = await request(app)
+      .get("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth());
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Catalog entry not found");
+  });
+
+  it("POST /:entryId/install returns 404 for a soft-deleted entry", async () => {
+    (prisma.mcpCatalogEntry.findUnique as jest.Mock).mockResolvedValue({
+      ...mockCatalogEntry,
+      deletedAt: new Date(),
+    });
+
+    const res = await request(app)
+      .post("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001/install")
+      .set(adminAuth())
+      .send({ workspaceId: "550e8400-e29b-41d4-a716-446655440003" });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Catalog entry not found");
+    expect(prisma.mCPConnection.create).not.toHaveBeenCalled();
   });
 });
 

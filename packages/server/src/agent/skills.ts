@@ -18,6 +18,10 @@ import { logger } from "../utils/logger";
 // suite called it. This import activates the runtime call site and resolves
 // WR-04. See packages/server/src/agent/mcpClient.ts:460.
 import { getMCPToolsForWorkspace } from "./mcpClient";
+// Phase 190 (D-15/D-16): the per-request custom-skill resolver. skillService
+// imports only prisma + shared types (type-only AgentSkillDefinition import —
+// erased at compile time), so there is no import cycle.
+import { resolveCustomSkillsForChat } from "../services/skillService";
 
 export interface AgentSkillDefinition {
   name: string;
@@ -36,7 +40,10 @@ export interface AgentSkillDefinition {
    * skills without it compile and behave identically (backward-compat).
    */
   inputSchema?: Record<string, unknown>;
-  type: "builtin" | "mcp";
+  // Phase 190 (SKIL-01 D-02): the union widens with "custom" — DB-persisted
+  // prompt-template skills resolved per-request (D-15) and merged additively;
+  // they never enter the builtinSkills Map (D-15/D-16).
+  type: "builtin" | "mcp" | "custom";
   execute: (params: SkillParams) => Promise<SkillResult>;
 }
 
@@ -56,6 +63,20 @@ export interface SkillParams {
   // mirroring archiveId. Currently unused by builtin skills; available for
   // future skill-level localization needs.
   locale?: string;
+  // Phase 190 (WR-02, D-13): thread the request's DLP masking decision
+  // (DLP_ENABLED true AND no bypass role — the SAME dlpScanEnabled the chat
+  // route computes) into skill execution so prompt-template skills mask
+  // tool-input values BEFORE template compilation on the LLM-invoked path
+  // too (the explicit /slug path is masked in the route; both invocation
+  // styles share the masking contract through createPromptSkillExecutor).
+  // Builtin skills ignore the flag (additive-optional — byte-identical).
+  dlpMaskingEnabled?: boolean;
+  // Phase 191 (KNOW-01 D-04): chat-attached wiki-archive IDs — org-validated
+  // upstream by archiveAttachmentService.resolveAttachedArchives (silent
+  // org-scoped filter); skills NEVER re-validate. Only rag_search consumes
+  // them (retrieval union over archive:<id> pseudo-workspaces); other skills
+  // ignore the field (additive-optional — byte-identical).
+  attachedArchiveIds?: string[];
 }
 
 export interface SkillResult {
@@ -132,11 +153,23 @@ export function _clearAllSkills(): void {
  * builtin skills (`rag_search`, `workspace_memory`) or pinned MCP skills
  * already in the result. The D-15 fallback paths (no pins / all pins
  * disabled) return workspace defaults PLUS workspace-scoped MCP tools.
+ *
+ * Phase 190 (D-15/D-16): AFTER the MCP-02 union, EVERY return path is
+ * wrapped with mergeCustomSkills — per-request DB resolution of custom
+ * prompt-template skills (D-05 scope filter), strictly additive with
+ * skip-and-warn on name collision. Custom definitions NEVER enter the
+ * builtinSkills Map (D-15) and never overwrite registry keys (D-16 /
+ * Pitfall 6). Custom resolution is NOT governed by
+ * WorkspaceAgentConfig.enabledSkills (D-06 — that list controls builtins
+ * only); a custom skill is invocable iff scope matches + isEnabled + not
+ * deleted. opts.userId (additive-optional trailing param, Plan 02) feeds the
+ * D-05 personal arm; the org filter rides the tenant ALS scope.
  */
 export async function resolveSkillsForChat(
   workspaceId: string,
   chatId: string,
   enabledSkillNames: string[],
+  opts?: { userId?: string },
 ): Promise<AgentSkillDefinition[]> {
   const pins = await prisma.chatMCPPin.findMany({
     where: { chatId },
@@ -159,7 +192,7 @@ export async function resolveSkillsForChat(
   // D-15: no pins -> use workspace defaults
   if (pins.length === 0) {
     const base = getSkillsForWorkspace(enabledSkillNames);
-    return unionWorkspaceMcpSkills(base, inScopeToolNames);
+    return mergeCustomSkills(unionWorkspaceMcpSkills(base, inScopeToolNames), workspaceId, opts?.userId);
   }
 
   // D-13: intersection — pinned AND enabled AND (workspace-matching OR global).
@@ -181,7 +214,7 @@ export async function resolveSkillsForChat(
       { chatId, workspaceId, pinnedCount: pins.length },
     );
     const base = getSkillsForWorkspace(enabledSkillNames);
-    return unionWorkspaceMcpSkills(base, inScopeToolNames);
+    return mergeCustomSkills(unionWorkspaceMcpSkills(base, inScopeToolNames), workspaceId, opts?.userId);
   }
 
   // D-13: Collect active connection IDs (UUIDs) for prefix matching.
@@ -215,7 +248,7 @@ export async function resolveSkillsForChat(
   // pin mechanism missed (unpinned but active+connected+in-scope). STRICT
   // UNION — D-04: never removes the pinned skills above; duplicates are
   // skipped by name (a pinned skill already in `base` is not re-added).
-  return unionWorkspaceMcpSkills(base, inScopeToolNames);
+  return mergeCustomSkills(unionWorkspaceMcpSkills(base, inScopeToolNames), workspaceId, opts?.userId);
 }
 
 /**
@@ -255,6 +288,45 @@ function unionWorkspaceMcpSkills(
       const skill = builtinSkills.get(skillName);
       if (skill) additions.push(skill);
     }
+  }
+  if (additions.length === 0) return base;
+  return [...base, ...additions];
+}
+
+/**
+ * Phase 190 (D-15/D-16) — merge per-request custom skills into the resolved
+ * base, STRICTLY ADDITIVE:
+ *  - resolveCustomSkillsForChat hits the DB per request (SC-1 lifecycle
+ *    invalidation: edit/delete propagates on the next chat with no hooks and
+ *    no cache — Pitfall 7 rejected).
+ *  - A custom definition is appended only when its `custom_<slug>` name is
+ *    NOT already present (skip-and-warn on collision — D-16 / Pitfall 6). A
+ *    custom slug equal to a builtin name cannot reach here via a DB create
+ *    (RESERVED_SLUGS rejects it at the schema layer, Plan 01), so the skip
+ *    arm is the registry-invariant backstop, not the primary gate.
+ *  - Customs NEVER call registerSkill and NEVER touch builtinSkills — the
+ *    Map is only ever mutated by registerSkill/unregisterSkillsForConnection
+ *    (pinned behaviorally by customSkills.registry.test.ts).
+ *  - MCP tools carry the `mcp_<connId>_<tool>` prefix, custom skills the
+ *    `custom_<slug>` prefix — distinct namespaces, never colliding (Q3-c).
+ */
+async function mergeCustomSkills(
+  base: AgentSkillDefinition[],
+  workspaceId: string,
+  userId?: string,
+): Promise<AgentSkillDefinition[]> {
+  const customDefinitions = await resolveCustomSkillsForChat(userId, workspaceId);
+  if (customDefinitions.length === 0) {
+    return base;
+  }
+  const present = new Set(base.map((s) => s.name));
+  const additions: AgentSkillDefinition[] = [];
+  for (const definition of customDefinitions) {
+    if (present.has(definition.name)) {
+      logger.warn("[skills] custom skill collision skipped", { name: definition.name });
+      continue;
+    }
+    additions.push(definition);
   }
   if (additions.length === 0) return base;
   return [...base, ...additions];

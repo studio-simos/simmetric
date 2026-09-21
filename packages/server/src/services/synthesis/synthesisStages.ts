@@ -41,6 +41,9 @@ import { logger } from "../../utils/logger";
 import prisma from "../../utils/prisma";
 import { getEnv } from "../../config/env";
 import { getSynthesisOverrides } from "../archiveConfigService";
+// Phase 187 (WIKS-01/D-03): Pass 4 (decision) receives the advisory editorial
+// block via the existing systemPrompt param. Pass 1 and Pass 4b stay undefined.
+import { buildSchemaPromptBlock } from "../archiveConfigService";
 import { callNonStreamingLLM, resolveProviderConfig } from "../providerService";
 import { MULTI_CONFIG_PLAINTO_TSQUERY } from "../ftsService";
 
@@ -111,6 +114,8 @@ interface SetupCtx {
     maintenanceSchedule: string;
     purpose: string;
     scope: string;
+    // Phase 187 (WIKS-01): advisory editorial guidance — "" when absent.
+    schemaPrompt: string;
   };
   PASS_NAMES: {
     pass1: string;
@@ -246,6 +251,10 @@ export async function getSynthesisConfigStage(archiveId: string) {
     maintenanceSchedule: overrides?.maintenanceSchedule || "0 2 * * 0", // weekly Sundays at 2am
     purpose: overrides?.purpose || "",
     scope: overrides?.scope || "",
+    // Phase 187 (WIKS-01): advisory editorial guidance — consumed at the Pass 4
+    // call site via buildSchemaPromptBlock(synthConfig); empty string here means
+    // "no advisory block" (buildSchemaPromptBlock returns "" → `|| undefined`).
+    schemaPrompt: overrides?.schemaPrompt || "",
   };
 }
 
@@ -766,7 +775,17 @@ async function runSynthesisDecisionStage(
       const prompt =
         `Given this new content: "${newContentSummary}", and this existing page content: "${page.bodyText.slice(0, 1500)}", decide: CREATE (new page needed), UPDATE (enhance existing), SKIP (no changes needed), or FLAG_CONTRADICTION (conflict detected).${personaPrompt} Return JSON: { decision: string, reason: string, suggestedContent?: string, confidence?: string }`;
 
-      const { content, tokensUsed } = await callSynthesisLLMStage(prompt, undefined, archiveId);
+      // Phase 187 (WIKS-01/D-03 verdict): schemaPrompt rides the SYSTEM role in
+      // Pass 4 ONLY — the personaPrompt stays inline in the user prompt and the
+      // decision-JSON format instruction is never overridden. Empty string →
+      // undefined so the messages array stays byte-identical when absent.
+      // Pass 1 (summary, line ~273) and Pass 4b (contradiction judging) keep
+      // `undefined` — factual/mechanical passes, untouched per the verdict.
+      const { content, tokensUsed } = await callSynthesisLLMStage(
+        prompt,
+        buildSchemaPromptBlock(synthConfig) || undefined,
+        archiveId,
+      );
       tracker.consumeTokens(tokensUsed, PASS_NAMES.pass4);
       tracker.consumeLlmCall(PASS_NAMES.pass4);
       // D-13: reset consecutive counter on success.

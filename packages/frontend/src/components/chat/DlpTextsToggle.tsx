@@ -20,9 +20,11 @@ export interface DlpTextsToggleProps {
 }
 
 /**
- * DlpTextsToggle — "Show DLP texts" / "Hide DLP texts" item for the chat
- * "+" more-actions Popover (quick 260829-spj). Rendered in the `dlpToggle`
- * slot of ChatInputArea, alongside the parent-owned compare-models action.
+ * DlpTextsToggle — "Show DLP" / "Hide DLP" item for the chat
+ * "+" more-actions Popover (quick 260829-spj; labels shortened by quick
+ * 260919-qjg). Rendered in the `dlpToggle` slot of ChatInputArea, alongside
+ * the parent-owned compare-models action. The slot hides while the Knowledge
+ * submenu is open (they never show together).
  *
  * Presentational only: visibility, checked state, and the handler are owned
  * by ChatPanel (same convention as the compare-models button in the actions

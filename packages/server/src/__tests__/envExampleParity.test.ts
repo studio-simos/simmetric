@@ -51,9 +51,10 @@ describe("server envSchema ↔ root .env.example parity", () => {
     expect(missing).toEqual([]);
   });
 
-  it("introspects the full server schema (83 keys)", () => {
+  it("introspects the full server schema (94 keys)", () => {
     // Structural sentinel: if this drifts, the schema changed and the root
-    // .env.example must be re-checked against the new surface.
-    expect(schemaKeys.length).toBe(83);
+    // .env.example must be re-checked against the new surface. Phase 193
+    // (D-05): 84 → 94 with the 10 optional LDAP_* keys.
+    expect(schemaKeys.length).toBe(94);
   });
 });

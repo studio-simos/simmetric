@@ -186,9 +186,10 @@ describe("applyTenantReadScope — NON-TENANT MODELS (group 7)", () => {
 });
 
 describe("TENANT_READ_MODELS INVENTORY (group 8)", () => {
-  it("contains exactly the 25 direct non-null-org models (spot-assert all 25)", () => {
+  it("contains exactly the 26 direct non-null-org models (spot-assert all 26)", () => {
     const expected = [
       "ApiKey",
+      "AgentSkill",
       "Archive",
       "ArchiveImportJob",
       "Chat",
@@ -219,11 +220,12 @@ describe("TENANT_READ_MODELS INVENTORY (group 8)", () => {
       "WorkspaceTemplate",
       "WorkspaceTokenUsage",
     ];
-    expect(TENANT_READ_MODELS.size).toBe(25);
+    // Phase 190 (SKIL-01 A1): AgentSkill joins the AND-merge (26 models).
+    expect(TENANT_READ_MODELS.size).toBe(26);
     for (const name of expected) {
       expect(TENANT_READ_MODELS.has(name)).toBe(true);
     }
-    // And nothing beyond the 25:
+    // And nothing beyond the 26:
     expect([...TENANT_READ_MODELS].sort()).toEqual(expected.sort());
   });
 

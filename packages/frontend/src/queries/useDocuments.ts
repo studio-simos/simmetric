@@ -10,11 +10,14 @@
  * DocumentsPage list fetch uses direct `apiGet` + `useState` (pre-refactor)
  * and is intentionally NOT migrated here — only the read-only viewer
  * text fetch is wired through TanStack Query.
+ *
+ * Phase 192 (D-10): `useDocumentText(documentId, unmask?)` gains the
+ * per-view unmask variant + the placeholder-token probe helpers used by
+ * the DocumentViewerPage toggle/notice (UI-SPEC surface 2).
  */
 
 import { useQuery } from "@tanstack/react-query";
 import { apiGet } from "../utils/api";
-import { queryKeys } from "./keys";
 
 /**
  * Response shape of `GET /api/documents/:id/text`.
@@ -29,13 +32,38 @@ export interface DocumentText {
 }
 
 /**
+ * Phase 192 (D-10): placeholder-token probe — a lightweight inline tokenizer
+ * that counts bracketed entity placeholders (`[PERSON_1]`, `[GOV_ID_2]`, …)
+ * in served text. This is the zero-contract-change entity signal: the server
+ * response shape stays `{ text, length, name, type, status }` (plan 04) and
+ * the presence of placeholder tokens IS server truth that entities exist
+ * (the masker writes them; masking is idempotent, D-03 — no regex on the
+ * original values, only on the placeholder syntax).
+ */
+export const DLP_PLACEHOLDER_REGEX = /\[\s*[A-Z][A-Z_]*\s*_\s*\d+\s*\]/;
+
+export function hasDlpPlaceholders(text: string | undefined): boolean {
+  return typeof text === "string" && DLP_PLACEHOLDER_REGEX.test(text);
+}
+
+/**
  * Fetch the concatenated chunk text for a document.
  * Mirrors `useArchivePage`: `staleTime: 30_000`, `enabled: !!documentId`.
+ *
+ * Phase 192 (D-10): the optional `unmask` param selects the variant —
+ * queryKey gains the flag so the masked and unmasked texts cache under
+ * separate entries; `queryFn` appends `?unmask=true` ONLY when unmask.
+ * The DEFAULT (no arg) fetch is the masked text. The server remains the
+ * gate (the unmask arm re-checks permission + workspace toggle); the
+ * flag only requests the variant.
  */
-export function useDocumentText(documentId: string | undefined) {
+export function useDocumentText(documentId: string | undefined, unmask = false) {
   return useQuery<DocumentText, Error>({
-    queryKey: queryKeys.documents.text(documentId ?? ""),
-    queryFn: () => apiGet<DocumentText>(`/documents/${documentId}/text`),
+    queryKey: ["documents", "text", documentId ?? "", unmask] as const,
+    queryFn: () =>
+      apiGet<DocumentText>(
+        unmask ? `/documents/${documentId}/text?unmask=true` : `/documents/${documentId}/text`,
+      ),
     enabled: !!documentId,
     staleTime: 30_000,
   });

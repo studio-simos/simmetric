@@ -12,6 +12,9 @@ import {
   widgetSessionResponseSchema,
   widgetSearchRequestSchema,
   widgetCreditsSchema,
+  widgetWorkspaceArchiveFilterSchema,
+  widgetContactOptionsSchema,
+  widgetLeadSubmitSchema,
   WIDGET_LOCALES,
 } from "../schemas/widget.schema";
 
@@ -1090,5 +1093,307 @@ describe("WIDGET_LOCALES", () => {
     for (const code of ["en", "it", "ru", "de", "fr", "es", "zh", "pt"]) {
       expect(WIDGET_LOCALES).toContain(code);
     }
+  });
+});
+
+// ─── widgetWorkspaceArchiveFilterSchema (WGTA-01, D-01) ──────────
+
+describe("widgetWorkspaceArchiveFilterSchema", () => {
+  it("accepts an empty query (all filters optional — full-archive default)", () => {
+    const result = widgetWorkspaceArchiveFilterSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.projectId).toBeUndefined();
+      expect(result.data.workspaceId).toBeUndefined();
+      expect(result.data.widgetId).toBeUndefined();
+    }
+  });
+
+  it("accepts valid uuid filters (all three keys set)", () => {
+    const result = widgetWorkspaceArchiveFilterSchema.safeParse({
+      projectId: "550e8400-e29b-41d4-a716-446655440000",
+      workspaceId: "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+      widgetId: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.projectId).toBe("550e8400-e29b-41d4-a716-446655440000");
+      expect(result.data.workspaceId).toBe("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+      expect(result.data.widgetId).toBe("7c9e6679-7425-40de-944b-e07fc1f90ae7");
+    }
+  });
+
+  it("accepts a single-key filter (projectId only)", () => {
+    const result = widgetWorkspaceArchiveFilterSchema.safeParse({
+      projectId: "550e8400-e29b-41d4-a716-446655440000",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.widgetId).toBeUndefined();
+    }
+  });
+
+  it("rejects a non-uuid projectId", () => {
+    const result = widgetWorkspaceArchiveFilterSchema.safeParse({
+      projectId: "not-a-uuid",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a non-uuid workspaceId", () => {
+    const result = widgetWorkspaceArchiveFilterSchema.safeParse({
+      workspaceId: "workspace-001",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a non-uuid widgetId", () => {
+    const result = widgetWorkspaceArchiveFilterSchema.safeParse({
+      widgetId: "widget-001",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+// ─── 260917-mz6: widgetContactOptionsSchema + the four new Widget fields ───
+
+describe("widgetContactOptionsSchema (260917-mz6)", () => {
+  const VALID_BLOB = {
+    formUrl: "https://example.com/contact",
+    bookingUrl: "https://cal.example.com/owner",
+    email: "owner@example.com",
+    customUrl: "https://example.com/sales",
+    customLabel: "Talk to sales",
+  };
+
+  it("accepts a fully-populated blob", () => {
+    const result = widgetContactOptionsSchema.safeParse(VALID_BLOB);
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a partial blob (one field)", () => {
+    const result = widgetContactOptionsSchema.safeParse({ email: "owner@example.com" });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a javascript: URL (mandatory isHttpUrl refine — credits-blob precedent)", () => {
+    const result = widgetContactOptionsSchema.safeParse({ formUrl: "javascript:alert(1)" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a data: URL", () => {
+    const result = widgetContactOptionsSchema.safeParse({ bookingUrl: "data:text/html,hi" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty blob (superRefine: at least one configured field)", () => {
+    const result = widgetContactOptionsSchema.safeParse({});
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = JSON.stringify(result.error.flatten());
+      expect(messages).toContain("At least one contact option is required");
+    }
+  });
+
+  it("rejects an all-empty-string blob", () => {
+    const result = widgetContactOptionsSchema.safeParse({
+      formUrl: "", bookingUrl: "", email: "", customUrl: "", customLabel: "",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unknown keys (strict object)", () => {
+    const result = widgetContactOptionsSchema.safeParse({
+      email: "owner@example.com",
+      evil: "https://x.example",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a malformed email", () => {
+    const result = widgetContactOptionsSchema.safeParse({ email: "not-an-email" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a customLabel over 200 chars", () => {
+    const result = widgetContactOptionsSchema.safeParse({
+      customLabel: "x".repeat(201),
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("260917-mz6 write fields on create/update schemas", () => {
+  it("createWidgetSchema accepts systemPrompt + contactConfig + timing + timeout", () => {
+    const result = createWidgetSchema.safeParse({
+      name: "Grounded Widget",
+      systemPrompt: "x".repeat(4000),
+      contactConfig: { email: "owner@example.com" },
+      leadCaptureTiming: "start",
+      leadCaptureTimeoutSeconds: 30,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.systemPrompt).toHaveLength(4000);
+      expect(result.data.leadCaptureTiming).toBe("start");
+    }
+  });
+
+  it("createWidgetSchema rejects an over-long systemPrompt (max 4000)", () => {
+    const result = createWidgetSchema.safeParse({
+      name: "Too Long",
+      systemPrompt: "x".repeat(4001),
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("createWidgetSchema rejects an out-of-bounds leadCaptureTimeoutSeconds (min 5 / max 86400)", () => {
+    expect(createWidgetSchema.safeParse({ name: "w", leadCaptureTimeoutSeconds: 4 }).success).toBe(false);
+    expect(createWidgetSchema.safeParse({ name: "w", leadCaptureTimeoutSeconds: 86401 }).success).toBe(false);
+    expect(createWidgetSchema.safeParse({ name: "w", leadCaptureTimeoutSeconds: 60 }).success).toBe(true);
+  });
+
+  it("updateWidgetSchema accepts null clears for all four fields (nullable write contract)", () => {
+    const result = updateWidgetSchema.safeParse({
+      systemPrompt: null,
+      contactConfig: null,
+      leadCaptureTimeoutSeconds: null,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("updateWidgetSchema rejects an invalid timing enum", () => {
+    const result = updateWidgetSchema.safeParse({ leadCaptureTiming: "midway" });
+    expect(result.success).toBe(false);
+  });
+
+  it("updateWidgetSchema rejects a javascript: URL inside contactConfig", () => {
+    const result = updateWidgetSchema.safeParse({
+      contactConfig: { formUrl: "javascript:alert(1)" },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("widgetConfigResponseSchema — 260917-mz6 runtime fields", () => {
+  const baseConfig = {
+    id: "widget-1",
+    name: "Test",
+    position: "bottom-right",
+    isActive: true,
+    workspaceId: "550e8400-e29b-41d4-a716-446655440000",
+    workspaceIds: ["550e8400-e29b-41d4-a716-446655440000"],
+  };
+
+  it("parses the three runtime fields when present", () => {
+    const result = widgetConfigResponseSchema.safeParse({
+      ...baseConfig,
+      contactConfig: { email: "owner@example.com" },
+      leadCaptureTiming: "timeout",
+      leadCaptureTimeoutSeconds: 45,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.leadCaptureTiming).toBe("timeout");
+      expect(result.data.leadCaptureTimeoutSeconds).toBe(45);
+    }
+  });
+
+  it("parses old fixtures WITHOUT the new fields (additive-optional)", () => {
+    const result = widgetConfigResponseSchema.safeParse(baseConfig);
+    expect(result.success).toBe(true);
+  });
+
+  it("deliberately omits systemPrompt from the runtime response (T-Q02 — never reaches the client)", () => {
+    // The write schemas carry systemPrompt; the response schema must NOT.
+    // A server accidentally echoing systemPrompt into the config response is
+    // stripped by the schema (unknown key on a non-strict object would pass,
+    // so assert the SHAPE instead: the inferred type has no systemPrompt key
+    // requirement and a fixture carrying it still parses — the guarantee is
+    // that the ROUTE never emits it, pinned in internalWidget.test.ts).
+    const result = widgetConfigResponseSchema.safeParse(baseConfig);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty("systemPrompt");
+    }
+  });
+});
+
+// ─── 260917-qoh: privacyUrl + lead privacy consent ──────────────────────
+
+describe("260917-qoh privacyUrl on create/update schemas", () => {
+  it("createWidgetSchema accepts a valid http(s) privacyUrl", () => {
+    expect(createWidgetSchema.safeParse({ name: "w", privacyUrl: "https://example.com/privacy" }).success).toBe(true);
+    expect(createWidgetSchema.safeParse({ name: "w", privacyUrl: "http://example.com/privacy" }).success).toBe(true);
+  });
+
+  it("createWidgetSchema rejects a javascript:/data: privacyUrl (mandatory isHttpUrl refine)", () => {
+    expect(createWidgetSchema.safeParse({ name: "w", privacyUrl: "javascript:alert(1)" }).success).toBe(false);
+    expect(createWidgetSchema.safeParse({ name: "w", privacyUrl: "data:text/html,x" }).success).toBe(false);
+  });
+
+  it("updateWidgetSchema accepts a valid privacyUrl and null (nullable write contract)", () => {
+    expect(updateWidgetSchema.safeParse({ privacyUrl: "https://example.com/privacy" }).success).toBe(true);
+    expect(updateWidgetSchema.safeParse({ privacyUrl: null }).success).toBe(true);
+  });
+
+  it("updateWidgetSchema rejects a javascript: privacyUrl", () => {
+    expect(updateWidgetSchema.safeParse({ privacyUrl: "javascript:alert(1)" }).success).toBe(false);
+  });
+
+  it("privacyUrl is optional on both write schemas (undefined = unchanged)", () => {
+    expect(createWidgetSchema.safeParse({ name: "w" }).success).toBe(true);
+    expect(updateWidgetSchema.safeParse({}).success).toBe(true);
+  });
+});
+
+describe("widgetConfigResponseSchema — 260917-qoh privacyUrl runtime field", () => {
+  const baseConfig = {
+    id: "widget-1",
+    name: "Test",
+    position: "bottom-right",
+    isActive: true,
+    workspaceId: "550e8400-e29b-41d4-a716-446655440000",
+    workspaceIds: ["550e8400-e29b-41d4-a716-446655440000"],
+  };
+
+  it("parses the privacyUrl field when present (string or null)", () => {
+    const withUrl = widgetConfigResponseSchema.safeParse({ ...baseConfig, privacyUrl: "https://example.com/privacy" });
+    expect(withUrl.success).toBe(true);
+    if (withUrl.success) expect(withUrl.data.privacyUrl).toBe("https://example.com/privacy");
+
+    const withNull = widgetConfigResponseSchema.safeParse({ ...baseConfig, privacyUrl: null });
+    expect(withNull.success).toBe(true);
+    if (withNull.success) expect(withNull.data.privacyUrl).toBeNull();
+  });
+
+  it("parses old fixtures WITHOUT privacyUrl (additive-optional)", () => {
+    expect(widgetConfigResponseSchema.safeParse(baseConfig).success).toBe(true);
+  });
+});
+
+describe("widgetLeadSubmitSchema — 260917-qoh privacy consent gate", () => {
+  const validLead = {
+    email: "visitor@example.com",
+    privacyConsented: true,
+    transcript: [{ role: "user", content: "hi" }],
+  };
+
+  it("accepts a lead with privacyConsented: true", () => {
+    const result = widgetLeadSubmitSchema.safeParse(validLead);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.privacyConsented).toBe(true);
+  });
+
+  it("rejects a lead WITHOUT the consent field (fail-closed 400)", () => {
+    const { privacyConsented, ...withoutConsent } = validLead;
+    expect(widgetLeadSubmitSchema.safeParse(withoutConsent).success).toBe(false);
+  });
+
+  it("rejects a lead with privacyConsented: false (z.literal(true))", () => {
+    expect(widgetLeadSubmitSchema.safeParse({ ...validLead, privacyConsented: false }).success).toBe(false);
+  });
+
+  it("rejects a lead with a truthy non-boolean consent value", () => {
+    expect(widgetLeadSubmitSchema.safeParse({ ...validLead, privacyConsented: "yes" }).success).toBe(false);
   });
 });

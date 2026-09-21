@@ -641,7 +641,14 @@ async function seedOrgBFixture(prisma: PrismaClient): Promise<void> {
   }
   await prisma.workspace.upsert({
     where: { id: ORG_B_WORKSPACE_ID },
-    update: { projectId: project.id },
+    // deletedAt: null on the update arm — the tombstone revive (Phase 189-04
+    // Rule 3): a soft-deleted org-b workspace (pre-existing tombstone dated
+    // 2026-09-14) passed every earlier seed run invisibly, but the OR-filter
+    // workspaces list excludes tombstones → orgbuser resolves [] → the
+    // App.tsx empty-state gate shows the wizard → <header> never mounts →
+    // every cross-tenant spec times out at loginViaUi. Same D-05
+    // either-branch-safe resurrect shape the PROJECT arm above already uses.
+    update: { projectId: project.id, deletedAt: null },
     create: {
       id: ORG_B_WORKSPACE_ID,
       organizationId: ORG_B_ID,

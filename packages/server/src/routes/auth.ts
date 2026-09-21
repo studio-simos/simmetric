@@ -70,7 +70,9 @@ const router = Router();
  */
 async function getSsoConfigInlined(): Promise<{
   id: string;
-  provider: "saml" | "oidc";
+  // Phase 193: widened additively — the provider column also carries "ldap"
+  // (the composite route's DB arm keys on it); the cast below mirrors it.
+  provider: "saml" | "oidc" | "ldap";
   enabled: boolean;
   clientId: string | null;
   discoveryUrl: string | null;
@@ -87,7 +89,7 @@ async function getSsoConfigInlined(): Promise<{
 
   return {
     id: config.id,
-    provider: config.provider as "saml" | "oidc",
+    provider: config.provider as "saml" | "oidc" | "ldap",
     enabled: config.enabled,
     clientId: config.clientId,
     discoveryUrl: config.discoveryUrl,
@@ -279,7 +281,7 @@ router.post("/login", authRateLimiter, async (req, res) => {
  *               type: object
  *               properties:
  *                 enabled: { type: boolean }
- *                 provider: { type: string, enum: [saml, oidc], nullable: true }
+ *                 provider: { type: string, enum: [saml, oidc, ldap], nullable: true }
  *                 oidcProvider: { type: string, enum: [google, github, microsoft, oidc], nullable: true }
  *       500: { description: Internal server error }
  */
@@ -294,6 +296,8 @@ router.post("/login", authRateLimiter, async (req, res) => {
 // shape stays identical to ssoStatusResponseSchema — booleans/enums ONLY,
 // never clientId/discoveryUrl/secret (T-260808-p5y-01). When no OIDC_* env
 // vars are set, the existing DB-only fallthrough runs unchanged (additive).
+// Phase 193 (D-18): the same env-over-DB precedence extends to LDAP — the
+// LDAP arm sits between the OIDC env arm and the DB fallthrough.
 router.get("/sso/status", async (_req, res) => {
   try {
     const env = getEnv();
@@ -326,11 +330,52 @@ router.get("/sso/status", async (_req, res) => {
       return;
     }
 
-    // DB-only fallthrough (env unset) — pre-existing behavior, unchanged.
+    // Phase 193 (LDAP-01, D-18) — the LDAP arm, ADDITIVE after the OIDC env
+    // block. envLdapActive = any of the 10 LDAP_* env keys set (the same
+    // predicate the enterprise resolveLdapConfig uses). When active, the env
+    // layer is the source of truth; the DB row only fills the enabled gap.
+    // Response stays booleans/enums ONLY — never URL/DN/secret (the
+    // T-260808-p5y-01 posture; parses against the widened
+    // ssoStatusResponseSchema from Plan 01).
+    const envLdapActive =
+      env.LDAP_URL !== undefined ||
+      env.LDAP_BIND_DN !== undefined ||
+      env.LDAP_BIND_PASSWORD !== undefined ||
+      env.LDAP_SEARCH_BASE !== undefined ||
+      env.LDAP_SEARCH_FILTER !== undefined ||
+      env.LDAP_GROUP_SEARCH_BASE !== undefined ||
+      env.LDAP_GROUP_SEARCH_FILTER !== undefined ||
+      env.LDAP_USE_TLS !== undefined ||
+      env.LDAP_ACCEPT_CERT !== undefined ||
+      env.LDAP_FALLBACK_TO_LOCAL !== undefined;
+
+    if (envLdapActive) {
+      const dbConfig = await prisma.ssoConfig.findFirst();
+      // Singleton-provider posture (D-17): the response carries ONE provider
+      // value — env-active LDAP wins the whole arm (no oidcProvider field
+      // semantics; the enum field is null).
+      const enabled = env.LDAP_URL !== undefined || (dbConfig?.provider === "ldap" && dbConfig.enabled) || false;
+      res.json({
+        enabled,
+        provider: "ldap" as const,
+        oidcProvider: null,
+      });
+      return;
+    }
+
+    // DB-only fallthrough (env unset) — pre-existing behavior, unchanged
+    // EXCEPT the additive provider-"ldap" answer (Phase 193 D-18): an
+    // operator who staged the LDAP config via the admin panel gets the ldap
+    // provider signal here (the LoginPage renders the same username/password
+    // form posting to /api/auth/ldap/login).
     const config = await getSsoConfigInlined();
     if (!config) {
       // Mirror the empty-shape convention at sso.ts:65.
       res.json({ enabled: false, provider: null, oidcProvider: null });
+      return;
+    }
+    if (config.provider === "ldap") {
+      res.json({ enabled: config.enabled, provider: "ldap" as const, oidcProvider: null });
       return;
     }
     res.json({
@@ -382,6 +427,10 @@ router.get("/me", authMiddleware, async (req, res) => {
     customInstructions: user.customInstructions,
     textSize: user.textSize,
     mustChangePassword: user.mustChangePassword,
+    // Phase 189 (WSIS-01, D-03): the personal-workspace empty-state gate
+    // reads this scalar — req.user comes from getUserWithRoles' full-row
+    // include, so the column is already loaded (A4).
+    hasOnboarded: user.hasOnboarded,
     roles: user.roles.map((ur) => ({
       id: ur.role.id,
       name: ur.role.name,

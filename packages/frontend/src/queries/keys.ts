@@ -41,6 +41,14 @@ export const queryKeys = {
   workspaces: {
     all: ["workspaces"] as const,
     detail: (id: string) => ["workspaces", "detail", id] as const,
+    // Phase 189 (WSIS-03, D-20): access-grant keys nest under the
+    // "workspaces" prefix so queryKeys.workspaces.all invalidations
+    // prefix-cascade to them — same array value as the pre-existing inline
+    // [...queryKeys.workspaces.all, workspaceId, "access"] keys the hooks
+    // used before the family existed (invalidations cascade identically).
+    workspaceAccess: {
+      list: (workspaceId: string) => ["workspaces", "access", workspaceId] as const,
+    },
   },
   projects: {
     all: ["projects"] as const,
@@ -82,6 +90,16 @@ export const queryKeys = {
     leads: (widgetId: string) => ["widgets", "leads", widgetId] as const,
     lead: (widgetId: string, leadId: string) => ["widgets", "leads", widgetId, leadId] as const,
     analytics: (widgetId: string) => ["widgets", "analytics", widgetId] as const,
+    // WGTA-01 (188-02): archive keys derive from the "widgets" prefix so the
+    // existing invalidations on list mutations (useCreateWidget /
+    // useDeleteWidget / useUpdateWidgetWorkspaces — all invalidate
+    // queryKeys.widgets.list) prefix-match and cascade to the archive with
+    // zero changes to those mutations (SC-2).
+    archive: {
+      grouped: (filters: Record<string, unknown>) => ["widgets", "archive", "grouped", filters] as const,
+      flat: (filters: Record<string, unknown>) => ["widgets", "archive", "flat", filters] as const,
+      stats: ["widgets", "archive", "stats"] as const,
+    },
   },
   ocrJobs: {
     list: (archiveId: string) => ["ocrJobs", "list", archiveId] as const,
@@ -132,6 +150,10 @@ export const queryKeys = {
     config: ["sso", "config"] as const,
     // Quick 260808-p5y — public SSO availability status (login page).
     status: ["sso", "status"] as const,
+    // Phase 193 (D-19) — LDAP group→role mapping list. Lives under the
+    // sso family so queryKeys.sso.config invalidations stay sibling-scoped
+    // (no new key family per the 193 VALIDATION planner note).
+    ldapMap: ["sso", "ldapMap"] as const,
   },
   // Phase 115-02 — DLP audit panel event log query.
   eventLogs: {
@@ -140,5 +162,18 @@ export const queryKeys = {
   // Quick 260829-ony — DLP pattern configuration admin UI.
   dlpPatterns: {
     all: ["dlpPatterns"] as const,
+  },
+  // Phase 192 (DLP-05/DLP-06 UI) — document-scan eval gate + legacy backfill.
+  // Nest beside dlpPatterns under the "dlp" family; dlp.evalResult is the
+  // gate truth the WorkspaceRow toggle reads (useDlpEvalResult).
+  dlp: {
+    evalResult: ["dlp", "evalResult"] as const,
+  },
+  // Phase 190 (SKIL-01, D-20) — skills management surface. Mutations
+  // invalidate the `skills` family (queryKeys.skills.all) so the page list
+  // refetches after create/update/delete (useSkills.ts).
+  skills: {
+    all: ["skills"] as const,
+    list: ["skills", "list"] as const,
   },
 } as const;

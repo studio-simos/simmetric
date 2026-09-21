@@ -121,11 +121,25 @@ jest.mock("../middleware/rbac", () => ({
   requireAdmin: (_req: any, _res: any, next: any) => next(),
   requireProjectAccess: (_req: any, _res: any, next: any) => next(),
   requireWorkspaceAccess: (_req: any, _res: any, next: any) => next(),
+  // Phase 189 (189-02 sweep): routes now import the graded middlewares —
+  // the mock must export them (shadow no-op) or express throws at load.
+  requireWorkspaceWriteAccess: () => (_req: any, _res: any, next: any) => next(),
+  requireWorkspaceRead: () => (_req: any, _res: any, next: any) => next(),
+  // uploads.ts draft-scoped routes consume the resolver in-handler.
+  resolveWorkspaceRole: jest.fn(async () => null),
+
 }));
 
 // --- systemConfigService.getSetting (NaN-safe retention test) -------------
 jest.mock("../services/systemConfigService", () => ({
-  getSetting: jest.fn(() => ({ key: "upload_draft_retention_days", value: "30" })),
+  getSetting: jest.fn((key: string) =>
+    // Phase 189 (189-02 sweep): the graded write middleware reads
+    // WORKSPACE_ROLE_ENFORCEMENT — default "false" (shadow) so
+    // shadowResolveWorkspaceWrite resolves + logs + falls through and the
+    // inline assertWorkspaceAccess gate stays the effective gate.
+    key === "WORKSPACE_ROLE_ENFORCEMENT"
+      ? { value: "false" }
+      : { key: "upload_draft_retention_days", value: "30" }),
   seedConfigDefaults: jest.fn(),
 }));
 

@@ -207,6 +207,46 @@ Widgets support visual customization via branding fields:
 
 Branding is rendered via CSS custom properties in the Preact widget client (`--widget-primary`, `--widget-bot-name`). The `widgetConfigResponseSchema` in `@simmetric-chat/shared` defines the config shape delivered to the client.
 
+### Product-baked fallback branding (Phase 188, WGTA-02)
+
+When the admin has **not** set `logoUrl`/`avatarUrl`, the embed always carries the product identity:
+
+- **Favicon** — the iframe HTML `<head>` links `/widget/favicon.svg` (tracked asset in `packages/widget/public/`, served by the widget service static layer). The product S-monogram matches the frontend favicon (`packages/frontend/public/favicon.svg`, `#973C00` on `#FDFAF4`).
+- **ProductMark fallback** — a self-contained Preact copy of the Monogram geometry (`packages/widget/src/widget/components/ProductMark.tsx`, warm off-white rounded square + "S" glyph, `aria-label="Simmetric Chat"`) renders in the ChatHeader logo slot and the WelcomeScreen avatar circle. The widget is Preact and cannot import the frontend's React `Monogram` — the geometry is copied, never imported across the IIFE boundary.
+- **Icon set** — the existing inline-SVG surfaces (host FAB chat/close icons, header close) were visually unified in one restyle pass. Phase 131's non-regression contract still binds: 44px touch targets on all FAB/InputBar controls, SVG-only rule (zero text glyphs), footer 50/50 rhythm.
+
+**Propagation note:** the embed's config (including the derived `whiteLabel` flag and branding fields) rides the widget service's 5-minute config cache (Redis + in-memory). After mutating widget config server-side, push `POST /api/config/:widgetId/cache-bust` (header `X-Api-Key: <WIDGET_API_KEY>`) to see the change immediately; otherwise wait out the TTL.
+
+**Rebuild rule:** any change under `packages/widget/src/widget/` requires `pnpm --filter widget build:widget` — the served bundle is `dist-widget/app.js` (gitignored, built from disk).
+
+### Attribution links (Phase 188, WGTA-03)
+
+The widget footer renders two product attribution links above the credits row (`packages/widget/src/widget/components/ChatPanel.tsx`):
+
+- `https://www.studiosimos.it` (label `studiosimos.it`, left)
+- `https://www.simmetricchat.com` (label `Simmetric Chat`, right)
+
+Both are **product constants baked into the component** — never admin-supplied (no XSS surface). Visibility is a single predicate, `shouldShowLinks(whiteLabel)` in `useWidgetConfig.ts`, mirroring the Phase 130 `shouldShowCredits` pattern: the **Community build shows the links; enterprise white-label (`isFeatureEnabled("white_label")`, server-derived at `internalWidget.ts`) removes them — no new flag, no Widget field** (D-12). The anchors keep `href` for semantics but open through the existing `simmetric:creditsOpen` postMessage relay (the sandboxed iframe cannot `window.open` itself — no `allow-popups`).
+
+---
+
+## Widget workspace archive (Phase 188, WGTA-01)
+
+Admin-facing **read-only** projection over the existing `WidgetWorkspace` whitelist join, grouped per project. Routes (main server, `packages/server/src/routes/widgets.ts`, all `requireAdmin`, registered BEFORE the `/:id` param routes):
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/widgets/workspace-archive` | Rows grouped by project → widget → linked workspaces (M:N: a widget linked across projects appears under EACH group) |
+| `GET /api/widgets/workspace-archive/flat` | Flat list — exactly one row per `widgetId × workspaceId` (composite PK) |
+| `GET /api/widgets/workspace-archive/stats` | `{ totalWidgets, totalWorkspacesLinked, totalProjects, orphans }` |
+
+Semantics:
+
+- **Soft-delete aware**: rows filter `widget.deletedAt: null` and `workspace.deletedAt: null`; soft-deleted widgets never appear.
+- **Effective orphans (D-02)**: a widget with 0 NON-deleted linked workspaces counts as an orphan — even when its `WidgetWorkspace` rows are non-empty (all targets soft-deleted). Orphans are counted in stats but never rendered as rows.
+- **Read-only posture (D-03)**: the archive is a monitoring dashboard, not an editor. Whitelist editing stays at the per-widget edit point (`/widgets/:id` → `WidgetWorkspaceSelector` / `PUT /api/widgets/:id/workspaces`). No bulk-assign endpoint (D-04 — deferred).
+- **UI**: tab in the widget admin (`/widgets?tab=archive`), grouped-by-project default view + flat-table toggle with CSV export, numeric stats header, project/widget filters. TanStack Query hooks keyed `["widgets","archive",…]` so widget mutations invalidate the archive automatically.
+
 ---
 
 ## Configuration

@@ -77,7 +77,8 @@ describe("archiveSchemaTemplatesService", () => {
       const data = {
         name: "Custom",
         description: "My template",
-        config: { agentPersona: "balanced" as const },
+        // Phase 187 Pitfall-4 ripple: rawSourcesImmutable REQUIRED in output type.
+        config: { agentPersona: "balanced" as const, rawSourcesImmutable: true },
         pageTypes: [{ name: "Note", requiredSections: [], optionalSections: [] }],
         archiveId: "archive-1",
       };
@@ -98,7 +99,7 @@ describe("archiveSchemaTemplatesService", () => {
     it("handles optional fields", async () => {
       const data = {
         name: "Minimal",
-        config: {},
+        config: { rawSourcesImmutable: true },
       };
       (prisma.archiveSchemaTemplate.create as jest.Mock).mockResolvedValue({ id: "t-min", ...data });
       await createTemplate(data);
@@ -106,7 +107,7 @@ describe("archiveSchemaTemplatesService", () => {
         data: {
           name: "Minimal",
           description: null,
-          config: {},
+          config: { rawSourcesImmutable: true },
           // Omitted (undefined) rather than null: Prisma treats undefined as
           // "leave the Json column at its default" — null would be JsonNull.
           pageTypes: undefined,
@@ -118,8 +119,9 @@ describe("archiveSchemaTemplatesService", () => {
 
   describe("applyTemplate", () => {
     it("copies template config to archive config", async () => {
-      const template = { id: "t1", name: "Research", config: { agentPersona: "conservative" } };
+      const template = { id: "t1", name: "Research", config: { agentPersona: "conservative", rawSourcesImmutable: true } };
       (prisma.archiveSchemaTemplate.findUnique as jest.Mock).mockResolvedValue(template);
+      (prisma.archiveConfig.findUnique as jest.Mock).mockResolvedValue(null);
       (prisma.archiveConfig.upsert as jest.Mock).mockResolvedValue({ id: "cfg-1", archiveId: "archive-1" });
       const result = await applyTemplate("archive-1", "t1");
       expect(prisma.archiveConfig.upsert).toHaveBeenCalledWith({
@@ -128,6 +130,27 @@ describe("archiveSchemaTemplatesService", () => {
         update: { config: template.config },
       });
       expect(result).toEqual(template);
+    });
+
+    // CR-01 mirror (Phase 187 code review): applying a template must not
+    // wipe stored keys the template does not define — notably localLLMOnly
+    // (synthesis D-15 PHI gate input). Template-managed keys win; absent
+    // keys survive verbatim.
+    it("CR-01 regression: template apply preserves stored localLLMOnly absent from the template config", async () => {
+      const template = { id: "t1", name: "Research", config: { agentPersona: "conservative", rawSourcesImmutable: true } };
+      const stored = { localLLMOnly: true, namingConvention: { pattern: "^x$", message: "x" } };
+      (prisma.archiveSchemaTemplate.findUnique as jest.Mock).mockResolvedValue(template);
+      (prisma.archiveConfig.findUnique as jest.Mock).mockResolvedValue({ id: "cfg-1", archiveId: "archive-1", config: stored });
+      (prisma.archiveConfig.upsert as jest.Mock).mockResolvedValue({ id: "cfg-1", archiveId: "archive-1" });
+
+      await applyTemplate("archive-1", "t1");
+
+      const arg = (prisma.archiveConfig.upsert as jest.Mock).mock.calls[0][0];
+      expect(arg.update.config.localLLMOnly).toBe(true);
+      expect(arg.update.config.namingConvention).toEqual({ pattern: "^x$", message: "x" });
+      // Template-managed keys win over the stored blob.
+      expect(arg.update.config.agentPersona).toBe("conservative");
+      expect(arg.create.config.localLLMOnly).toBe(true);
     });
 
     it("throws when template not found", async () => {

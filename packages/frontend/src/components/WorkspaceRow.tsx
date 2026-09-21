@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { Pencil } from "lucide-react";
+import { Pencil, Users } from "lucide-react";
 import type { WorkspaceWithMeta } from "../queries/useWorkspaces";
 import { useMe } from "../queries/useAuth";
 import { useProviders } from "../queries/useProviders";
@@ -29,7 +29,9 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { AppTextarea } from "@/components/ui/app";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { IconPicker } from "./IconPicker";
+import WorkspaceAccessDialog from "./WorkspaceAccessDialog";
 import {
   Select,
   SelectContent,
@@ -73,6 +75,7 @@ interface WorkspaceRowProps {
     name?: string;
     instructions?: string | null;
     allowMemberUploads?: boolean;
+    dlpDocumentScanEnabled?: boolean;
     icon?: string | null;
     systemPrompt?: string;
     skills?: string[];
@@ -84,6 +87,11 @@ interface WorkspaceRowProps {
   onDelete?: (id: string) => Promise<void>;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
+  // Phase 192 (DLP-05/D-05): eval-gate state threaded down from the host
+  // (WorkspacesPage/Settings) via useDlpEvalResult — undefined = gate unknown
+  // → treated as not-passed for the disabled arm (fail-closed). The gate is
+  // UX convenience only; the server enforces it (UI-SPEC rule 7).
+  dlpGatePassed?: boolean;
 }
 
 export default function WorkspaceRow({
@@ -94,6 +102,7 @@ export default function WorkspaceRow({
   onDelete,
   selected = false,
   onToggleSelect,
+  dlpGatePassed,
 }: WorkspaceRowProps) {
   const { t } = useTranslation();
   const { data: user } = useMe();
@@ -133,6 +142,29 @@ export default function WorkspaceRow({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [fadingOut, setFadingOut] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
+  // Phase 192 (D-05): optimistic DLP toggle state — flips immediately on
+  // check, reverts + saveError toast on save failure (allowMemberUploads
+  // precedent via the shared onUpdate funnel). `?? false`: the column default
+  // is off (plan 01) and legacy payloads may omit the field.
+  const [dlpEnabled, setDlpEnabled] = useState(workspace.dlpDocumentScanEnabled ?? false);
+
+  // Re-sync the optimistic state when the refetched workspace prop lands
+  // (same pattern as the SettingsMaintenance reaper sync).
+  useEffect(() => {
+    setDlpEnabled(workspace.dlpDocumentScanEnabled ?? false);
+  }, [workspace.dlpDocumentScanEnabled]);
+
+  const handleDlpToggle = async (checked: boolean) => {
+    if (!onUpdate) return;
+    setDlpEnabled(checked); // optimistic flip
+    try {
+      await onUpdate(workspace.id, { dlpDocumentScanEnabled: checked });
+    } catch {
+      setDlpEnabled(!checked); // revert on save error
+      showError(t("workspace.dlp.saveError"));
+    }
+  };
 
   const hasPermission =
     isAdmin ||
@@ -447,6 +479,18 @@ export default function WorkspaceRow({
             )}
             {canEdit && (
               <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setAccessOpen(true)}
+                className="text-foreground hover:text-primary"
+                aria-label={t("workspace.access.button")}
+              >
+                <Users className="w-4 h-4 mr-1" />
+                {t("workspace.access.button")}
+              </Button>
+            )}
+            {canEdit && (
+              <Button
                 variant="link"
                 size="sm"
                 onClick={() => setDeleteOpen(true)}
@@ -459,6 +503,14 @@ export default function WorkspaceRow({
           </>
         </TableCell>
       </tr>
+
+      {/* Access grants management dialog (D-07 follow-up) */}
+      <WorkspaceAccessDialog
+        open={accessOpen}
+        onOpenChange={setAccessOpen}
+        workspaceId={workspace.id}
+        workspaceName={workspace.name}
+      />
 
       {/* Delete confirmation dialog (D-01: standard AlertDialog contract) */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
@@ -609,6 +661,52 @@ export default function WorkspaceRow({
                   </label>
                 </div>
               </div>
+
+              {/* DLP document scan (Phase 192, D-05): optimistic Switch mirroring
+                  the allowMemberUploads precedent. Gate-blocked arm (UI-SPEC
+                  interaction rule 1): disabled + gateBlocked helper only while
+                  the toggle is OFF and the eval gate has not passed — an
+                  already-on toggle is NEVER disabled (turning OFF is never
+                  blocked). The gate is UX convenience; the server enforces. */}
+              {isAdmin && (
+                <div className="flex items-start justify-between gap-3" data-testid="dlp-scan-toggle-row">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground">
+                      {t("workspace.dlp.scanToggle")}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {t("workspace.dlp.scanDescription")}
+                    </p>
+                    {!dlpEnabled && !dlpGatePassed && (
+                      <p className="text-xs text-amber-700 dark:text-amber-300 mt-1" data-testid="dlp-gate-blocked">
+                        {t("workspace.dlp.gateBlocked")}
+                      </p>
+                    )}
+                    <p className="text-xs font-medium mt-2 text-muted-foreground">
+                      {dlpEnabled
+                        ? t("workspace.dlp.enabled")
+                        : t("workspace.dlp.disabled")}
+                    </p>
+                  </div>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <Switch
+                          checked={dlpEnabled}
+                          disabled={!dlpEnabled && !dlpGatePassed}
+                          aria-label={t("workspace.dlp.scanToggle")}
+                          onCheckedChange={handleDlpToggle}
+                        />
+                      </span>
+                    </TooltipTrigger>
+                    {!dlpEnabled && !dlpGatePassed && (
+                      <TooltipContent>
+                        {t("workspace.dlp.gateBlocked")}
+                      </TooltipContent>
+                    )}
+                  </Tooltip>
+                </div>
+              )}
 
               {/* Embedding Model */}
               <div>

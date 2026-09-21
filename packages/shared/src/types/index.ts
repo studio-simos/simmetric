@@ -8,7 +8,7 @@
 // and re-exported from constants/index.ts to avoid duplication.
 
 import type { PermissionName } from "../constants/permissions";
-import type { WidgetLocalizedTexts, WidgetSuggestedQuestions, WidgetCredits } from "../schemas/widget.schema";
+import type { WidgetLocalizedTexts, WidgetSuggestedQuestions, WidgetCredits, WidgetContactOptions as ContactOptions } from "../schemas/widget.schema";
 
 interface Role {
   id: string;
@@ -241,7 +241,7 @@ export interface SettingsEntry {
 
 // ===== Event Log Types =====
 
-export type EntityType = "chat" | "project" | "workspace" | "document" | "user" | "mcp_connection" | "dlp" | "archive" | "archive_page" | "archive_import" | "ocr_job" | "synthesis_run" | "wiki_edit" | "backup_destination" | "backup_job" | "provider" | "memory";
+export type EntityType = "chat" | "project" | "workspace" | "document" | "user" | "mcp_connection" | "mcp_catalog_entry" | "dlp" | "archive" | "archive_page" | "archive_import" | "ocr_job" | "synthesis_run" | "wiki_edit" | "backup_destination" | "backup_job" | "provider" | "memory" | "skill" | "upload_draft";
 
 interface EventLog {
   id: string;
@@ -317,9 +317,23 @@ export interface Widget {
   // compiling. Null = not configured → existing resolution chain.
   responseProviderId?: string | null;
   responseModel?: string | null;
+  // 260917-mz6: per-widget grounding prompt (null = the code default),
+  // contact options blob (shown at the daily limit), lead-capture timing
+  // and timeout seconds. Optional-for-fixture-compat like the neighbors.
+  systemPrompt?: string | null;
+  contactConfig?: ContactOptions | null;
+  leadCaptureTiming?: string;
+  leadCaptureTimeoutSeconds?: number | null;
+  // 260917-qoh: per-widget privacy policy URL (shown beside the lead-capture
+  // consent checkbox; null = not configured). Optional-for-fixture-compat.
+  privacyUrl?: string | null;
   // 151-02 (G-151-1b): per-widget daily MESSAGE limit (null = global default
   // of 5/day prod, 50/day dev). Optional so existing fixtures keep compiling.
   sessionLimitPerDay?: number | null;
+  // Per-widget burst rate limit (SCALE-04, D-05) — null = global default,
+  // 0 = unlimited ("no limits"), positive int = custom limit. Optional so
+  // existing fixtures/tests constructing Widget objects keep compiling.
+  rateLimitPerMinute?: number | null;
 }
 
 interface WidgetWorkspace {
@@ -347,6 +361,11 @@ export interface WidgetLead {
   name: string | null;
   email: string;
   transcript: Array<{ role: "user" | "assistant"; content: string; timestamp?: string }>;
+  // 260917-qoh: archived privacy-consent decision (true on all post-feature
+  // rows; the server stamps privacyConsentAt — never the client).
+  // Optional-for-fixture-compat like the Widget neighbors.
+  privacyConsented?: boolean;
+  privacyConsentAt?: string | null;
   createdAt: string;
 }
 

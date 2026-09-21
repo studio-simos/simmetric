@@ -37,6 +37,11 @@ export const updateWorkspaceSchema = z.object({
   embeddingModel: z.string().optional(),
   templateId: z.string().uuid().nullable().optional(),
   allowMemberUploads: z.boolean().optional(),
+  // Phase 192 (D-05): per-workspace document-scan toggle (A3 column shape —
+  // the Workspace.dlpDocumentScanEnabled column, plan 01). Update-only:
+  // create stays default-false server-side (the column default), and the
+  // DLP-05 eval gate is enforced server-side (PUT accepts false unconditionally).
+  dlpDocumentScanEnabled: z.boolean().optional(),
   icon: z.string().max(50).nullable().optional(),
   systemPrompt: z.string().max(10000).optional(),
   skills: z.array(z.string()).optional(),

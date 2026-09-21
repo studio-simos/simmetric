@@ -54,7 +54,7 @@ export function requireFeature(flag: FeatureFlag) {
 /** Middleware that enforces numeric license limits (e.g. max_workspaces, max_projects, max_widgets) */
 export function requireFeatureLimit(
   flag: FeatureFlag,
-  model: "workspace" | "project" | "widget" | "synthesisRun" | "synthesis_run" | "backupDestination",
+  model: "workspace" | "project" | "widget" | "synthesisRun" | "synthesis_run" | "backupDestination" | "skill",
 ) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const limit = getFeatureLimit(flag);
@@ -85,10 +85,20 @@ export function requireFeatureLimit(
     try {
       switch (model) {
         case "workspace":
-          count = await prisma.workspace.count({ where: { organizationId, deletedAt: null } });
+          // Phase 189 (D-04, WSIS-01 license half): personal workspaces
+          // (project.isPersonal = true) NEVER consume shared-workspace quota
+          // — the count-filter mechanism (research-recommended, smaller diff).
+          // Name is never consulted (D-02 flag-based identity).
+          count = await prisma.workspace.count({ where: { organizationId, deletedAt: null, project: { isPersonal: false } } });
           break;
         case "project":
-          count = await prisma.project.count({ where: { organizationId, deletedAt: null } });
+          // 189-REVIEW WR-04: personal projects (isPersonal = true) are
+          // exempt from the shared quota — the SAME semantics the workspace
+          // arm above applies (D-04/D-21: onboarding provisioning never
+          // consumes another user's headroom). Without the filter, other
+          // users' personal projects 402'd a generic project create at the
+          // shared limit.
+          count = await prisma.project.count({ where: { organizationId, deletedAt: null, isPersonal: false } });
           break;
         case "synthesisRun":
         case "synthesis_run":
@@ -99,6 +109,13 @@ export function requireFeatureLimit(
           break;
         case "backupDestination":
           count = await prisma.backupDestination.count({ where: { organizationId, deletedAt: null } });
+          break;
+        // Phase 190 (SKIL-05 D-17/D-18): org-scoped count-at-provision of
+        // CUSTOM skills only (never builtin/MCP catalog rows); deletedAt
+        // null per the soft-delete norm — tombstones free the slug AND the
+        // quota headroom.
+        case "skill":
+          count = await prisma.agentSkill.count({ where: { organizationId, deletedAt: null, type: "custom" } });
           break;
         default:
           count = await prisma.widget.count({ where: { organizationId, deletedAt: null } });

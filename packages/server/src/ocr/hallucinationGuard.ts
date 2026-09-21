@@ -24,6 +24,7 @@ export interface GuardResult {
   unverifiedCount: number;
   hasHandwriting: boolean;
   hasEmpty: boolean;
+  degenerated: boolean;
   issues: GuardIssue[];
 }
 
@@ -75,10 +76,27 @@ function parseTableColumns(lines: string[]): {
   return { headerCols, rows };
 }
 
+/**
+ * Degeneration-arm selector (260918-oa9):
+ *
+ *   "full"         — BOTH 4-gram-uniqueness arms active (default; regular
+ *                    uploads — byte-identical to the old skipDegeneration=false).
+ *   "discard-only" — ONLY the < 0.3 hard-discard arm; the < 0.5 warning
+ *                    prefix arm is waived (archive jobs: extreme repetition
+ *                    loops are model degeneration, never legitimate content,
+ *                    but moderate repetition in legislative documents is).
+ *   "off"          — neither arm (the old full skip, for callers that must
+ *                    bypass both arms).
+ *
+ * Every other guard check (empty-output, UNVERIFIED ratio, handwriting,
+ * fence/heading/table) runs in ALL modes.
+ */
+export type DegenerationMode = "full" | "discard-only" | "off";
+
 export function applyHallucinationGuard(
   markdown: string,
   pageNumber: number,
-  skipDegeneration = false,
+  mode: DegenerationMode = "full",
 ): GuardResult {
   const issues: GuardIssue[] = [];
   let resultMarkdown = markdown;
@@ -102,6 +120,7 @@ export function applyHallucinationGuard(
       unverifiedCount: 0,
       hasHandwriting: false,
       hasEmpty: true,
+      degenerated: false,
       issues,
     };
   }
@@ -193,17 +212,32 @@ export function applyHallucinationGuard(
     }
   }
 
-  // The degeneration (4-gram uniqueness) checks are skipped for KB/archive
-  // jobs (skipDegeneration=true) — those jobs opt out via ocrStages so
-  // legitimately repetitive text (e.g. legislative documents) is not
-  // discarded. The empty-output check above is unconditional. The
-  // unverified-tag ratio, handwriting, fence/heading/table checks all
-  // remain active regardless of skipDegeneration.
-  if (!skipDegeneration) {
+  // Degeneration (4-gram uniqueness) arms — mode-gated (260918-oa9).
+  //
+  // Three modes (see DegenerationMode above):
+  //   "full"         — both arms: < 0.3 hard discard AND < 0.5 warning prefix.
+  //   "discard-only" — hard discard arm ONLY; NO < 0.5 warning prefix.
+  //   "off"          — neither arm.
+  //
+  // Archive jobs run "discard-only" (resolved in ocrStages from
+  // job.archiveId): near-total repetition across a full page is a vision-OCR
+  // model degeneration loop, never legitimate content, so the hard arm stays
+  // — verified incident: archive 261c4d8d page 45 had the appendix heading
+  // repeated 1741× (uniqueness ≈ 0.006) on a clean source page, and the old
+  // full boolean skip let it through into raw_sources → LanceDB → RAG. Only
+  // the moderate-repetition WARNING arm is waived for archives, because
+  // legislative documents legitimately repeat structures (repeated headings,
+  // boilerplate) in the 0.3–0.5 band.
+  //
+  // The empty-output check above is unconditional. The unverified-tag ratio,
+  // handwriting, fence/heading/table checks all remain active in every mode.
+  // "off" exists for callers that must bypass both degeneration arms.
+  if (mode !== "off") {
     const uniqueness = computeFourGramUniqueness(resultMarkdown);
     if (uniqueness < 0.3) {
       // Extreme degeneration: the output is almost entirely repetitive.
       // Discard it completely — saving garbage is worse than an error marker.
+      // Fires for BOTH "full" and "discard-only".
       const issueType = "EMPTY_OUTPUT" as const; // treat as effectively empty
       issues.push({
         pageNumber,
@@ -220,11 +254,14 @@ export function applyHallucinationGuard(
         unverifiedCount: 0,
         hasHandwriting: false,
         hasEmpty: true,
+        degenerated: true,
         issues,
       };
     }
 
-    if (uniqueness < 0.5) {
+    // Soft warning arm — ONLY in "full" mode (waived for "discard-only":
+    // legislative documents legitimately repeat structures).
+    if (mode === "full" && uniqueness < 0.5) {
       issues.push({
         pageNumber,
         type: "UNVERIFIED_TAG",
@@ -264,6 +301,7 @@ export function applyHallucinationGuard(
     unverifiedCount,
     hasHandwriting,
     hasEmpty,
+    degenerated: false,
     issues,
   };
 }

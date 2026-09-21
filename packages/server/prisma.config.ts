@@ -18,5 +18,10 @@ export default defineConfig({
     url:
       process.env.DATABASE_URL ||
       "postgresql://simmetricchat:simmetricchat@localhost:5432/simmetricchat",
+    // Shadow DB for `migrate dev`/`migrate diff --from-migrations` (created
+    // locally with CREATE DATABASE; dev/CI-only — never used at runtime).
+    shadowDatabaseUrl:
+      process.env.PRISMA_SHADOW_DATABASE_URL ||
+      "postgresql://simmetricchat:simmetricchat@localhost:5432/prisma_shadow",
   },
 });

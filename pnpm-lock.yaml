@@ -459,6 +459,9 @@ importers:
       simple-git:
         specifier: ^3.36.0
         version: 3.36.0(supports-color@8.1.1)
+      stdnum:
+        specifier: ^1.12.6
+        version: 1.12.6
       swagger-jsdoc:
         specifier: ^6.3.0
         version: 6.3.0
@@ -471,6 +474,9 @@ importers:
       turndown:
         specifier: ^7.2.4
         version: 7.2.4
+      undici:
+        specifier: ^7.29.1
+        version: 7.29.1
       uuid:
         specifier: ^14.0.2
         version: 14.0.2
@@ -8513,6 +8519,9 @@ packages:
     resolution: {integrity: sha512-UhDfHmA92YAlNnCfhmq0VeNL5bDbiZGg7sZ2IvPsXubGkiNa9EC+tUTsjBRsYUAz87btI6/1wf4XoVvQ3uRnmQ==}
     engines: {node: '>=18'}
 
+  stdnum@1.12.6:
+    resolution: {integrity: sha512-UhWlPQ0FCwMuNKEPvX42Hk0ddS/YivTvmJ8k7y0fxM0dea1Cx//AScKFNtT59lHCqYXIr3gfYI4EvqvH9DRrpQ==}
+
   stream-browserify@3.0.0:
     resolution: {integrity: sha512-H73RAHsVBapbim0tU2JwwOiXUj+fikfiaoYAKHF3VJfA0pe2BCzkhAHBlLG6REzE+2WNZcxOXjK7lkso+9euLA==}
 
@@ -8906,6 +8915,10 @@ packages:
 
   undici@7.29.0:
     resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
+    engines: {node: '>=20.18.1'}
+
+  undici@7.29.1:
+    resolution: {integrity: sha512-RYONW2MeafgYlkVOKYKkA/Ag7BmXqgIWCa8t1m0JcxrQg9pI9lEqRhAOruOBCbAohOa/gkCF+iPi9hrgvTzu6Q==}
     engines: {node: '>=20.18.1'}
 
   unicorn-magic@0.3.0:
@@ -15565,7 +15578,7 @@ snapshots:
       saxes: 6.0.0
       symbol-tree: 3.2.4
       tough-cookie: 6.0.2
-      undici: 7.29.0
+      undici: 7.29.1
       w3c-xmlserializer: 5.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -17522,6 +17535,8 @@ snapshots:
 
   stdin-discarder@0.2.2: {}
 
+  stdnum@1.12.6: {}
+
   stream-browserify@3.0.0:
     dependencies:
       inherits: 2.0.4
@@ -17930,6 +17945,8 @@ snapshots:
   undici@6.28.0: {}
 
   undici@7.29.0: {}
+
+  undici@7.29.1: {}
 
   unicorn-magic@0.3.0: {}
 

@@ -513,6 +513,8 @@ describe("Wave 0: D-04 assumptions", () => {
   // spurious frontmatter-related violations/warnings
   it("A2: validatePageContent on bare body produces no spurious violations", () => {
     const config = {
+      // Phase 187 Pitfall-4 ripple: rawSourcesImmutable REQUIRED in output type.
+      rawSourcesImmutable: true,
       requiredFrontmatter: {
         title: { type: "string", required: true },
       },

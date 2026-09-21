@@ -90,6 +90,18 @@ export const configKeySchema = z.enum([
   // members bypass DLP redaction. Admin-editable via PUT /api/system/settings
   // (NOT ALWAYS_READONLY). String VALUE carries a JSON array of role names.
   "DLP_BYPASS_ROLES",
+  // Phase 189 (WSIS-04, D-13): workspace role-graded enforcement kill-switch.
+  // FLIPPED "false"→"true" on 2026-09-16 (Plan 189-04 Task 2) after the
+  // checkpoint approved it on the three parity-evidence classes: Plan 02
+  // route-matrix unit pins green, the E2E parity probes green in a real
+  // browser (rebuilt 189 stack), and the shadow-log spot-check clean (78
+  // shadow decisions, zero drift). Admin-editable at runtime via
+  // PUT /api/system/settings (NOT ALWAYS_READONLY); the persisted DB row is
+  // the upgraded-install value (scripts/set-workspace-role-enforcement.cjs
+  // overwrite:true + Phase 183 cache fan-out) — CONFIG_DEFAULTS is only the
+  // fresh-install seed. Rollback: re-run the script with "false" or PUT the
+  // key.
+  "WORKSPACE_ROLE_ENFORCEMENT",
 
   // OCR Configuration
   "OCR_DEFAULT_MODEL",

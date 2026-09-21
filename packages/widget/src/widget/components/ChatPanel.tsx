@@ -4,11 +4,12 @@
 // See LICENSE and NOTICE at the repository root for full terms.
 
 import type { WidgetConfig } from "../hooks/useWidgetConfig";
-import { shouldShowCredits } from "../hooks/useWidgetConfig";
+import { shouldShowCredits, shouldShowLinks, shouldShowContactOptions } from "../hooks/useWidgetConfig";
 import type { UseWidgetChatReturn } from "../hooks/useWidgetChat";
 import { readStoredValue, writeStoredValue } from "../hooks/useWidgetChat";
 import ChatHeader from "./ChatHeader";
 import ContactBanner from "./ContactBanner";
+import ContactOptionsCard from "./ContactOptionsCard";
 import LeadBanner from "./LeadBanner";
 import MessageArea from "./MessageArea";
 import InputBar from "./InputBar";
@@ -20,6 +21,7 @@ import LeadCaptureCard from "./LeadCaptureCard";
 import { useState, useCallback, useEffect, useRef } from "preact/hooks";
 import { t } from "../i18n";
 import { notifyCreditsOpen } from "../../utils/widgetStateBridge";
+import { shouldShowLeadAtTiming } from "../../utils/chatPanelLogic";
 
 interface ChatPanelProps {
   config: WidgetConfig;
@@ -120,7 +122,11 @@ export default function ChatPanel({ config, chat, onClose }: ChatPanelProps) {
         "Content-Type": "application/json",
         ...(sessionToken ? { "X-Session-Token": sessionToken } : {}),
       },
-      body: JSON.stringify({ email, name, transcript }),
+      // 260917-qoh: the shared schema requires privacyConsented:true — the
+      // card only invokes onSubmit after the checkbox gate, and the server
+      // schema independently fails closed on a missing/false flag
+      // (defense-in-depth, T-Q04).
+      body: JSON.stringify({ email, name, transcript, privacyConsented: true }),
     });
     if (!response.ok) throw new Error(t("chatPanel.leadSubmitFailed"));
     setLeadSubmitted(true);
@@ -138,16 +144,58 @@ export default function ChatPanel({ config, chat, onClose }: ChatPanelProps) {
     setLeadDismissed(false);
   }, []);
 
-  // Show lead card after first assistant answer (per D-07)
+  // Lead timing (260917-mz6): the three-timing switch replaces the old
+  // after-first-answer effect. phase derives from observable state:
+  //   "start"       → panel open (mount), used when timing = "start"
+  //   "limit"       → sessionLimitReached, used when timing = "end"
+  //   "timeout-due" → the armed timer fired, used when timing = "timeout"
+  // Timer behavior (documented): with timing = "timeout" a timer of
+  // leadCaptureTimeoutSeconds arms when the first user message exists —
+  // armed on mount when messages.length > 0, and when messages transition
+  // 0 → 1. The timer lives ONLY while the panel is mounted (closed panel
+  // disarms; reopening with messages re-arms — one full window per panel
+  // session). leadSubmitted/leadDismissed gating stays below.
+  const [leadTimeoutFired, setLeadTimeoutFired] = useState(false);
+  const leadCaptureTiming = config.leadCaptureTiming ?? "end";
+
   useEffect(() => {
     if (!config.leadCaptureEnabled) return;
     if (leadSubmitted || leadDismissed) return;
-    const hasAssistantAnswer = messages.some(m => m.role === "assistant" && m.content.trim() !== "");
-    const doneStreaming = !isStreaming;
-    if (hasAssistantAnswer && doneStreaming) {
+
+    if (shouldShowLeadAtTiming(leadCaptureTiming, "start")) {
+      // timing "start": the panel just opened — show immediately.
       setShowLeadCard(true);
+      return;
     }
-  }, [messages, isStreaming, config.leadCaptureEnabled, leadSubmitted, leadDismissed]);
+
+    if (shouldShowLeadAtTiming(leadCaptureTiming, "limit")) {
+      // timing "end": show when the daily limit trips (alongside the contact
+      // options card), after the first answer exists so there is a transcript.
+      const hasAssistantAnswer = messages.some(m => m.role === "assistant" && m.content.trim() !== "");
+      if (sessionLimitReached && (hasAssistantAnswer || messages.length > 0) && !isStreaming) {
+        setShowLeadCard(true);
+      }
+      return;
+    }
+
+    // timing "timeout": arm the timer on mount when messages already exist,
+    // and re-arm on the 0 → 1 transition. The timer lives only while the
+    // panel is mounted (cleanup clears it).
+    if (leadCaptureTiming === "timeout") {
+      const seconds = config.leadCaptureTimeoutSeconds ?? 30;
+      if (messages.length === 0) {
+        setLeadTimeoutFired(false);
+        return;
+      }
+      if (!leadTimeoutFired) {
+        const timer = setTimeout(() => {
+          setLeadTimeoutFired(true);
+          setShowLeadCard(true);
+        }, seconds * 1000);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [messages, isStreaming, config.leadCaptureEnabled, config.leadCaptureTiming, config.leadCaptureTimeoutSeconds, sessionLimitReached, leadSubmitted, leadDismissed, leadTimeoutFired]);
 
   // Auto-dismiss error after 5 seconds
   useEffect(() => {
@@ -219,6 +267,21 @@ export default function ChatPanel({ config, chat, onClose }: ChatPanelProps) {
             avatarUrl={config.avatarUrl}
           />
         )}
+        {/* 260917-mz6: the limit-reached contact options card — the
+            configured form/booking/email/custom entries + the lead-capture
+            arm, gated by the single shouldShowContactOptions predicate.
+            Renders ABOVE RateLimitNotice so the contact funnel sits in
+            front of the notice copy. */}
+        {shouldShowContactOptions(sessionLimitReached, config.contactConfig, config.leadCaptureEnabled, leadSubmitted) && (
+          <ContactOptionsCard
+            contactConfig={config.contactConfig}
+            leadAvailable={config.leadCaptureEnabled && !leadSubmitted}
+            onOpenLeadCard={() => {
+              setShowLeadCard(true);
+              setLeadDismissed(false);
+            }}
+          />
+        )}
         {rateLimit && (
           <RateLimitNotice rateLimit={rateLimit} sessionLimitReached={sessionLimitReached} />
         )}
@@ -229,6 +292,8 @@ export default function ChatPanel({ config, chat, onClose }: ChatPanelProps) {
           onSubmit={handleLeadSubmit}
           onDismiss={handleLeadDismiss}
           promptText={config.leadCapturePrompt || undefined}
+          // 260917-qoh: the per-widget privacy URL for the consent link.
+          privacyUrl={config.privacyUrl}
         />
       )}
 
@@ -246,6 +311,43 @@ export default function ChatPanel({ config, chat, onClose }: ChatPanelProps) {
         onFocus={handleInputFocus}
         placeholder={config.placeholder || undefined}
       />
+
+      {/* 188-03 (WGTA-03, D-12/D-13): product attribution links — the row sits
+          ABOVE the credits footer so the credits row keeps its LAST-CHILD
+          position (Pitfall 5 — the seam tests pin the footer 50/50 rhythm and
+          the credits container byte-identically). Visibility is the single
+          shouldShowLinks predicate: Community (whiteLabel false) shows,
+          enterprise white-label removes (D-12 — no new flag, no Widget field).
+          The two URLs are product constants (REQUIREMENTS.md WGTA-03 canonical
+          spellings), NEVER admin-supplied (D-13a — no XSS surface). The anchor
+          KEEPS href for semantics but onClick owns the open (preventDefault +
+          notifyCreditsOpen — the sandboxed iframe cannot window.open itself,
+          Pattern 4). Same touch-target discipline as the credits anchor:
+          min-h-[44px] + line-clamp-2 on an INNER span. */}
+      {shouldShowLinks(config.whiteLabel) && (
+        <div className="flex items-center justify-between px-4 pb-2">
+          <a
+            href="https://www.studiosimos.it"
+            onClick={(e) => {
+              e.preventDefault();
+              notifyCreditsOpen("https://www.studiosimos.it");
+            }}
+            className="w-1/2 text-xs text-[#6b7280] underline underline-offset-2 hover:text-[var(--widget-primary)] min-h-[44px] inline-flex items-center justify-start text-left"
+          >
+            <span className="line-clamp-2">studiosimos.it</span>
+          </a>
+          <a
+            href="https://www.simmetricchat.com"
+            onClick={(e) => {
+              e.preventDefault();
+              notifyCreditsOpen("https://www.simmetricchat.com");
+            }}
+            className="w-1/2 text-xs text-[#6b7280] underline underline-offset-2 hover:text-[var(--widget-primary)] min-h-[44px] inline-flex items-center justify-end text-right"
+          >
+            <span className="line-clamp-2">Simmetric Chat</span>
+          </a>
+        </div>
+      )}
 
       {/* 130-01 (D-01/D-04): credits footer line — the LAST child after
           <InputBar>, always visible when the panel is open. Visibility is the

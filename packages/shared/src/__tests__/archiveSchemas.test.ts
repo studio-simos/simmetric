@@ -9,6 +9,7 @@ import {
   createPageSchema,
   updatePageSchema,
   archiveSearchQuerySchema,
+  archiveConfigSchema,
 } from "../schemas/archive.schema";
 
 // ─── Archive Schemas ─────────────────────────────────────────────
@@ -221,5 +222,45 @@ describe("archiveSearchQuerySchema", () => {
       limit: "0",
     });
     expect(result.success).toBe(false);
+  });
+});
+
+// ─── Phase 187 (WIKS-01): archiveConfigSchema — schemaPrompt + rawSourcesImmutable ──
+
+describe("archiveConfigSchema", () => {
+  it("accepts schemaPrompt of exactly 10000 characters", () => {
+    const result = archiveConfigSchema.safeParse({ schemaPrompt: "x".repeat(10000) });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects schemaPrompt over 10000 characters (10001)", () => {
+    const result = archiveConfigSchema.safeParse({ schemaPrompt: "x".repeat(10001) });
+    expect(result.success).toBe(false);
+  });
+
+  it("materializes rawSourcesImmutable: true in parse output when absent (D-02 default)", () => {
+    const result = archiveConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.rawSourcesImmutable).toBe(true);
+    }
+  });
+
+  it("passes explicit rawSourcesImmutable: false through as false (documentation flag — never gated)", () => {
+    const result = archiveConfigSchema.safeParse({ rawSourcesImmutable: false });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.rawSourcesImmutable).toBe(false);
+    }
+  });
+
+  it("keeps the empty-object contract: safeParse({}) succeeds with no schemaPrompt key (D-01 additive)", () => {
+    const result = archiveConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.schemaPrompt).toBeUndefined();
+      expect(result.data.purpose).toBeUndefined();
+      expect(result.data.scope).toBeUndefined();
+    }
   });
 });

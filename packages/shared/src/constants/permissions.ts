@@ -59,6 +59,27 @@ export const PERMISSION_NAMES = [
   // GET /api/filters + PATCH /api/filters/:name. No new menu section — Filters
   // is a sub-tab of Settings (handled in Plan 03 frontend).
   "filters:manage",
+  // Phase 190 (SKIL-01 D-07): skills CRUD permission surface — 32nd–35th.
+  // Admin role spreads [...PERMISSION_NAMES] so it auto-gains all four.
+  // DEFAULT_USER_ROLE gains create/read/write/delete (users manage their own
+  // personal skills, mirroring the memory:read/write Phase 97 pattern);
+  // WR-04: skill:delete IS granted — the DELETE route still enforces
+  // owner(createdBy)-or-admin server-side, and self-service deletion keeps
+  // the max_skills count-at-provision limit escapable (a user who hits the
+  // community limit can free headroom without an admin). Gates the /api/skills
+  // CRUD routes (Plan 02) + the /skills management page (Plan 04).
+  "skill:create",
+  "skill:read",
+  "skill:write",
+  "skill:delete",
+  // Phase 192 (DLP-04 D-10): document-PII unmask permission — 36th. Gates the
+  // document-preview unmask variant (GET /:documentId/text?unmask=true) and
+  // the chat stream-end re-composition (placeholders [PERSON_1] → decrypted
+  // originals). Admin role spreads [...PERMISSION_NAMES] so it auto-gains;
+  // DEFAULT_USER_ROLE intentionally does NOT include it — unmask is an
+  // elevated capability, not a default user ability. Resolved per-request via
+  // the Phase 189 resolveWorkspaceRole() machinery (never a parallel check).
+  "dlp:unmask",
 ] as const;
 
 export type PermissionName = (typeof PERMISSION_NAMES)[number];
@@ -93,6 +114,14 @@ const DEFAULT_USER_ROLE = {
     // The auto-extraction (MEM-03) uses `memory:write` server-side, not user-facing.
     "memory:read",
     "memory:write",
+    // Phase 190 (SKIL-01 D-07): users manage their own personal skills —
+    // create/read/write/delete (WR-04: the DELETE route still enforces
+    // owner-or-admin server-side; self-service deletion keeps max_skills
+    // escapable without admin intervention).
+    "skill:create",
+    "skill:read",
+    "skill:write",
+    "skill:delete",
   ] as PermissionName[],
 } as const;
 
@@ -144,6 +173,11 @@ export const MENU_SECTIONS = [
   // Phase 71-03: 'uploads' is the 13th section (additive, D-01 menu placement).
   // User role has document:write (SC-1 visibility); admin spreads [...MENU_SECTIONS].
   "uploads",
+  // Phase 190 (SKIL-01 D-19): 'skills' is the 14th section (additive — stored
+  // as strings in RoleMenuSection, no migration; seedMenuSections upserts it
+  // for both default roles at next boot so existing installs gain the nav
+  // entry on restart). Dedicated /skills management page (D-19).
+  "skills",
 ] as const;
 
 export type MenuSection = (typeof MENU_SECTIONS)[number];
@@ -152,7 +186,8 @@ export const menuSectionSchema = z.enum(MENU_SECTIONS);
 
 export const DEFAULT_ROLE_MENU_SECTIONS: Record<string, MenuSection[]> = {
   admin: [...MENU_SECTIONS],
-  user: ["dashboard", "chat", "documents", "knowledgeBase", "workspaces", "widget", "uploads"],
+  // Phase 190 (SKIL-01 D-19): user gains the skills management entry.
+  user: ["dashboard", "chat", "documents", "knowledgeBase", "workspaces", "widget", "uploads", "skills"],
 };
 
 // ===== Config Defaults =====
@@ -190,6 +225,21 @@ export const CONFIG_DEFAULTS: Record<string, string> = {
   // bypass (every request is scanned). The seedConfigDefaults loop
   // auto-seeds this row; admin-editable via PUT /api/system/settings.
   DLP_BYPASS_ROLES: "[]",
+  // Phase 189 (WSIS-04, D-13): workspace role-graded enforcement — FLIPPED
+  // "false"→"true" on 2026-09-16 (Plan 189-04 Task 2) after the checkpoint
+  // approved it on the three parity-evidence classes: (1) Plan 02 route-matrix
+  // unit pins (workspaceAccess.routes.test.ts enforced+shadow arms green),
+  // (2) the E2E parity probes (e2e/workspace-access.spec.ts green in a real
+  // browser against the rebuilt 189 stack), (3) the shadow-log spot-check
+  // (78 [workspace-access] shadow decision lines across admin/editor/viewer,
+  // zero drift). The FRESH-INSTALL half: new installs seed "true" directly.
+  // The UPGRADED-INSTALL half: scripts/set-workspace-role-enforcement.cjs
+  // overwrites the persisted global row + invalidates the config cache — a
+  // constants-only flip is a runtime no-op on upgraded installs (getDbValue
+  // resolves DB-row-first; seedConfigDefaults persists this value with
+  // overwrite:false at every boot). Rollback: re-run the script with "false"
+  // or PUT the key via the settings UI.
+  WORKSPACE_ROLE_ENFORCEMENT: "true",
   OCR_DEFAULT_MODEL: "",
   OCR_DEFAULT_MODE: "text",
   OCR_DEFAULT_CUSTOM_INSTRUCTIONS: "",

@@ -225,7 +225,22 @@ describe("widgetChatLimiter max function (SCALE-04, D-05, Open Q1, Pitfall 4)", 
     expect(mockRedisInstance.get).toHaveBeenCalledWith("widget:config:wid-abc");
   });
 
-  it("returns rateLimitPerMinute when it is a positive number, ignores null/zero/negative", async () => {
+  it("treats cached 0 as unlimited → WIDGET_UNLIMITED_MAX (never 0 — max=0 blocks all)", async () => {
+    const mod = freshRateLimit();
+    const maxFn = capturedRateLimitOptions!.max as (
+      req: unknown,
+      res: unknown,
+    ) => Promise<number>;
+
+    // 0 = unlimited ("no limits") → the documented express-rate-limit bypass:
+    // a never-reached max (Int32), NOT 0 (v7+ blocks ALL requests on max=0).
+    mockRedisInstance.get.mockResolvedValue(
+      JSON.stringify({ id: "wid-abc", rateLimitPerMinute: 0 }),
+    );
+    expect(await maxFn(maxReq("/api/chat/wid-abc/stream"), {})).toBe(mod.WIDGET_UNLIMITED_MAX);
+  });
+
+  it("returns rateLimitPerMinute when it is a positive number, ignores null/negative", async () => {
     freshRateLimit();
     const maxFn = capturedRateLimitOptions!.max as (
       req: unknown,
@@ -235,12 +250,6 @@ describe("widgetChatLimiter max function (SCALE-04, D-05, Open Q1, Pitfall 4)", 
     // null rateLimitPerMinute → fall back to default
     mockRedisInstance.get.mockResolvedValue(
       JSON.stringify({ id: "wid-abc", rateLimitPerMinute: null }),
-    );
-    expect(await maxFn(maxReq("/api/chat/wid-abc/stream"), {})).toBe(200);
-
-    // zero → fall back to default
-    mockRedisInstance.get.mockResolvedValue(
-      JSON.stringify({ id: "wid-abc", rateLimitPerMinute: 0 }),
     );
     expect(await maxFn(maxReq("/api/chat/wid-abc/stream"), {})).toBe(200);
 

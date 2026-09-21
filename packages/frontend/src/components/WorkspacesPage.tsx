@@ -38,6 +38,9 @@ import {
   useDeleteWorkspace,
   useBulkDeleteWorkspaces,
 } from "../queries/useWorkspaces";
+// Phase 192 (DLP-05): the eval-gate truth threaded to WorkspaceRow's
+// gate-blocked arm — one shared cache entry, same query the panel reads.
+import { useDlpEvalResult } from "../queries/useDlpDocs";
 import { apiGet } from "../utils/api";
 import { showSuccess, showError } from "../lib/toast";
 import { getErrorMessage } from "../utils/errorUtils";
@@ -56,6 +59,11 @@ export default function WorkspacesPage() {
   const bulkDeleteMut = useBulkDeleteWorkspaces();
   const { data: user } = useMe();
   const isAdmin = user?.roles.some((r) => r.name === "admin") ?? false;
+  // Phase 192 (DLP-05): gate truth for the per-workspace DLP toggle.
+  // undefined (loading/error/never-run) = gate unknown → treated as
+  // not-passed fail-closed in WorkspaceRow (turn-OFF never blocked).
+  const { data: dlpEvalResult } = useDlpEvalResult();
+  const dlpGatePassed = dlpEvalResult?.passed === true;
   const [filter, setFilter] = useState<"all" | "owned" | "shared">("all");
   const [showCreatePanel, setShowCreatePanel] = useState(false);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
@@ -314,6 +322,7 @@ export default function WorkspacesPage() {
                   onDelete={(id) => deleteWorkspaceMut.mutateAsync(id)}
                   selected={selectedIds.has(workspace.id)}
                   onToggleSelect={handleSelectOne}
+                  dlpGatePassed={dlpGatePassed}
                 />
               ))}
             </TableBody>

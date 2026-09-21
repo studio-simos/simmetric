@@ -38,9 +38,13 @@ jest.mock("../config/env", () => ({
 }));
 
 // Mock axios so notifyServerStatus / fetchEmbeddingConfig never hit the network.
+// quick 260918-p3h: the `get` mock doubles as the cancellation poll — suites
+// drive it via `mockedAxiosGet`.
+const mockedAxiosPut = jest.fn();
+const mockedAxiosGet = jest.fn();
 jest.mock("axios", () => ({
-  get: jest.fn().mockRejectedValue(new Error("test: no server available")),
-  put: jest.fn().mockResolvedValue({ status: 200 }),
+  get: (...args: any[]) => mockedAxiosGet(...args),
+  put: (...args: any[]) => mockedAxiosPut(...args),
 }));
 
 // Mock embedding provider. `getDimension()` is the source of truth for the
@@ -136,6 +140,10 @@ function setupVectorStore(searchResults: unknown[] = []) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Default poll arm: GET fails (network error) → isDocumentCancelled is
+  // fail-open false — existing suites proceed unchanged.
+  mockedAxiosGet.mockRejectedValue(new Error("test: no server available"));
+  mockedAxiosPut.mockResolvedValue({ status: 200 });
   setupEmbeddingProvider();
   setupVectorStore();
 });
@@ -464,5 +472,194 @@ describe("metadata stamping + query filters (260830-ur9)", () => {
     expect(passedDocs[0].metadata).not.toHaveProperty("documentType");
     expect(passedDocs[0].metadata).not.toHaveProperty("documentCreatedAt");
     expect(passedDocs[0].metadata).not.toHaveProperty("documentCreatedAtMs");
+  });
+});
+// quick 260918-p3h — progress reporting + cooperative cancellation in the
+// ingest pipeline (D-2, D-3 collector leg).
+//
+// Contract under test:
+//   (a) cancelled-at-first-check → responds {status:"cancelled"}, embed
+//       never called, NO "failed" notify.
+//   (b) cancelled mid-embed-slice → no addDocuments, cancelled response.
+//   (c) happy path → progress notifies observed in order 25→40→…→95
+//       (monotonically non-decreasing), completion notify unchanged.
+//   (d) poll endpoint unreachable → ingest proceeds normally (fail-open pin).
+//   (e) after-add cancellation triggers the purge call (deleteByDocumentId).
+describe("quick 260918-p3h — ingest progress + cooperative cancellation", () => {
+  let server: Server;
+  let base: string;
+
+  beforeAll(async () => {
+    const handle = await startApp();
+    server = handle.server;
+    base = handle.base;
+  });
+
+  afterAll(async () => {
+    await stopApp(server);
+  });
+
+  const DOC_ID = "33333333-3333-4333-8333-333333333333";
+
+  function setupHappyMocks(chunkCount = 2) {
+    mockParseFile.mockResolvedValue({ text: "hello world", metadata: {} });
+    mockChunkText.mockImplementation(async () =>
+      Array.from({ length: chunkCount }, (_, i) => ({
+        text: `chunk${i}`,
+        metadata: { paragraph: i, charStart: 0, charEnd: 5 },
+      })),
+    );
+    setupEmbeddingProvider();
+    setupVectorStore();
+    mockAddDocuments.mockResolvedValue(undefined);
+    mockDeleteByDocumentId.mockResolvedValue(undefined);
+  }
+
+  function makeForm() {
+    const form = new FormData();
+    form.append("file", new Blob(["hello world"], { type: "text/markdown" }), "notes.md");
+    form.append("documentId", DOC_ID);
+    form.append("workspaceId", "ws-1");
+    form.append("embeddingModel", "Xenova/all-MiniLM-L6-v2");
+    form.append("docType", "md");
+    return form;
+  }
+
+  it("(a) cancelled before parse → 200 {status:'cancelled'}, embed never called, NO failed notify", async () => {
+    setupHappyMocks();
+    // Every poll reports cancelled.
+    mockedAxiosGet.mockResolvedValue({ data: { status: "cancelled", progress: 0 } });
+
+    const res = await fetch(`${base}/api/ingest`, {
+      method: "POST",
+      headers: { "X-Collector-Secret": TEST_SECRET },
+      body: makeForm(),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.status).toBe("cancelled");
+    expect(body.documentId).toBe(DOC_ID);
+
+    // No work happened past the first boundary.
+    expect(mockEmbed).not.toHaveBeenCalled();
+    expect(mockAddDocuments).not.toHaveBeenCalled();
+
+    // NO failed notify overwrote the user's cancelled status.
+    const failedNotifies = mockedAxiosPut.mock.calls.filter(
+      (c: any[]) => c[1]?.status === "failed",
+    );
+    expect(failedNotifies).toHaveLength(0);
+  });
+
+  it("(b) cancelled mid-embed-slice → no addDocuments, cancelled response", async () => {
+    setupHappyMocks(2);
+    // Poll sequence for a 2-chunk doc: pre-parse(1), post-parse(2),
+    // post-chunk(3) → not cancelled; the first embed-slice check (4th poll)
+    // → cancelled → embed must have been STARTED? No — the check runs BEFORE
+    // embed(slice) throws before any embed call. So the pin here is: no
+    // addDocuments, cancelled response, and the cancelled throw came from
+    // the slice boundary (parse/chunk progress notifies already happened).
+    let pollCount = 0;
+    mockedAxiosGet.mockImplementation(async () => {
+      pollCount++;
+      if (pollCount <= 3) return { data: { status: "processing", progress: 0 } };
+      return { data: { status: "cancelled", progress: 50 } };
+    });
+
+    const res = await fetch(`${base}/api/ingest`, {
+      method: "POST",
+      headers: { "X-Collector-Secret": TEST_SECRET },
+      body: makeForm(),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.status).toBe("cancelled");
+
+    // Storage never happened (the slice check threw before embed ran).
+    expect(mockEmbed).not.toHaveBeenCalled();
+    expect(mockAddDocuments).not.toHaveBeenCalled();
+
+    // NO failed notify.
+    const failedNotifies = mockedAxiosPut.mock.calls.filter(
+      (c: any[]) => c[1]?.status === "failed",
+    );
+    expect(failedNotifies).toHaveLength(0);
+  });
+
+  it("(c) happy path → progress notifies 25→40→…→95 monotonically non-decreasing + completion notify unchanged", async () => {
+    // 130 chunks → 3 embed slices (64+64+2) → per-slice progress between
+    // 40 and 90 is observable.
+    setupHappyMocks(130);
+    mockedAxiosGet.mockResolvedValue({ data: { status: "processing", progress: 0 } });
+
+    const res = await fetch(`${base}/api/ingest`, {
+      method: "POST",
+      headers: { "X-Collector-Secret": TEST_SECRET },
+      body: makeForm(),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.status).toBe("processed");
+
+    const progressArgs = mockedAxiosPut.mock.calls
+      .map((c: any[]) => c[1]?.progress)
+      .filter((p: any) => typeof p === "number");
+    expect(progressArgs.length).toBeGreaterThanOrEqual(4);
+    // Boundary pins: 25 after parse, 40 after chunk, 95 after store.
+    expect(progressArgs[0]).toBe(25);
+    expect(progressArgs[1]).toBe(40);
+    expect(progressArgs[progressArgs.length - 1]).toBe(95);
+    // Monotonically non-decreasing.
+    for (let i = 1; i < progressArgs.length; i++) {
+      expect(progressArgs[i]!).toBeGreaterThanOrEqual(progressArgs[i - 1]!);
+    }
+
+    // Terminal completion notify unchanged (status completed, chunkCount).
+    const completion = mockedAxiosPut.mock.calls.find(
+      (c: any[]) => c[1]?.status === "completed",
+    );
+    expect(completion).toBeDefined();
+    expect(completion![1].chunkCount).toBe(130);
+  });
+
+  it("(d) poll endpoint unreachable → ingest proceeds normally (fail-open pin)", async () => {
+    setupHappyMocks();
+    // Every poll errors (axios.get rejects) — the default beforeEach arm.
+    const res = await fetch(`${base}/api/ingest`, {
+      method: "POST",
+      headers: { "X-Collector-Secret": TEST_SECRET },
+      body: makeForm(),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.status).toBe("processed");
+    expect(mockAddDocuments).toHaveBeenCalledTimes(1);
+  });
+
+  it("(e) after-add cancellation triggers the purge call (deleteByDocumentId)", async () => {
+    setupHappyMocks();
+    // Poll sequence for a 2-chunk doc: pre-parse(1), post-parse(2),
+    // post-chunk(3), first-slice check(4) → all not cancelled; the post-add
+    // poll (5th) → cancelled.
+    mockedAxiosGet.mockImplementation(async () => {
+      const callIndex = mockedAxiosGet.mock.calls.length;
+      if (callIndex <= 4) return { data: { status: "processing", progress: 0 } };
+      return { data: { status: "cancelled", progress: 90 } };
+    });
+
+    const res = await fetch(`${base}/api/ingest`, {
+      method: "POST",
+      headers: { "X-Collector-Secret": TEST_SECRET },
+      body: makeForm(),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.status).toBe("cancelled");
+
+    // addDocuments ran, then the purge deleted the just-written vectors.
+    expect(mockAddDocuments).toHaveBeenCalledTimes(1);
+    expect(mockDeleteByDocumentId).toHaveBeenCalledTimes(1);
+    const deletedDocId = mockDeleteByDocumentId.mock.calls[0][1] as string;
+    expect(deletedDocId).toBe(DOC_ID);
   });
 });

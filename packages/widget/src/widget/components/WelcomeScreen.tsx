@@ -5,6 +5,7 @@
 
 import type { WidgetConfig } from "../hooks/useWidgetConfig";
 import { t } from "../i18n";
+import ProductMark from "./ProductMark";
 
 interface WelcomeScreenProps {
   config: WidgetConfig;
@@ -15,14 +16,23 @@ interface WelcomeScreenProps {
 export default function WelcomeScreen({ config, onQuestionClick }: WelcomeScreenProps) {
   return (
     <div className="flex flex-col items-center justify-center h-full px-6 py-6">
-      {/* Widget avatar */}
+      {/* Widget avatar — 188-03 (WGTA-02, D-10 restyle-not-rebuild): when the
+          admin avatarUrl is absent the primary-colored circle renders the
+          product fallback mark (self-contained Preact Monogram copy) instead
+          of the generic chat-bubble glyph; the circle geometry is preserved. */}
       <div
-        className="w-12 h-12 rounded-full flex items-center justify-center mb-4"
+        className="w-12 h-12 rounded-full flex items-center justify-center mb-4 overflow-hidden"
         style={{ backgroundColor: "var(--widget-primary)" }}
       >
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
-        </svg>
+        {config.avatarUrl ? (
+          <img
+            src={config.avatarUrl}
+            alt={config.botName}
+            className="w-12 h-12 rounded-full object-contain"
+          />
+        ) : (
+          <ProductMark size={36} color="#4c6ef5" className="rounded-md" />
+        )}
       </div>
 
       {/* Welcome message (WCORE-05 display) */}

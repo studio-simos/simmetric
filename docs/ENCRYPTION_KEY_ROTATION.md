@@ -94,7 +94,9 @@ the standard checklist above — their scrypt-era blobs stay decryptable via
 the decrypt-chain tail after the cutover . One more caveat: let
 provisioning complete once before scaling the `server` service beyond one
 replica (concurrent first-boot replicas could each generate a divergent
-key).
+key). If a **backup restore** starts failing with
+"Unable to decrypt (no key in chain matched)" after a key change, go to the
+"Backup restore dry-run fails: no key in chain matched" section below.
 
 ## Scope
 
@@ -350,6 +352,111 @@ marker.
 `--resume` (the sweep was likely interrupted); if `undecryptable > 0`,
 inspect the reported `{table, id, error}` and resolve the root cause
 before retrying.
+
+## Backup restore dry-run fails: no key in chain matched
+
+A restore dry-run (or restore execute, or scheduled backup upload) fails with:
+
+```
+Unable to decrypt (no key in chain matched). Tried N key(s). …
+Last error: Unsupported state or unable to authenticate data
+```
+
+"Unsupported state or unable to authenticate data" is Node's GCM
+authentication failure — the signature that the backup-era key is no longer
+in the running server's decrypt chain. This happens after an `ENCRYPTION_KEY`
+change or a restore of a different environment (e.g. a backup taken on
+05/09 under the then-current key, restored by a server now holding a
+different one).
+
+### What is (and is not) encrypted
+
+Only the small credential surfaces are encrypted at rest (AES-256-GCM via
+`encryptConfig` at destination create/edit):
+
+- `backup_destinations.config` — the destination credentials JSON. **This is
+  what the restore path decrypts before downloading the ZIP.**
+- `providers.apiKey` — provider API keys.
+
+**The backup ZIP itself is NOT encrypted** (plaintext archive; the stored
+checksum is of the plaintext ZIP). Consequence: once the destination config
+decrypts again, every previously-made backup stays fully restorable —
+**losing the key does not lose the backups**. The two recovery paths below
+both preserve the existing ZIPs.
+
+### Diagnosis for Docker deployments
+
+Inspect what the running server actually holds, and compare with the
+persisted volume key:
+
+```bash
+# What the container currently runs with (env_file / compose env):
+docker exec simmetric-chat-server printenv ENCRYPTION_KEY LEGACY_PREVIOUS_ENCRYPTION_KEYS
+
+# The key persisted in the server-storage volume (provisioned on first boot):
+docker exec simmetric-chat-server cat /app/storage/.encryption-key
+```
+
+Provisioning precedence (`docker/provision-encryption-key.sh`, sourced by
+`docker/entrypoint-server.sh`): an **operator-supplied env value WINS** over
+the persisted volume file; only when no env value exists does the entrypoint
+restore the volume file, and only on a fresh volume does it generate once and
+persist. It never regenerates over existing key material.
+
+So the usual failure shapes are:
+
+- A new (or changed) operator `ENCRYPTION_KEY` in the root `.env` after the
+  backup was made — the env value **shadows** the backup-era key (which may
+  still be sitting in `/app/storage/.encryption-key`).
+- A recreated `server-storage` volume — the persisted key is gone and a new
+  one was provisioned.
+
+A backup encrypted in the scrypt(`JWT_SECRET`) era decrypts via the chain
+tail — but only while `JWT_SECRET` is unchanged; a rotated JWT_SECRET bricks
+those blobs (the same coupling this runbook's hard-default cutover exists to
+prevent).
+
+### Recovery A — old key known
+
+1. Append the **backup-era key** to `LEGACY_PREVIOUS_ENCRYPTION_KEYS`
+   (comma-separated if there are several) in the root `.env`:
+   ```bash
+   LEGACY_PREVIOUS_ENCRYPTION_KEYS=<backup-era-key>
+   ```
+2. **Recreate the container — env_file changes need recreate, not
+   `restart`:**
+   ```bash
+   docker compose -f docker/docker-compose.yml up -d server
+   ```
+   (`docker restart` re-uses the environment the container was created
+   with; `up -d` after an `.env` change recreates it with the new env.)
+3. Re-run the restore dry-run. The destination config should decrypt via the
+   restored chain.
+4. Recommended convergence: run the rotation + verification CLIs (see
+   "Strict Deploy Order" above) so the destination config is re-encrypted
+   onto the current key, then keep `below_active = 0` in the verify output
+   before removing the legacy entry again.
+
+### Recovery B — old key unrecoverable, credentials known
+
+1. Open **Settings → Backup destinations** and edit the destination:
+   the PUT re-encrypts the stored config with the **current** key.
+2. Verify with the destination "test" action, or a dry-run of the newest
+   backup.
+
+The old ZIPs remain restorable (the archive itself is plaintext) — only the
+config needed to *reach* the destination was re-encrypted.
+
+### Prevention
+
+- Back up the persisted volume key (mirrors the entrypoint's first-boot
+  warning):
+  ```bash
+  docker cp simmetric-chat-server:/app/storage/.encryption-key .
+  ```
+- Never change `ENCRYPTION_KEY` without moving the old value into
+  `LEGACY_PREVIOUS_ENCRYPTION_KEYS` first (the rotation checklist above does
+  exactly this — follow it for any key change, not just planned rotations).
 
 ## Env Var Reference
 

@@ -10,7 +10,7 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import request from "supertest";
-
+import { ensureOrgMembership } from "../../jest.setup.integration";
 let app: ReturnType<typeof import("../index").createApp>;
 let prisma: import("@prisma/client").PrismaClient;
 let env: import("../config/env").Env;
@@ -49,6 +49,7 @@ beforeAll(async () => {
     await prisma.userRole.create({
       data: { userId: admin.id, roleId: adminRole.id },
     });
+  await ensureOrgMembership(prisma, admin.id);
   }
 });
 

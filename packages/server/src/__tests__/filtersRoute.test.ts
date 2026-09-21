@@ -109,6 +109,11 @@ jest.mock("../middleware/auth", () => {
 jest.mock("../middleware/rbac", () => {
   const mockState = require("../middleware/auth").__mockState;
   return {
+  // Phase 189 (189-02 sweep): routes now import the graded middlewares —
+  // the mock must export them (shadow no-op) or express throws at load.
+  requireWorkspaceWriteAccess: () => (_req: any, _res: any, next: any) => next(),
+  requireWorkspaceRead: () => (_req: any, _res: any, next: any) => next(),
+
     requirePermission: (_perm: string) => (req: Request, res: Response, next: NextFunction) => {
       if (mockState.authMode === "no-permission") {
         res.status(403).json({ error: "Insufficient permissions" });
@@ -323,13 +328,15 @@ describe("PATCH /api/filters/:name", () => {
 // ─── Permission constant ─────────────────────────────────────────────────
 
 describe("PERMISSION_NAMES — filters:manage (D-09)", () => {
-  it("includes 'filters:manage' as the 31st entry (after 'memory:write')", () => {
+  it("includes 'filters:manage' at index 30 (after 'memory:write'; length 36 after the Phase 192 dlp:unmask addition)", () => {
     expect(PERMISSION_NAMES).toContain("filters:manage");
     const idx = PERMISSION_NAMES.indexOf("filters:manage");
     const memoryWriteIdx = PERMISSION_NAMES.indexOf("memory:write");
     expect(idx).toBeGreaterThan(memoryWriteIdx);
-    // 31st entry → index 30 (0-based)
+    // 31st entry → index 30 (0-based) — still true: Phase 190 appended the
+    // skill:* rows AFTER filters:manage (indexes 31-34) and Phase 192 the
+    // dlp:unmask row last (index 35), so this pin holds.
     expect(idx).toBe(30);
-    expect(PERMISSION_NAMES).toHaveLength(31);
+    expect(PERMISSION_NAMES).toHaveLength(36);
   });
 });

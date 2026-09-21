@@ -29,6 +29,7 @@ import {
   useRetryBoth,
   useDeleteDraft,
   useRenameDraft,
+  useCancelDraftLeg,
   type UploadDraft,
   type RetryLegsResponse,
 } from "../queries/useUploadDrafts";
@@ -57,7 +58,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "./ui/dialog";
-import { Clock, Loader2, Check, AlertTriangle, Minus, RotateCw, Pencil } from "lucide-react";
+import { Clock, Loader2, Check, AlertTriangle, Minus, RotateCw, Pencil, X } from "lucide-react";
 import {
   isValidForDestination,
   destinationToAssignBody,
@@ -81,6 +82,16 @@ function ragBadgeProps(status: string | null) {
       return { variant: "default" as const, icon: <Check className="h-3 w-3" />, label: "RAG done", extra: "" };
     case "failed":
       return { variant: "destructive" as const, icon: <AlertTriangle className="h-3 w-3" />, label: "RAG failed", extra: "" };
+    case "cancelled":
+      // quick 260918-p3h: "cancelled" is a terminal state (RAG_TERMINAL set
+      // below now includes it). Neutral secondary badge mirroring the KB
+      // CANCELLED arm so the user can distinguish it from FAILED (red).
+      return {
+        variant: "secondary" as const,
+        icon: <Minus className="h-3 w-3" />,
+        label: "RAG cancelled",
+        extra: "text-muted-foreground",
+      };
     case "processing":
       return {
         variant: "secondary" as const,
@@ -165,7 +176,7 @@ function assignedToLabel(d: UploadDraft, t: (key: string) => string): string {
 /*  Filter logic (D-04)                                                */
 /* ------------------------------------------------------------------ */
 
-const RAG_TERMINAL = new Set(["completed", "failed"]);
+const RAG_TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const KB_TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
 
 function isDone(d: UploadDraft): boolean {
@@ -219,6 +230,8 @@ export default function PendingDocsPanel({ workspaceId, stagePending }: PendingD
   const retryBoth = useRetryBoth(workspaceId);
   const deleteDraft = useDeleteDraft(workspaceId);
   const renameDraft = useRenameDraft(workspaceId);
+  // quick 260918-p3h (D-3): per-draft cancel of the in-flight legs.
+  const cancelDraft = useCancelDraftLeg(workspaceId);
   const { data: archives = [] } = useArchives();
 
   const [filter, setFilter] = useState<FilterKey>("all");
@@ -497,6 +510,20 @@ export default function PendingDocsPanel({ workspaceId, stagePending }: PendingD
       showError(t("uploads.rename.error", { message: msg }));
     } finally {
       setEditingId(null);
+    }
+  }
+
+  /**
+   * quick 260918-p3h (D-3): cancel every in-flight enabled leg of a draft
+   * (leg omitted = cancel all). The 3s poll picks up the cancelled badges
+   * via the useCancelDraftLeg invalidation.
+   */
+  async function handleCancelDraft(id: string) {
+    try {
+      await cancelDraft.mutateAsync({ id });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showError(t("uploads.ingest.cancelFailed", { error: msg }));
     }
   }
 
@@ -887,26 +914,61 @@ export default function PendingDocsPanel({ workspaceId, stagePending }: PendingD
                         </>
                       )}
                     </div>
-                    {/* Right-side cluster: RAG/KB badges + retry + row actions.
+                    {/* Right-side cluster: RAG/KB badges (+ live % progress)
+                        + cancel (in-flight) + retry + row actions.
                         w-full on narrow → wraps below the title (mandare a capo);
                         sm:w-auto → stays inline beside the title on wider screens. */}
                     <div className="flex items-center justify-end gap-2 w-full sm:w-auto">
-                      <Badge
-                        variant={rag.variant}
-                        aria-label={rag.label}
-                        className={`font-semibold ${rag.extra}`}
-                      >
-                        {rag.icon}
-                        RAG
-                      </Badge>
-                      <Badge
-                        variant={kb.variant}
-                        aria-label={kb.label}
-                        className={`font-semibold ${kb.extra}`}
-                      >
-                        {kb.icon}
-                        KB
-                      </Badge>
+                      <span className="inline-flex items-center gap-1">
+                        <Badge
+                          variant={rag.variant}
+                          aria-label={rag.label}
+                          className={`font-semibold ${rag.extra}`}
+                        >
+                          {rag.icon}
+                          RAG
+                        </Badge>
+                        {/* quick 260918-p3h (D-2): live % while the RAG leg runs. */}
+                        {d.ragStatus !== null && !RAG_TERMINAL.has(d.ragStatus) && typeof d.ragProgress === "number" && d.ragProgress > 0 && (
+                          <span className="text-xs text-muted-foreground">{d.ragProgress}%</span>
+                        )}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <Badge
+                          variant={kb.variant}
+                          aria-label={kb.label}
+                          className={`font-semibold ${kb.extra}`}
+                        >
+                          {kb.icon}
+                          KB
+                        </Badge>
+                        {/* quick 260918-p3h (D-2): live % while the KB leg runs. */}
+                        {d.kbStatus !== null && !KB_TERMINAL.has(d.kbStatus) && typeof d.kbProgress === "number" && d.kbProgress > 0 && (
+                          <span className="text-xs text-muted-foreground">{d.kbProgress}%</span>
+                        )}
+                      </span>
+                      {/* quick 260918-p3h (D-3): cancel while in-flight. Disabled
+                          while the mutation is pending (cancelling label). */}
+                      {isInFlight(d) && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="min-h-[44px] sm:min-h-0"
+                          aria-label={t("uploads.ingest.cancel")}
+                          data-testid={`cancel-draft-${d.id}`}
+                          disabled={cancelDraft.isPending}
+                          onClick={() => handleCancelDraft(d.id)}
+                        >
+                          {cancelDraft.isPending ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <X className="h-3 w-3" />
+                          )}
+                          {cancelDraft.isPending
+                            ? t("uploads.ingest.cancelling")
+                            : t("uploads.ingest.cancel")}
+                        </Button>
+                      )}
                       {d.ragEnabled !== false && (
                         <Button
                           variant="ghost"

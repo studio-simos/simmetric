@@ -11,6 +11,7 @@ jest.mock("../utils/prisma", () => ({
     synthesisRun: { count: jest.fn() },
     widget: { count: jest.fn() },
     backupDestination: { count: jest.fn() },
+    agentSkill: { count: jest.fn() },
   },
 }));
 
@@ -255,8 +256,11 @@ describe("requireFeatureLimit middleware", () => {
     await middleware(req, res, next);
     expect(state.statusCode).toBe(200);
     expect(next).toHaveBeenCalled();
+    // Phase 189 (D-04): the workspace count EXCLUDES personal workspaces
+    // (project.isPersonal filter — N personal workspaces never consume
+    // shared-workspace quota).
     expect(prisma.workspace.count).toHaveBeenCalledWith({
-      where: { organizationId: ORG_A, deletedAt: null },
+      where: { organizationId: ORG_A, deletedAt: null, project: { isPersonal: false } },
     });
   });
 
@@ -285,6 +289,26 @@ describe("requireFeatureLimit middleware", () => {
     expect(prisma.workspace.count.mock.calls[1][0].where.organizationId).toBe(ORG_B);
   });
 
+  it("Phase 189 (D-04 invariant): personal workspaces never consume shared-workspace quota — the count excludes project.isPersonal", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense();
+    prisma.workspace.count.mockResolvedValue(1); // shared count only
+
+    const middleware = requireFeatureLimit("max_workspaces", "workspace");
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(200);
+    expect(next).toHaveBeenCalled();
+    // The where-clause is the invariant: project.isPersonal === false — the
+    // DB filters personal workspaces out of the counted scope, so N personal
+    // workspaces can never push the count over the shared limit.
+    const whereArg = prisma.workspace.count.mock.calls[0][0].where;
+    expect(whereArg.project).toEqual({ isPersonal: false });
+    expect(whereArg.organizationId).toBe(ORG_A);
+    expect(whereArg.deletedAt).toBeNull();
+  });
+
   it("boundary matrix: limit-1 → next(), limit → 402, limit+1 → 402", async () => {
     (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
     initLicense();
@@ -310,6 +334,27 @@ describe("requireFeatureLimit middleware", () => {
     await middleware(above.req, above.res, above.next);
     expect(above.state.statusCode).toBe(402);
     expect(above.next).not.toHaveBeenCalled();
+  });
+
+  it("189-REVIEW WR-04: the max_projects count EXCLUDES personal projects (isPersonal:false — same exemption as the workspace arm, D-21/Pitfall 3)", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense();
+    prisma.project.count.mockResolvedValue(1); // shared count only
+
+    const middleware = requireFeatureLimit("max_projects", "project");
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(200);
+    expect(next).toHaveBeenCalled();
+    // The where-clause is the invariant: isPersonal === false — other users'
+    // personal projects never consume the shared-project quota (the same
+    // exemption the workspace arm carries; N personal projects can never
+    // push a DIFFERENT user's generic project create over the shared limit).
+    const whereArg = prisma.project.count.mock.calls[0][0].where;
+    expect(whereArg.isPersonal).toBe(false);
+    expect(whereArg.organizationId).toBe(ORG_A);
+    expect(whereArg.deletedAt).toBeNull();
   });
 
   it("synthesisRun count where is { organizationId } exactly — deletedAt ABSENT (Pitfall 4: the column does not exist)", async () => {
@@ -398,6 +443,73 @@ describe("requireFeatureLimit middleware", () => {
     expect(prisma.backupDestination.count).toHaveBeenCalledWith({
       where: { organizationId: ORG_A, deletedAt: null },
     });
+  });
+
+  // ─── Phase 190 (SKIL-05 D-17/D-18) — the "skill" arm ──────────────────
+
+  it("skill arm: count below limit → next() with the org-scoped where (organizationId + deletedAt null + type custom)", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense(); // community max_skills = 3
+    prisma.agentSkill.count.mockResolvedValue(2);
+
+    const middleware = requireFeatureLimit("max_skills", "skill");
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(200);
+    expect(next).toHaveBeenCalled();
+    expect(prisma.agentSkill.count).toHaveBeenCalledWith({
+      where: { organizationId: ORG_A, deletedAt: null, type: "custom" },
+    });
+  });
+
+  it("skill arm boundary: count at limit → 402 with feature 'max_skills' and the exact body shape (D-17)", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense();
+    prisma.agentSkill.count.mockResolvedValue(3); // community limit
+
+    const middleware = requireFeatureLimit("max_skills", "skill");
+    const { req, res, next, state } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(402);
+    expect(state.body).toEqual(
+      expect.objectContaining({
+        error: expect.any(String),
+        feature: "max_skills",
+        limit: 3,
+        current: 3,
+        tier: "community",
+      }),
+    );
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("skill arm: missing organizationId → 404 fail-closed and agentSkill.count NEVER called (D-17/D-18)", async () => {
+    (getEnv as jest.Mock).mockReturnValue(envWith(undefined));
+    initLicense();
+
+    const middleware = requireFeatureLimit("max_skills", "skill");
+    const { req, res, next, state } = makeHarness({}); // no org
+
+    await middleware(req, res, next);
+    expect(state.statusCode).toBe(404);
+    expect(state.body.error).toBe("Not found");
+    expect(next).not.toHaveBeenCalled();
+    expect(prisma.agentSkill.count).not.toHaveBeenCalled();
+  });
+
+  it("skill arm: enterprise Infinity short-circuits to next() WITHOUT a count call", async () => {
+    const licenseKey = signTestLicense({ tier: "enterprise", sub: "Test Corp" });
+    (getEnv as jest.Mock).mockReturnValue(envWith(licenseKey));
+    initLicense(); // enterprise max_skills = Infinity
+
+    const middleware = requireFeatureLimit("max_skills", "skill");
+    const { req, res, next } = makeHarness({ organizationId: ORG_A });
+
+    await middleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(prisma.agentSkill.count).not.toHaveBeenCalled();
   });
 
   it("Enterprise Infinity short-circuits BEFORE the org guard (no count, no 404 on missing org)", async () => {

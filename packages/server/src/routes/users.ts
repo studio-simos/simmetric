@@ -9,7 +9,8 @@ import { authMiddleware } from "../middleware/auth";
 import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import { invalidateAuthCache } from "../services/authService";
-import { updateUserSchema } from "@simmetric-chat/shared";
+import { updateUserSchema, createPersonalWorkspaceSchema } from "@simmetric-chat/shared";
+import { createPersonalWorkspace, PersonalWorkspaceConflictError } from "../services/personalWorkspaceService";
 import prisma from "../utils/prisma";
 
 // Phase 185 (T-185-10, Pitfall-2 grep-gate): the findUnique site(s) in this
@@ -183,6 +184,49 @@ router.delete("/:id/avatar", authMiddleware, async (req, res) => {
     res.json({ message: "Avatar removed" });
   } catch (err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: message });
+  }
+});
+
+// POST /api/users/me/personal-workspace — lazy personal-workspace provisioning
+// (Phase 189, WSIS-01 D-05). Self-only by construction (req.userId is the
+// actor — no admin variant). Registered BEFORE the /:id routes (literal-
+// before-param discipline, role.schema.ts:39-46 /me-before-/:id idiom) so
+// the literal path can never be captured by the param routes below.
+// NO license middleware anywhere on this route (D-21 community core; the
+// service's internal project create is max_projects-immune by construction —
+// Pitfall 3, documented in the service header).
+router.post("/me/personal-workspace", authMiddleware, tenantContextMiddleware, async (req: Request, res: Response) => {
+  const userId = req.userId!;
+
+  // Fail-closed 400 when the tenant context did not resolve an org
+  // (tenantContextMiddleware already 404s on unresolvable membership — this
+  // guard is the belt-and-braces shape for any future chain change).
+  const organizationId = req.organizationId;
+  if (!organizationId) {
+    res.status(400).json({ error: "Organization context missing" });
+    return;
+  }
+
+  const parsed = createPersonalWorkspaceSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid request body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+
+  try {
+    const workspace = await createPersonalWorkspace(userId, parsed.data.workspaceName, organizationId);
+    res.status(201).json({
+      workspace: { id: workspace.id, name: workspace.name, projectId: workspace.projectId },
+      hasOnboarded: true,
+    });
+  } catch (err: unknown) {
+    if (err instanceof PersonalWorkspaceConflictError) {
+      // Pitfall 8: tombstone name collision — workspaces.ts:241 byte shape.
+      res.status(409).json({ error: "A workspace with this name already exists in this project" });
+      return;
+    }
+    const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message });
   }
 });
@@ -388,6 +432,25 @@ router.delete("/:id", authMiddleware, tenantContextMiddleware, requireAdmin, asy
     await prisma.userRole.deleteMany({ where: { userId: targetId } });
     await prisma.projectAccess.deleteMany({ where: { userId: targetId } });
     await prisma.workspaceAccess.deleteMany({ where: { userId: targetId } });
+
+    // 189-REVIEW WR-02: the lazy personal-workspace provisioning (Phase 189
+    // D-01) guarantees every onboarded user owns a personal Project with
+    // createdBy=targetId, and Project.creator is Restrict — without this arm
+    // the hard-delete below 500s with an FK violation for ANY onboarded
+    // user. Delete the personal chain (workspaces first, then the personal
+    // project) before the user hard-delete.
+    const personalProjects = await prisma.project.findMany({
+      where: { createdBy: targetId, isPersonal: true },
+      select: { id: true },
+    });
+    if (personalProjects.length > 0) {
+      await prisma.workspace.deleteMany({
+        where: { projectId: { in: personalProjects.map((p) => p.id) } },
+      });
+      await prisma.project.deleteMany({
+        where: { id: { in: personalProjects.map((p) => p.id) } },
+      });
+    }
 
     const user = await prisma.user.delete({
       where: { id: targetId },

@@ -322,4 +322,31 @@ describe("SettingsPage", () => {
       screen.getByRole("button", { name: "settings.openTabsMenu" }),
     ).toBeInTheDocument();
   });
+
+  // Quick 260910-dzh — settings menu / detail page parity: every sub-section
+  // GroupPage renders must also be a rail voice via sectionsFor().
+  it("advanced rail renders the dlpAudit and dlpPatterns voices for an admin", () => {
+    renderWithProvider(<SettingsPage />);
+
+    // Both DLP sub-sections are visible in the always-expanded rail
+    // (i18n mock returns the key itself, so the aria-label is the key).
+    expect(
+      screen.getByRole("button", { name: "settings.subSections.dlpAudit" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "settings.subSections.dlpPatterns" }),
+    ).toBeInTheDocument();
+  });
+
+  it("opens the dlpPatterns sub-section page when its rail voice is clicked", () => {
+    renderWithProvider(<SettingsPage />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings.subSections.dlpPatterns" }),
+    );
+    // Master-detail: the standalone detail page renders the same panel
+    // GroupPage renders inline (SettingsDlpPatterns real component — the
+    // advanced group test already mounts it successfully).
+    expect(screen.getByTestId("dlp-add-pattern")).toBeInTheDocument();
+  });
 });

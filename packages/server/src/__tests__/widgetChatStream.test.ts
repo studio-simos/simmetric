@@ -109,6 +109,11 @@ jest.mock("../middleware/rbac", () => ({
   requireAdmin: (_req: any, _res: any, next: any) => next(),
   requireProjectAccess: () => (_req: any, _res: any, next: any) => next(),
   requireWorkspaceAccess: (_req: any, _res: any, next: any) => next(),
+  // Phase 189 (189-02 sweep): routes now import the graded middlewares —
+  // the mock must export them (shadow no-op) or express throws at load.
+  requireWorkspaceWriteAccess: () => (_req: any, _res: any, next: any) => next(),
+  requireWorkspaceRead: () => (_req: any, _res: any, next: any) => next(),
+
 }));
 
 import request from "supertest";
@@ -607,6 +612,35 @@ describe("POST /api/internal/widget/chat/stream — response model pin (260831-h
     expect(params.model).toBeUndefined();
   });
 
+  // CR-01 (191-01 review fix, T-hgy-01 parity): the raw body this route
+  // forwards to handleChatStream is re-parsed by chatRequestSchema, which
+  // ACCEPTS attachedArchiveIds + skillCall — the proxy strip alone is only
+  // the first hop. The route's seam must delete both, so an org archive ID
+  // POSTed by a leaked-key holder can never widen the widget's RAG scope.
+  it("CR-01 tamper pin — client-supplied attachedArchiveIds/skillCall are stripped from the raw body", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (runAgentStreaming as jest.Mock).mockImplementation(async () => mockAgentResult());
+
+    const res = await request(app)
+      .post("/api/internal/widget/chat/stream")
+      .set(streamHeaders())
+      // Attacker (leaked WIDGET_API_KEY / compromised proxy) tries to ground
+      // the widget chat on an arbitrary org archive and invoke a skill —
+      // the composed schema strips both from parsed.data (unused), but the
+      // RAW body is what handleChatStream re-parses; the seam must strip
+      // both there too.
+      .send({
+        message: "hi",
+        attachedArchiveIds: ["00000000-0000-4000-8000-0000000000aa"],
+        skillCall: { slug: "rag_search", params: {} },
+      });
+
+    expect(res.status).toBe(200);
+    const params = (runAgentStreaming as jest.Mock).mock.calls[0][0];
+    expect(params.attachedArchiveIds).toBeUndefined();
+    expect(params.skillCall).toBeUndefined();
+  });
+
   it("a half-set pin (provider only) still threads the provider; model falls through to the chain", async () => {
     (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
       ...mockWidget,
@@ -708,5 +742,272 @@ describe("POST /api/internal/widget/chat/stream — DLP source tag (260829-ms8)"
     const meta = ragEvents[0][4] as Record<string, unknown>;
     expect(meta.source).toBe("widget");
     expect(meta.matchTypes).toContain("email");
+  });
+});
+
+// ─── 260917-mz6: widget grounding systemPrompt threading ─────────────
+// The internal widget route composes the 6th arg's systemPrompt from the
+// Widget row (admin-authored, or the module-private grounding floor via
+// resolveWidgetSystemPrompt when null — 260917-qoh removed the exported
+// global constant). handleChatStream forwards it into runAgentStreaming
+// params.widgetSystemPrompt ONLY when truthy — the JWT route passes no 6th
+// arg → no key (byte-identical).
+
+// 191-03 (WR-01/IN-01 review fix): the per-turn mirror gate. The mirror
+// (syncChatAttachment → chat.update) runs ONLY when the request carries
+// attachedArchiveIds — absent (retryMessage regenerate/fallback bodies) must
+// leave the Chat row's mirror UNTOUCHED instead of wiping it to []. Present
+// selections still mirror; present-but-empty still clears (explicit detach).
+// NOTE: the arms drive the SHARED CORE directly (JWT-shaped) — the internal
+// widget route's CR-01 seam deletes the field from the raw body, so only the
+// core re-parse can observe a present attachedArchiveIds.
+describe("chat stream — attachedArchiveIds mirror gate (191-03 WR-01)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+    (prisma.chat.findFirst as jest.Mock).mockResolvedValue({
+      id: CHAT_ID, workspaceId: WORKSPACE_ID, providerId: null, model: null,
+      attachedArchiveIds: ["00000000-0000-4000-8000-0000000000aa"],
+    });
+    (prisma.chat.create as jest.Mock).mockImplementation(({ data }: { data: Record<string, unknown> }) => ({
+      id: CHAT_ID, workspaceId: WORKSPACE_ID, providerId: null, model: null,
+      ...(data.archiveId ? { archiveId: data.archiveId } : {}),
+    }));
+    (prisma.chatMessage.create as jest.Mock).mockResolvedValue({ id: "assistant-msg-1" });
+    (prisma.chatMessage.findMany as jest.Mock).mockResolvedValue([]);
+  });
+
+  function mockRes() {
+    const chunks: string[] = [];
+    return {
+      setHeader: jest.fn(),
+      flushHeaders: jest.fn(),
+      write: jest.fn((c: string) => { chunks.push(c); }),
+      end: jest.fn(),
+      json: jest.fn(),
+      status: jest.fn(),
+      on: jest.fn(),
+      headersSent: true,
+      text: () => chunks.join(""),
+    };
+  }
+
+  function mockReq(body: Record<string, unknown>) {
+    return {
+      body,
+      headers: {},
+      on: jest.fn(),
+      userId: "jwt-user-001",
+      organizationId: "org-widget-default",
+    } as never;
+  }
+
+  it("ABSENT attachedArchiveIds → chat.update NEVER called (mirror keeps its selection)", async () => {
+    (runAgentStreaming as jest.Mock).mockImplementation(async () => mockAgentResult());
+    const { handleChatStream } = await import("../routes/chat");
+    await handleChatStream(mockReq({ message: "hi" }), mockRes() as never, WORKSPACE_ID, null);
+    const updateCalls = (prisma.chat.update as jest.Mock).mock.calls;
+    expect(updateCalls.some((c: unknown[]) => "attachedArchiveIds" in (c[0] as { data: Record<string, unknown> }).data)).toBe(false);
+  });
+
+  it("PRESENT attachedArchiveIds → mirror writes the org-validated subset", async () => {
+    (prisma.archive.findMany as jest.Mock).mockResolvedValue([{ id: "00000000-0000-4000-8000-0000000000aa" }]);
+    (runAgentStreaming as jest.Mock).mockImplementation(async () => mockAgentResult());
+    const { handleChatStream } = await import("../routes/chat");
+    await handleChatStream(
+      mockReq({ message: "hi", attachedArchiveIds: ["00000000-0000-4000-8000-0000000000aa"] }),
+      mockRes() as never,
+      WORKSPACE_ID,
+      null,
+    );
+    const updateCalls = (prisma.chat.update as jest.Mock).mock.calls;
+    expect(
+      updateCalls.some((c: unknown[]) =>
+        JSON.stringify((c[0] as { data: Record<string, unknown> }).data).includes("attachedArchiveIds"),
+      ),
+    ).toBe(true);
+  });
+
+  it("PRESENT empty [] → mirror CLEARS the previous selection (explicit detach)", async () => {
+    // A chat row that already carries a selection (continuation path) —
+    // an explicit empty detach must wipe it to [].
+    (prisma.chat.findFirst as jest.Mock).mockResolvedValue({
+      id: CHAT_ID, workspaceId: WORKSPACE_ID, providerId: null, model: null,
+      attachedArchiveIds: ["00000000-0000-4000-8000-0000000000aa"],
+    });
+    (runAgentStreaming as jest.Mock).mockImplementation(async () => mockAgentResult());
+    const { handleChatStream } = await import("../routes/chat");
+    await handleChatStream(
+      mockReq({ message: "hi", chatId: CHAT_ID, attachedArchiveIds: [] }),
+      mockRes() as never,
+      WORKSPACE_ID,
+      null,
+    );
+    const updateCalls = (prisma.chat.update as jest.Mock).mock.calls;
+    const clearWrite = updateCalls.find((c: unknown[]) =>
+      Array.isArray((c[0] as { data: Record<string, unknown> }).data.attachedArchiveIds),
+    );
+    expect(clearWrite).toBeDefined();
+    expect((clearWrite![0] as { data: { attachedArchiveIds: string[] } }).data.attachedArchiveIds).toEqual([]);
+  });
+});
+
+describe("POST /api/internal/widget/chat/stream — widget systemPrompt (260917-mz6)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    seedPrismaForStream();
+  });
+
+  it("a widget row carrying systemPrompt yields runAgentStreaming params containing widgetSystemPrompt", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
+      ...mockWidget,
+      systemPrompt: "Answer only from the knowledge base.",
+    });
+    (runAgentStreaming as jest.Mock).mockImplementation(async () => mockAgentResult());
+
+    const res = await request(app)
+      .post("/api/internal/widget/chat/stream")
+      .set(streamHeaders())
+      .send({ message: "hi" });
+
+    expect(res.status).toBe(200);
+    const params = (runAgentStreaming as jest.Mock).mock.calls[0][0];
+    expect(params.widgetSystemPrompt).toBe("Answer only from the knowledge base.");
+  });
+
+  it("the route injects the grounding floor when the column is null (systemPrompt key always truthy from the internal route)", async () => {
+    // The route resolves (null column → resolveWidgetSystemPrompt → the
+    // module-private grounding floor); the core forwards it — unpinned
+    // unprompted widgets are grounded by default. 260917-qoh: NO exported
+    // default constant exists anymore — assert the floor's grounding content.
+    const { resolveWidgetSystemPrompt } = await import("../services/widgetChatPrompt");
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
+      ...mockWidget,
+      systemPrompt: null,
+    });
+    (runAgentStreaming as jest.Mock).mockImplementation(async () => mockAgentResult());
+
+    const res = await request(app)
+      .post("/api/internal/widget/chat/stream")
+      .set(streamHeaders())
+      .send({ message: "hi" });
+
+    expect(res.status).toBe(200);
+    const params = (runAgentStreaming as jest.Mock).mock.calls[0][0];
+    expect(params.widgetSystemPrompt).toBe(resolveWidgetSystemPrompt(null));
+    expect(params.widgetSystemPrompt).toContain("workspace knowledge base");
+  });
+
+  it("a whitespace-only systemPrompt falls back to the grounding floor", async () => {
+    const { resolveWidgetSystemPrompt } = await import("../services/widgetChatPrompt");
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
+      ...mockWidget,
+      systemPrompt: "   ",
+    });
+    (runAgentStreaming as jest.Mock).mockImplementation(async () => mockAgentResult());
+
+    const res = await request(app)
+      .post("/api/internal/widget/chat/stream")
+      .set(streamHeaders())
+      .send({ message: "hi" });
+
+    expect(res.status).toBe(200);
+    const params = (runAgentStreaming as jest.Mock).mock.calls[0][0];
+    expect(params.widgetSystemPrompt).toBe(resolveWidgetSystemPrompt("   "));
+  });
+
+  it("a row prompt + visitor locale reach runAgentStreaming with the locale field (the orchestrator composes the language directive server-side)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
+      ...mockWidget,
+      systemPrompt: "Answer only from the knowledge base.",
+    });
+    (runAgentStreaming as jest.Mock).mockImplementation(async () => mockAgentResult());
+
+    const res = await request(app)
+      .post("/api/internal/widget/chat/stream")
+      .set(streamHeaders())
+      .send({ message: "hi", locale: "it" });
+
+    expect(res.status).toBe(200);
+    const params = (runAgentStreaming as jest.Mock).mock.calls[0][0];
+    expect(params.widgetSystemPrompt).toBe("Answer only from the knowledge base.");
+    // The locale rides params (the DIRECTIVE is composed inside the
+    // orchestrator, not the route) — pinned here so the language chain stays
+    // end-to-end: locale → orchestrator directive → widget prompt block.
+    expect(params.locale).toBe("it");
+  });
+
+  it("byte-identical guard: no 6th arg (JWT-shaped call shape) yields NO widgetSystemPrompt key", async () => {
+    // The JWT route calls handleChatStream(req, res, workspaceId, archiveId)
+    // with NO widgetModel — the widgetModel?.systemPrompt spread then omits
+    // the key entirely. Pinned via the exact mock-call shape: the widget route
+    // threads the key only when truthy; a falsy/absent systemPrompt never
+    // reaches runAgentStreaming params (the internalWidget arm resolves null
+    // columns to the DEFAULT constant upstream, so here we pin the CORE's
+    // truthiness guard directly).
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
+      ...mockWidget,
+      systemPrompt: null,
+      responseProviderId: null,
+      responseModel: null,
+    });
+    (runAgentStreaming as jest.Mock).mockImplementation(async () => mockAgentResult());
+
+    // Drive the core the way the JWT route does: NO 6th arg at all.
+    const { handleChatStream } = await import("../routes/chat");
+    const req: any = {
+      body: { message: "hi" },
+      headers: {},
+      on: jest.fn(),
+      userId: "jwt-user-001",
+      organizationId: "org-widget-default",
+    };
+    const chunks: string[] = [];
+    const res: any = {
+      setHeader: jest.fn(),
+      flushHeaders: jest.fn(),
+      write: jest.fn((c: string) => { sseText += c; }),
+      end: jest.fn(),
+      json: jest.fn(),
+      status: jest.fn(),
+      on: jest.fn(),
+      headersSent: true,
+    };
+    let sseText = "";
+    await handleChatStream(req, res, WORKSPACE_ID, null);
+    const params = (runAgentStreaming as jest.Mock).mock.calls[0][0];
+    expect(params).not.toHaveProperty("widgetSystemPrompt");
+    expect(sseText).toContain("event: done");
+  });
+
+  it("core forwards a truthy widgetModel.systemPrompt into params.widgetSystemPrompt", async () => {
+    (runAgentStreaming as jest.Mock).mockImplementation(async () => mockAgentResult());
+
+    const { handleChatStream } = await import("../routes/chat");
+    const req: any = {
+      body: { message: "hi" },
+      headers: {},
+      on: jest.fn(),
+      userId: "jwt-user-001",
+      organizationId: "org-widget-default",
+    };
+    const res: any = {
+      setHeader: jest.fn(),
+      flushHeaders: jest.fn(),
+      write: jest.fn((c: string) => { sseText += c; }),
+      end: jest.fn(),
+      json: jest.fn(),
+      status: jest.fn(),
+      on: jest.fn(),
+      headersSent: true,
+    };
+    let sseText = "";
+    await handleChatStream(req, res, WORKSPACE_ID, null, undefined, {
+      providerId: null,
+      model: null,
+      systemPrompt: "DEFAULT GROUNDING PROMPT",
+    });
+    const params = (runAgentStreaming as jest.Mock).mock.calls[0][0];
+    expect(params.widgetSystemPrompt).toBe("DEFAULT GROUNDING PROMPT");
   });
 });

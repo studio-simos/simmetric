@@ -9,7 +9,9 @@
  * Verifies that seedRbac() creates + invokes the seed_rbac() SQL procedure
  * via prisma.$executeRaw, that main() calls seedRbac() instead of the old
  * per-permission upsert loop, and that the permission list in the procedure
- * body matches PERMISSION_NAMES.length (31) from @simmetric-chat/shared.
+ * body matches PERMISSION_NAMES.length (36 after the Phase 192 dlp:unmask
+ * row) from @simmetric-chat/shared, and the user-role grant list mirrors
+ * DEFAULT_USER_ROLE.permissions (15 after WR-04's skill:delete grant).
  *
  * The DB is fully mocked — no live Postgres required. We mock @prisma/client
  * so the module-level `new PrismaClient()` in seed.ts returns a mock.
@@ -32,7 +34,7 @@ jest.mock("@prisma/client", () => {
   };
 });
 
-import { PERMISSION_NAMES } from "@simmetric-chat/shared";
+import { PERMISSION_NAMES, DEFAULT_ROLES } from "@simmetric-chat/shared";
 import { seedRbac, main } from "../../prisma/seed";
 
 // The prisma instance created by seed.ts when the module loaded. Because we
@@ -97,7 +99,7 @@ describe("seedRbac", () => {
     expect(allSql).toContain('ON CONFLICT ("roleId", "permissionName") DO NOTHING');
   });
 
-  it("Test 4: the number of INSERT INTO \"permissions\" value tuples matches PERMISSION_NAMES.length (31, runtime-derived)", async () => {
+  it("Test 4: the number of INSERT INTO \"permissions\" value tuples matches PERMISSION_NAMES.length (36, runtime-derived)", async () => {
     const calls = captureExecuteRaw();
     await seedRbac();
     const allSql = calls.join("\n");
@@ -105,10 +107,10 @@ describe("seedRbac", () => {
     for (const name of permissionNames) {
       expect(allSql).toContain(name);
     }
-    expect(permissionNames.length).toBe(31);
+    expect(permissionNames.length).toBe(36);
   });
 
-  it("Test 5: the admin role is linked to all 31 permissions, the user role to 11 (DEFAULT_USER_ROLE.permissions length)", async () => {
+  it("Test 5: the admin role is linked to all 36 permissions, the user role to 15 (11 base + 4 Phase 190 skill grants — WR-04 includes skill:delete, DEFAULT_USER_ROLE.permissions length; Phase 192 dlp:unmask stays admin-only)", async () => {
     const calls = captureExecuteRaw();
     await seedRbac();
     const allSql = calls.join("\n");
@@ -118,11 +120,20 @@ describe("seedRbac", () => {
       "workspace:read", "chat:read", "chat:write", "document:read",
       "document:write", "archive:read", "provider:read", "project:create",
       "workspace:create", "memory:read", "memory:write",
+      // Phase 190 skill grants (WR-04: delete rides the user role).
+      "skill:create", "skill:read", "skill:write", "skill:delete",
     ];
     for (const p of userPerms) {
       expect(allSql).toContain(p);
     }
-    expect(userPerms.length).toBe(11);
+    expect(userPerms.length).toBe(15);
+    // The elevated dlp:unmask grant (Phase 192) rides the ADMIN role only:
+    // it appears in the seed SQL and is NOT part of DEFAULT_USER_ROLE.
+    expect(allSql).toContain("dlp:unmask");
+    const userRole = DEFAULT_ROLES.find((r) => r.name === "user");
+    expect(userRole?.permissions).toHaveLength(15);
+    expect(userRole?.permissions).toContain("skill:delete");
+    expect(userRole?.permissions).not.toContain("dlp:unmask");
   });
 });
 

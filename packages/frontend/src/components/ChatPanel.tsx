@@ -3,14 +3,17 @@
 // This file is part of the Simmetric Chat community build.
 // See LICENSE and NOTICE at the repository root for full terms.
 
-import { useRef, useEffect, useState, useEffectEvent } from "react";
+import { useRef, useEffect, useState, useEffectEvent, useMemo } from "react";
 import { useChatNav } from "../contexts/ChatContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { useChat, type SourceCitation } from "../hooks/useChat";
+import { useChat, resolveEffectiveModel, type SourceCitation } from "../hooks/useChat";
+import { useSkills, type CustomSkillRow } from "../queries/useSkills";
+import { parseSkillArgs } from "../utils/skillArgs";
 import { useDropzone } from "react-dropzone";
 import { useTranslation } from "react-i18next";
-import { apiUpload, ApiError } from "../utils/api";
-import { showSuccess, showError } from "../lib/toast";
+import { apiGet, apiUpload, ApiError } from "../utils/api";
+import { showSuccess, showError, showInfo } from "../lib/toast";
+import { getGlobalDefaultModel } from "../utils/modelDefaults";
 import { setOnSelectModel } from "../hooks/usePaletteCallbacks";
 import { useAvailableModels } from "../queries/useProviders";
 import { useMe } from "../queries/useAuth";
@@ -18,6 +21,7 @@ import { useChatPanelState, type UploadedDoc } from "../hooks/useChatPanelState"
 import { useMessageHistory } from "../hooks/useMessageHistory";
 import RightPanel from "./RightPanel";
 import CitationPanel from "./CitationPanel";
+import SkillsPalette, { type SkillsPaletteItem } from "./SkillsPalette";
 import { ChatMessageList } from "./chat/ChatMessageList";
 import { ChatEmptyState } from "./chat/ChatEmptyState";
 import { ChatInputArea } from "./chat/ChatInputArea";
@@ -34,6 +38,8 @@ import { sanitizeFileName } from "@simmetric-chat/shared";
 import { WikiBrokenLinkDialog } from "./WikiBrokenLinkDialog";
 import { WikiDistillDialog } from "./WikiDistillDialog";
 import { DlpTextsToggle } from "./chat/DlpTextsToggle";
+// Phase 191 (KNOW-01 D-06): archive attach picker + composer selection state.
+import ArchiveAttachPicker from "./chat/ArchiveAttachPicker";
 import { useChats } from "../queries/useChats";
 import { useSettingsHelpers } from "../queries/useSettings";
 import { X, BookOpen, PanelRight } from "lucide-react";
@@ -64,10 +70,34 @@ export default function ChatPanel() {
     // 260815-k5s: ephemeral new-chat archive selection. Threaded to sendMessage
     // so the first message creates an archive-scoped chat row (no post-hoc
     // PATCH). Cleared by the ChatContext reset effect once currentChatId
-    // becomes non-null; the sidebar's "New chat" resets it in App.tsx.
+    // becomes non-null; the panel's new-chat transition (reconciler case b)
+    // resets it too — including re-clicks in an already-new chat.
     newChatArchiveId,
+    setNewChatArchiveId,
   } = useChatNav();
-  const mainChat = useChat(currentWorkspaceId);
+  // Phase 191 (KNOW-02 D-05/D-06): chat-attached archive selection. useState
+  // (Zustand-free) mirroring the attachedDoc pattern; the localStorage key
+  // below is the DRAFT cache (new chats + refresh survival) while the Chat
+  // record is the source of truth (restore via useChat's setRestoredArchiveIds
+  // seam). Declared BEFORE the useChat call: the overrides object reads
+  // `attachedArchives` eagerly (191-03 WR-01 mirror), so the binding must
+  // already be initialized — the old "React hoists the useState" note was
+  // only true for the callback reference, never for the value read.
+  const [attachedArchives, setAttachedArchives] = useState<string[]>([]);
+  const [archivePickerOpen, setArchivePickerOpen] = useState(false);
+  const MAX_ATTACHED_ARCHIVES = 5;
+
+  const mainChat = useChat(currentWorkspaceId, {
+    // Phase 191 (KNOW-02 D-05): the server record is the source of truth —
+    // when loadChat surfaces the chat row's attachedArchiveIds, seed the
+    // composer selection with it (the localStorage key is only a draft cache).
+    setRestoredArchiveIds: (ids: string[]) => setAttachedArchives(ids),
+    // 191-03 (WR-01 review fix): mirror the composer selection into useChat's
+    // ref so retryMessage (regenerate / edit-regenerate / model-fallback)
+    // sends the CURRENT selection — the turn stays grounded and the server
+    // mirror keeps tracking it.
+    attachedArchives,
+  });
   const {
     messages,
     isStreaming,
@@ -79,6 +109,7 @@ export default function ChatPanel() {
     persistedModel,
     sendMessage,
     loadChat,
+    clearChat,
     abortStream,
     removeMessage,
     updateChatModel,
@@ -88,6 +119,50 @@ export default function ChatPanel() {
 
   const { data: availableModels = [] } = useAvailableModels(currentWorkspaceId !== null);
   const { data: authUser } = useMe();
+
+  // Phase 190 (SKIL-02, D-05/D-10): the /slug parser + palette read the SAME
+  // useSkills cache as the /skills management page (staleTime 5min — no fetch
+  // per keystroke). Match set = custom (own + visible globals) ∪ accessible
+  // (other users' workspace-scoped rows in viewer+ workspaces) — the exact
+  // set resolveInvocableSkill would resolve; builtin slugs are EXCLUDED so
+  // typing a builtin name falls through to a normal message (never-error).
+  const skillsQuery = useSkills();
+  // CR-01 (SKIL-03/D-05): the match set never offers a row scoped to ANOTHER
+  // workspace — the server's resolveInvocableSkill workspace arm would reject
+  // it, so a stale cache entry would advertise a dead command ("Skill '/x' is
+  // not available" on a row the UI itself offered).
+  const invocableSkills: CustomSkillRow[] = useMemo(() => {
+    const list = skillsQuery.data;
+    if (!list) return [];
+    return [...list.custom, ...list.accessible].filter(
+      (s) => s.isEnabled && (s.workspaceId === null || s.workspaceId === currentWorkspaceId),
+    );
+  }, [skillsQuery.data, currentWorkspaceId]);
+
+  // Phase 190 (SKIL-02, D-10): the skills palette is a SEPARATE surface from
+  // the /model palette (Pitfall 9 — own open state, never the CustomEvent).
+  // It opens when the input's first character is "/" EXCEPT the /model family
+  // (that branch owns its own surface — the two never double-open), and a
+  // space after the slug closes it (space-disambiguation: args are coming).
+  const [skillsPaletteOpen, setSkillsPaletteOpen] = useState(false);
+  const skillsPaletteItems: SkillsPaletteItem[] = useMemo(
+    () =>
+      invocableSkills.map((s) => ({
+        slug: s.slug,
+        name: s.name,
+        description: s.description ?? "",
+      })),
+    [invocableSkills],
+  );
+  const skillsPaletteBuiltins: SkillsPaletteItem[] = useMemo(
+    () =>
+      (skillsQuery.data?.builtin ?? []).map((b) => ({
+        slug: b.name,
+        name: b.displayName,
+        description: b.description,
+      })),
+    [skillsQuery.data],
+  );
 
   // Below lg (1024px) the console surfaces via a Sheet opened from a trigger
   // in the model badge bar; at lg+ the console is inline (RightPanel).
@@ -140,6 +215,10 @@ export default function ChatPanel() {
     showDlpTexts,
     setShowDlpTexts,
   } = useChatPanelState({ persistedModel });
+
+  // Phase 190 (SKIL-02, D-09): chat-level notice for a matched skill whose
+  // params could not be parsed — visible above the input, never silent.
+  const [skillParamError, setSkillParamError] = useState<string | null>(null);
 
   // Quick 260829-spj: same gate as DLPNotice (ChatMessage.tsx) — only admins
   // can reveal DLP-redacted text, so the global toggle only exists for them.
@@ -194,6 +273,25 @@ export default function ChatPanel() {
       setInput(transcript);
     }
   }, [transcript, setInput]);
+
+  // Phase 190 (D-10): palette open-state follows the input's first character.
+  // Opens on "/", closes when the leading slash is gone, when a space follows
+  // the slug (space-disambiguation — the user is writing args), or when the
+  // input is the /model family (that surface owns its own palette; the two
+  // never double-open — Pitfall 9).
+  useEffect(() => {
+    const trimmedStart = input.trimStart();
+    const isModelFamily = trimmedStart.startsWith("/model");
+    const spaceAfterSlug = /^\/[a-z0-9-]+\s/.test(trimmedStart);
+    setSkillsPaletteOpen(
+      trimmedStart.startsWith("/") && !isModelFamily && !spaceAfterSlug,
+    );
+  }, [input]);
+
+  // Close the palette + clear the paramError notice on chat/workspace switch.
+  useEffect(() => {
+    setSkillParamError(null);
+  }, [currentChatId, currentWorkspaceId, setSkillParamError]);
 
   // Feature 4.9.2: announce the stream phase once (start / complete) — never per token.
   useEffect(() => {
@@ -250,17 +348,132 @@ export default function ChatPanel() {
     restoreChat();
   }, [navChatId, currentWorkspaceId]);
 
-  // Sync useChat's local currentChatId into ChatContext (nav source of truth).
-  // Covers paths that set currentChatId inside useChat without an explicit
-  // setChatId call — notably sendMessage creating a brand-new chat (server
-  // returns data.chatId). The guard skips null so it never clobbers the
-  // mount-restore above (currentChatId is null while navChatId is the restored
-  // lastChatId), and the equality check prevents a render loop.
-  useEffect(() => {
-    if (currentChatId && currentChatId !== navChatId) {
-      setChatId(currentChatId);
+  // RC-4 model re-seed for the new-chat transition — restored from the
+  // pre-R5 handleNewChat body (the clearChat/setChatId parts live in the
+  // reconciler below; only the model-resolution chain is mirrored here).
+  const reseedNewChatModel = async () => {
+    if (!currentWorkspaceId) return;
+
+    const modelPrefKey = `modelPref:${currentWorkspaceId}`;
+    // Read the per-workspace preference (written on every effective model
+    // choice) so returning to a new chat restores the same model.
+    let pref: { providerId?: string; model?: string } | null = null;
+    try {
+      const saved = localStorage.getItem(modelPrefKey);
+      if (saved) pref = JSON.parse(saved) as { providerId: string; model: string };
+    } catch {
+      // ignore parse errors
     }
-  }, [currentChatId, navChatId, setChatId]);
+
+    const globalDefault = getGlobalDefaultModel();
+
+    // Fetch the workspace default up front so it's part of the candidate chain.
+    let workspaceDefault: { providerId?: string; model?: string } | null = null;
+    try {
+      const config = await apiGet<{ providerId?: string; model?: string }>(`/workspaces/${currentWorkspaceId}/agent-config`);
+      workspaceDefault = config.providerId ? { providerId: config.providerId, model: config.model || undefined } : null;
+    } catch {
+      // ignore — resolve without the workspace default candidate
+    }
+
+    let resolved: { providerId?: string; model?: string } | null;
+    if (availableModels.length > 0) {
+      // RC-1: validate every candidate against the live availableModels list.
+      // A stale pref / workspace / global default pointing at an unavailable
+      // model is skipped; resolveEffectiveModel falls back to the three-tier
+      // chain (workspace → global(isDefault) → any available) so a new chat
+      // never starts on a broken model.
+      resolved = resolveEffectiveModel(availableModels, [pref, workspaceDefault, globalDefault], workspaceDefault);
+    } else {
+      // Providers query not hydrated yet — best-effort without validation.
+      resolved = pref ?? workspaceDefault ?? globalDefault ?? null;
+    }
+
+    if (resolved?.providerId) {
+      // useChatPanelState mirrors persistedModel → modelOverride via an
+      // effect on [persistedModel]; this explicit set lands after (async) and
+      // wins, so the override follows the re-seeded model.
+      setModelOverride(resolved);
+      // Persist the effective model as the workspace preference so the next
+      // "New chat" restores it (RC-4). This also covers the auto-default case.
+      localStorage.setItem(modelPrefKey, JSON.stringify(resolved));
+    } else if (pref) {
+      // A stale preference existed but no valid model resolved — inform the
+      // user instead of silently starting model-less.
+      showInfo(t("chat.palette.fallbackToast"));
+    }
+  };
+
+  // ── Nav-transition reconciler (quick 260910-e0n — R-5 regression fix) ──
+  // The R-5 refactor moved ChatSidebar out of this panel into AppSidebar and
+  // replaced the panel-side handlers (handleSelectChat/handleNewChat) with
+  // bare nav-state writes in App.tsx (setChatId only). Nothing reconciled
+  // useChat's internal state with those nav transitions, so the old
+  // sync-back effect (below) blindly re-adopted useChat's stale chat id into
+  // nav: with chat-A open, `setChatId(null)` was immediately undone by
+  // `setChatId("chat-A")` — "New chat" and chat selection were both no-ops.
+  //
+  // The fix is a prev-value state machine: `nav=null && chat≠null` is
+  // AMBIGUOUS (it means both "user pressed New chat" and "first message of a
+  // new chat just created one via the SSE done event → setCurrentChatId"), so
+  // a prev ref distinguishes the transitions:
+  //   (a) creation adoption — previous chat was null, useChat adopted a
+  //       server chatId: write it into nav (what the deleted sync-back
+  //       effect existed for; the sendMessage `done` path).
+  //   (b) new chat / workspace switch — nav went truthy → null while a chat
+  //       is still open: abort any in-flight stream FIRST (so its `done`
+  //       event cannot re-adopt the old chat after the clear), then
+  //       clearChat + reset the ephemeral archive pick + re-seed the model
+  //       from the RC-4 preference chain (parity with the pre-R5
+  //       handleNewChat).
+  //   (c) selection switch — nav moved from one chat to another while a chat
+  //       is open: loadChat(navChatId). (When useChat's currentChatId is
+  //       null the restoreChat effect above already owns the load — staying
+  //       out of that path avoids a double loadChat.)
+  // The prev ref is REQUIRED for (a) vs (b): without it a naive
+  // `!navChatId` guard breaks creation adoption, and a naive reconciler
+  // without prev-state clears a just-finished conversation.
+  // useEffectEvent keeps the deps array free of the whole mainChat object
+  // (same channel as restoreChat above). currentWorkspaceId is NOT a dep:
+  // a workspace switch clears navChatId in the same event (ChatContext
+  // setWorkspaceId), so case (b) fires through navChatId, and the re-seed
+  // reads the fresh workspace through the useEffectEvent channel.
+  const prevNavRef = useRef<{ nav: string | null; chat: string | null }>({
+    nav: navChatId,
+    chat: currentChatId,
+  });
+
+  const reconcileNav = useEffectEvent(() => {
+    const prev = prevNavRef.current;
+    prevNavRef.current = { nav: navChatId, chat: currentChatId };
+
+    // (a) Creation adoption: useChat picked up a server chatId while nav had
+    // no chat — adopt it into nav (preserves the deleted sync-back behavior).
+    if (!prev.chat && currentChatId && currentChatId !== navChatId) {
+      setChatId(currentChatId);
+      return;
+    }
+    // (b) New chat / workspace switch: navChatId went truthy → null with an
+    // open chat — clear the panel (aborting any in-flight stream first) and
+    // re-seed the model preference chain.
+    if (!navChatId && prev.nav && currentChatId) {
+      if (isStreaming) {
+        abortStream();
+      }
+      clearChat();
+      setNewChatArchiveId(null);
+      void reseedNewChatModel();
+      return;
+    }
+    // (c) Selection switch: nav moved from one open chat to another — load
+    // the newly selected chat instead of letting a stale id bounce back.
+    if (navChatId && prev.nav && prev.nav !== navChatId && currentChatId && currentChatId !== navChatId) {
+      loadChat(navChatId);
+    }
+  });
+  useEffect(() => {
+    reconcileNav();
+  }, [navChatId, currentChatId]);
 
   // Persist attached document across navigation
   const attachedDocKey = currentWorkspaceId
@@ -289,6 +502,74 @@ export default function ChatPanel() {
     }
   }, [attachedDocKey, setAttachedDoc]);
 
+  // ── Phase 191 (KNOW-02 D-05): attached-archive draft persistence ──
+  // Two-layer persistence mirroring the attachedDoc pattern: the localStorage
+  // key is the DRAFT cache (new chats where no Chat row exists yet + refresh
+  // survival within a session), while the Chat record (mirrored server-side
+  // by syncChatAttachment) is the source of truth restored via the
+  // setRestoredArchiveIds seam.
+  const attachedArchivesKey = currentWorkspaceId
+    ? `attachedArchives:${currentWorkspaceId}:${currentChatId || "new"}`
+    : null;
+
+  // Write effect: set when non-empty, remove when empty.
+  useEffect(() => {
+    if (!attachedArchivesKey) return;
+    if (attachedArchives.length > 0) {
+      localStorage.setItem(attachedArchivesKey, JSON.stringify(attachedArchives));
+    } else {
+      localStorage.removeItem(attachedArchivesKey);
+    }
+  }, [attachedArchives, attachedArchivesKey]);
+
+  // Read effect: keyed on the key — parse defensively (untrusted client cache,
+  // T-191-04: tampered drafts degrade to no-op retrieval because the server
+  // re-resolves org scope on every send; IN-02 review fix: tampered drafts
+  // are CLAMPED to the 5-cap instead of surfacing a schema 400 on send).
+  useEffect(() => {
+    if (!attachedArchivesKey) return;
+    try {
+      const saved = localStorage.getItem(attachedArchivesKey);
+      if (saved) {
+        const parsed = JSON.parse(saved) as unknown;
+        if (Array.isArray(parsed)) {
+          setAttachedArchives(parsed.filter((v): v is string => typeof v === "string").slice(0, MAX_ATTACHED_ARCHIVES));
+        }
+      } else {
+        setAttachedArchives([]);
+      }
+    } catch {
+      // ignore parse errors — the draft is convenience-only
+    }
+    // 191-04 (WR-02 review fix): the previous gate
+    // `attachedArchivesKey.endsWith(":new") && currentChatId` was DEAD —
+    // the key ends with ":new" only while currentChatId is null, so the
+    // conjunction could never hold and an abandoned `attachedArchives:<ws>:new`
+    // draft was never removed (it re-attached its archives to the next new
+    // chat and silently attached them on the first send). Fix: clear the
+    // ":new" variant whenever a REAL chat id is active — i.e. the first
+    // message adopted a chat, so the draft has served its purpose and the
+    // live selection now lives under the chatId key. The read effect for the
+    // new chat key has already run by then (this same effect), so the cleanup
+    // cannot race the restore.
+    if (currentChatId && currentWorkspaceId) {
+      const newKey = `attachedArchives:${currentWorkspaceId}:new`;
+      if (localStorage.getItem(newKey)) localStorage.removeItem(newKey);
+    }
+  }, [attachedArchivesKey, currentChatId, currentWorkspaceId]);
+
+  // Toggle handler — respects the max-5 cap (D-01; UI mirrors the wire cap
+  // so the send never 400s at the schema boundary).
+  const handleToggleArchive = (id: string) => {
+    setAttachedArchives((prev) =>
+      prev.includes(id)
+        ? prev.filter((a) => a !== id)
+        : prev.length >= MAX_ATTACHED_ARCHIVES
+          ? prev
+          : [...prev, id],
+    );
+  };
+
   const handleSend = () => {
     const trimmed = input.trim();
     if (!trimmed || isStreaming) return;
@@ -303,7 +584,19 @@ export default function ChatPanel() {
     // first message creates an archive-scoped chat row. `?? undefined`
     // keeps the arg absent (not null) when no archive was picked —
     // sendMessage's `...(archiveId && { archiveId })` spread then omits it.
-    sendMessage(trimmed, attachedDoc?.id, attachedDoc?.name, modelOverride ?? undefined, newChatArchiveId ?? undefined);
+    // Phase 191 (D-02): 7th arg threads the attached-archive selection —
+    // only-when-non-empty (absent keeps the body byte-identical). Unlike
+    // attachedDoc, the selection is NOT cleared after send (KNOW-02: it
+    // persists across messages within the chat session).
+    sendMessage(
+      trimmed,
+      attachedDoc?.id,
+      attachedDoc?.name,
+      modelOverride ?? undefined,
+      newChatArchiveId ?? undefined,
+      undefined,
+      attachedArchives.length > 0 ? attachedArchives : undefined,
+    );
     setAttachedDoc(null);
   };
 
@@ -348,6 +641,48 @@ export default function ChatPanel() {
       if (trimmed.startsWith("/model")) {
         handleModelCommand(trimmed);
         return;
+      }
+      // ── Phase 190 (SKIL-02, D-08): generic /slug parser — strictly AFTER
+      // the /model branch (Pitfall 9: the /model surface stays byte-identical).
+      // Never-error rule (D-08): the never-error contract applies to slug
+      // MATCHING only — an unmatched /word falls through to handleSend() as a
+      // normal message; a MATCHED skill with malformed params shows the
+      // chat-level paramError notice instead of sending (D-09 not-silent arm).
+      if (trimmed.startsWith("/")) {
+        const m = /^\/([a-z0-9-]+)(?:\s+(.*))?$/.exec(trimmed);
+        const slug = m?.[1];
+        const skill = slug ? invocableSkills.find((s) => s.slug === slug) : undefined;
+        if (skill) {
+          const parsed = parseSkillArgs(
+            m?.[2] ?? "",
+            skill.inputSchema,
+            skill.config.defaultParams ?? {},
+          );
+          if (parsed.ok) {
+            // D-11: the FULL typed text is the message (min(1) satisfied — the
+            // user sees their invocation in the transcript); the structured
+            // skillCall rides additively — the server re-resolves + compiles.
+            // Phase 191 (D-02): the 7th arg keeps followups/invocations
+            // grounded in the attached archives; selection persists (KNOW-02).
+            sendMessage(
+              trimmed,
+              attachedDoc?.id,
+              attachedDoc?.name,
+              modelOverride ?? undefined,
+              newChatArchiveId ?? undefined,
+              { slug: skill.slug, params: parsed.params },
+              attachedArchives.length > 0 ? attachedArchives : undefined,
+            );
+            setInput("");
+            if (attachedDoc) setAttachedDoc(null);
+            return;
+          }
+          // D-09: matched skill + unreadable params → visible notice above the
+          // input, nothing sent (never a silent normal-send of a failed call).
+          setSkillParamError(t("chat.skillsPalette.paramError", "Could not read parameters for /{{slug}}. Try /{{slug}} key=value.", { slug }));
+          return;
+        }
+        // slug unmatched (incl. builtin names) → fall through to handleSend().
       }
       handleSend();
     }
@@ -717,7 +1052,11 @@ export default function ChatPanel() {
                     : undefined
                 }
                 onFollowUpClick={(question) => {
-                  if (!isStreaming) sendMessage(question);
+                  // Phase 191 (D-02): followups stay grounded — the same 7th
+                  // arg rides the direct sendMessage call (selection persists
+                  // across messages, KNOW-02).
+                  if (!isStreaming)
+                    sendMessage(question, undefined, undefined, undefined, undefined, undefined, attachedArchives.length > 0 ? attachedArchives : undefined);
                 }}
               />
             )}
@@ -754,14 +1093,50 @@ export default function ChatPanel() {
             />
           )}
 
+          {/* Phase 190 (D-09): paramError notice — a matched skill whose args
+              could not be parsed surfaces here instead of sending. Destructive
+              tint per the UI-SPEC color contract; dismissible. */}
+          {skillParamError && (
+            <div className="px-4 py-2 bg-destructive/10 text-destructive text-sm flex items-center justify-between" role="alert">
+              <span>{skillParamError}</span>
+              <Button
+                variant="link"
+                size="sm"
+                onClick={() => setSkillParamError(null)}
+                className="text-destructive underline text-sm font-medium hover:text-destructive h-auto px-0"
+                aria-label={t("chat.cancel", "Cancel")}
+              >
+                {t("chat.cancel", "Cancel")}
+              </Button>
+            </div>
+          )}
+
           {/* Status banner — Feature 4.1.1/4.2.3: live SSE status above the
               input, one polite announcement per state change (not per token). */}
           <ChatStatusBanner statusMessage={statusMessage} />
 
           {/* Input area — Feature 4: ChatInputArea owns auto-expand, send
               feedback (4.7.3), and a11y (4.9.1). Drag-and-drop stays on the
-              root container via react-dropzone. */}
-          <ChatInputArea
+              root container via react-dropzone. The Phase 190 skills palette
+              (SKIL-02/D-10) renders inside this relative wrapper: its anchor
+              div hugs the input area's bottom edge and the popover opens
+              side="top" above the input — a separate surface from the /model
+              palette (Pitfall 9: own open state, never the CustomEvent). */}
+          <div className="relative">
+            <SkillsPalette
+              open={skillsPaletteOpen}
+              onClose={() => setSkillsPaletteOpen(false)}
+              onSelect={(slug) => {
+                // UI-SPEC: selecting inserts "/slug " into the input — NEVER
+                // sends. The open-state effect closes it right after (the
+                // inserted space hits the space-disambiguation arm too).
+                setInput(`/${slug} `);
+              }}
+              query={input}
+              items={skillsPaletteItems}
+              builtinItems={skillsPaletteBuiltins}
+            />
+            <ChatInputArea
             value={input}
             onChange={setInput}
             onKeyDown={handleKeyDown}
@@ -776,17 +1151,46 @@ export default function ChatPanel() {
             micListening={listening}
             onToggleMic={toggleMic}
             isHackerTheme={isHackerTheme}
+            /* quick 260919-qjg: the archive list lives INSIDE the "+" popover
+               as a Knowledge submenu — onAttachArchive now means "open the
+               submenu" (the flag still owns the panel-slot mount); the back
+               row resets it. Chips stay above the input via the mode="chips"
+               instance; the mode="panel" instance is gated on
+               archivePickerOpen so the useArchives mount follows the flag.
+               Nothing but the chips overlays the chat area above the input. */
+            onAttachArchive={() => setArchivePickerOpen(true)}
+            onKnowledgeBack={() => setArchivePickerOpen(false)}
+            archivePicker={
+              attachedArchives.length > 0 ? (
+                <ArchiveAttachPicker
+                  mode="chips"
+                  selectedIds={attachedArchives}
+                  onToggle={handleToggleArchive}
+                  max={MAX_ATTACHED_ARCHIVES}
+                />
+              ) : undefined
+            }
+            archivePickerPanel={
+              archivePickerOpen ? (
+                <ArchiveAttachPicker
+                  mode="panel"
+                  selectedIds={attachedArchives}
+                  onToggle={handleToggleArchive}
+                  max={MAX_ATTACHED_ARCHIVES}
+                />
+              ) : undefined
+            }
             actions={
               <button
                 type="button"
                 onClick={() => setIsComparing(true)}
                 className="flex items-center gap-3 w-full px-3 py-2 rounded-md text-sm transition-colors hover:bg-accent/40"
-                aria-label={t("chat.compareModelsTitle")}
+                aria-label={t("chat.compareModelsTitle", "Compare")}
               >
                 <svg className="w-4 h-4 shrink-0 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                 </svg>
-                <span>{t("chat.compareModelsTitle")}</span>
+                <span>{t("chat.compareModelsTitle", "Compare")}</span>
               </button>
             }
             dlpToggle={
@@ -796,7 +1200,8 @@ export default function ChatPanel() {
                 onToggle={setShowDlpTexts}
               />
             }
-          />
+            />
+          </div>
         </div>
       )}
 

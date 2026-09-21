@@ -192,3 +192,95 @@ describe("131 UAT re-test widget layout fixes (seam)", () => {
     expect(indexCssSource).toMatch(/white-space: pre/);
   });
 });
+
+// 188-03 (WGTA-03, D-12/D-13): attribution links — the row gated by the
+// single-flag shouldShowLinks predicate riding the Phase 130 whiteLabel chain.
+// Same fs+regex seam idiom as the describes above: node-only jest env — read
+// source, assert the structural contract. EXTEND ONLY — every existing regex
+// pin above stays byte-intact (the credits row's pinned strings are contract).
+describe("188-03 attribution links (WGTA-03, D-12/D-13)", () => {
+  const chatPanelPath = path.resolve(__dirname, "../widget/components/ChatPanel.tsx");
+  const useWidgetConfigPath = path.resolve(__dirname, "../widget/hooks/useWidgetConfig.ts");
+  const chatPanelSource = fs.readFileSync(chatPanelPath, "utf-8");
+  const useWidgetConfigSource = fs.readFileSync(useWidgetConfigPath, "utf-8");
+
+  it("(a) ChatPanel renders the attribution row gated on shouldShowLinks(config.whiteLabel)", () => {
+    expect(chatPanelSource).toMatch(/shouldShowLinks\(config\.whiteLabel\)/);
+  });
+
+  it("(b) both attribution URLs are hardcoded https constants in the REQUIREMENTS.md canonical (www) spelling", () => {
+    // D-13: product constants, never admin-supplied (no config-block field)
+    expect(chatPanelSource).toMatch(/https:\/\/www\.studiosimos\.it/);
+    expect(chatPanelSource).toMatch(/https:\/\/www\.simmetricchat\.com/);
+  });
+
+  it("(c) each anchor opens via the sandboxed-iframe bridge: preventDefault + notifyCreditsOpen", () => {
+    expect(chatPanelSource).toMatch(/e\.preventDefault\(\);\s*\n\s*notifyCreditsOpen\("https:\/\/www\.studiosimos\.it"\)/);
+    expect(chatPanelSource).toMatch(/e\.preventDefault\(\);\s*\n\s*notifyCreditsOpen\("https:\/\/www\.simmetricchat\.com"\)/);
+  });
+
+  it("(d) attribution anchors keep the 44px touch target + line-clamp-2 on an INNER span (Phase 131 discipline)", () => {
+    // min-h-[44px] on the anchors (already pinned for the credits anchor —
+    // here we assert the attribution row carries the same discipline).
+    expect(chatPanelSource).toMatch(/className="w-1\/2 text-xs text-\[#6b7280\] underline underline-offset-2 hover:text-\[var\(--widget-primary\)\] min-h-\[44px\] inline-flex items-center justify-start text-left"/);
+    expect(chatPanelSource).toMatch(/className="w-1\/2 text-xs text-\[#6b7280\] underline underline-offset-2 hover:text-\[var\(--widget-primary\)\] min-h-\[44px\] inline-flex items-center justify-end text-right"/);
+  });
+
+  it("(e) the attribution row sits ABOVE the credits row (credits keeps its last-child position — Pitfall 5)", () => {
+    const attributionIndex = chatPanelSource.indexOf('shouldShowLinks(config.whiteLabel)');
+    const creditsIndex = chatPanelSource.indexOf("shouldShowCredits(config.whiteLabel, config.credits)");
+    expect(attributionIndex).toBeGreaterThanOrEqual(0);
+    expect(creditsIndex).toBeGreaterThan(attributionIndex);
+  });
+
+  it("(f) shouldShowLinks is exported from the hook file with the single-flag !whiteLabel body (D-12 verbatim semantics)", () => {
+    expect(useWidgetConfigSource).toMatch(/export function shouldShowLinks\(whiteLabel: boolean\): boolean \{\s*\n\s*return !whiteLabel;\s*\n\s*\}/);
+  });
+});
+
+// 188-03 (WGTA-02, D-09/D-10): the product fallback mark — a self-contained
+// Preact copy of the Monogram geometry rendered in ChatHeader's logo slot and
+// WelcomeScreen's avatar circle when the admin logoUrl/avatarUrl are ABSENT.
+// Same fs+regex seam idiom; EXTEND ONLY (existing pins stay byte-intact). The
+// loader FAB fallback chain geometry is NOT touched here — loader.test.ts
+// pins setFabContent structure and those pins must stay green unmodified.
+describe("188-03 product fallback mark (WGTA-02, D-09/D-10)", () => {
+  const productMarkPath = path.resolve(__dirname, "../widget/components/ProductMark.tsx");
+  const chatHeaderPath = path.resolve(__dirname, "../widget/components/ChatHeader.tsx");
+  const welcomeScreenPath = path.resolve(__dirname, "../widget/components/WelcomeScreen.tsx");
+  const productMarkSource = fs.readFileSync(productMarkPath, "utf-8");
+  const chatHeaderSource = fs.readFileSync(chatHeaderPath, "utf-8");
+  const welcomeScreenSource = fs.readFileSync(welcomeScreenPath, "utf-8");
+
+  it("(a) ProductMark.tsx exists as a self-contained Preact copy of the Monogram geometry", () => {
+    // The #FDFAF4 rounded-square background + the "S" text glyph (a brand
+    // mark, NOT a UI icon surface — the Phase 131 zero-text-glyphs rule
+    // targets close/send buttons; research Pattern 5 caveat).
+    expect(productMarkSource).toMatch(/viewBox="0 0 32 32"/);
+    expect(productMarkSource).toMatch(/<rect width="32" height="32" rx="8" ry="8" fill="#FDFAF4" \/>/);
+    expect(productMarkSource).toMatch(/textAnchor="middle"/);
+    expect(productMarkSource).toMatch(/aria-label="Simmetric Chat"/);
+  });
+
+  it("(b) ProductMark imports NOTHING from packages/frontend (IIFE boundary)", () => {
+    expect(productMarkSource).not.toMatch(/from "\.\.\/\.\.\/\.\.\/\.\.\/frontend/);
+    expect(productMarkSource).not.toMatch(/@simmetric-chat\/frontend/);
+    expect(productMarkSource).not.toMatch(/import .*Monogram/);
+  });
+
+  it("(c) ChatHeader renders ProductMark when logoUrl is absent, keeping the img branch when present", () => {
+    // The img branch is retained (admin override path) and the ProductMark
+    // fallback sits in the else path.
+    expect(chatHeaderSource).toMatch(/logoUrl \? \(/);
+    expect(chatHeaderSource).toMatch(/<ProductMark/);
+    expect(chatHeaderSource).toMatch(/w-7 h-7 rounded-full object-contain mr-2/);
+  });
+
+  it("(d) WelcomeScreen renders ProductMark when config.avatarUrl is absent (primary circle preserved)", () => {
+    expect(welcomeScreenSource).toMatch(/config\.avatarUrl \? \(/);
+    expect(welcomeScreenSource).toMatch(/<ProductMark/);
+    // The primary-colored circle geometry is preserved (D-10 restyle-not-rebuild).
+    expect(welcomeScreenSource).toMatch(/w-12 h-12 rounded-full flex items-center justify-center mb-4/);
+    expect(welcomeScreenSource).toMatch(/var\(--widget-primary\)/);
+  });
+});

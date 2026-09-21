@@ -8,7 +8,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiPost } from "./api";
+import { apiGet, apiPost, apiDelete } from "./api";
 import { queryKeys } from "./keys";
 
 export interface CatalogEntry {
@@ -76,6 +76,23 @@ export function useUninstallMarketplaceEntry() {
     onSuccess: (_, { workspaceId }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.marketplace.catalog(workspaceId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.mcpConnections.list });
+    },
+  });
+}
+
+// quick 260918-qts (D-1): per-entry catalog delete. The catalog is global —
+// invalidate the ["marketplace", "catalog"] PREFIX (2 segments) so every
+// cached workspace variant refetches; queryKeys.marketplace.catalog() would
+// only match the no-workspace "global" arm. mcpConnections.list is NOT
+// invalidated: the server 409s a delete while connections still reference
+// the entry, so a successful delete can never change the connections list.
+export function useDeleteMarketplaceEntry() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ message: string }, Error, { entryId: string }>({
+    mutationFn: ({ entryId }) => apiDelete<{ message: string }>(`/mcp-marketplace/${entryId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.marketplace.catalog().slice(0, 2) });
     },
   });
 }

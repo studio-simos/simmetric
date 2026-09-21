@@ -31,7 +31,7 @@
  * phase81-uat-bugs — partial mocks → false positives).
  */
 import "./helpers/setupEnv";
-
+import { ensureOrgMembership } from "../../jest.setup.integration";
 import bcrypt from "bcryptjs";
 
 let prisma: import("@prisma/client").PrismaClient;
@@ -42,10 +42,30 @@ let workspaceId: string;
 
 const MS_PER_DAY = 86_400_000;
 
+beforeEach(() => {
+  capturedAudits = [];
+});
+
 beforeAll(async () => {
   const { default: prismaClient } = await import("../utils/prisma");
   prisma = prismaClient;
   await prisma.$connect();
+
+  // Phase 144 D-01: logEvent delegates the audit write to the enterprise
+  // audit writer and is a NO-OP in community builds — the eventLog table no
+  // longer receives reaper rows there. The audit contract is now pinned
+  // through the setAuditLogDelegate IoC seam (the enterpriseLoader test's
+  // pattern): a capturing delegate stands in for the enterprise writer.
+  const { setAuditLogDelegate } = await import("../services/eventLogService");
+  setAuditLogDelegate(async (event) => {
+    capturedAudits.push({
+      entityType: event.entityType,
+      entityId: event.entityId,
+      action: event.action,
+      userId: event.userId,
+      metadata: event.metadata ?? null,
+    });
+  });
 
   // Seed admin user (admin role is seeded by global setup's `prisma db seed`).
   const adminRole = await prisma.role.findUnique({ where: { name: "admin" } });
@@ -64,6 +84,7 @@ beforeAll(async () => {
       data: { userId: admin.id, roleId: adminRole.id },
     });
   }
+  await ensureOrgMembership(prisma, admin.id);
 
   // Project → Workspace (FK chain required for Chat).
   const project = await prisma.project.create({
@@ -119,7 +140,16 @@ async function setRetention(value: string): Promise<void> {
   }
 }
 
-/** Fetch the latest reaper audit event. */
+/** Captured audit events (via the setAuditLogDelegate IoC seam). */
+let capturedAudits: Array<{
+  entityType: string;
+  entityId: string;
+  action: string;
+  userId: string | null;
+  metadata: Record<string, unknown> | null;
+}> = [];
+
+/** Fetch the latest reaper audit event (captured via the IoC delegate). */
 async function latestReaperAudit(): Promise<{
   entityType: string;
   entityId: string;
@@ -127,16 +157,13 @@ async function latestReaperAudit(): Promise<{
   userId: string | null;
   metadata: Record<string, unknown> | null;
 }> {
-  const row = await prisma.eventLog.findFirst({
-    where: { action: "reaper.run", entityType: "chat" },
-    orderBy: { createdAt: "desc" },
-  });
+  const row = capturedAudits[capturedAudits.length - 1];
   return {
     entityType: row?.entityType ?? "",
     entityId: row?.entityId ?? "",
     action: row?.action ?? "",
     userId: row?.userId ?? null,
-    metadata: row?.metadata ? JSON.parse(row.metadata) : null,
+    metadata: row?.metadata ?? null,
   };
 }
 
@@ -293,19 +320,13 @@ describe("SEED-002/003/004 — chatMessageReaper (real Prisma)", () => {
 
   it("(audit event shape): every tick produces exactly one chat.reaper.run event", async () => {
     await setRetention("");
-    const beforeCount = await prisma.eventLog.count({
-      where: { action: "reaper.run", entityType: "chat" },
-    });
+    const beforeCount = capturedAudits.length;
 
     const { runReaperCycle } = await import("../services/chatMessageReaperJob");
     await runReaperCycle();
 
-    const afterCount = await prisma.eventLog.count({
-      where: { action: "reaper.run", entityType: "chat" },
-    });
-
-    // Exactly one new audit row per tick
-    expect(afterCount - beforeCount).toBe(1);
+    // Exactly one new audit event per tick (captured via the IoC delegate)
+    expect(capturedAudits.length - beforeCount).toBe(1);
 
     const audit = await latestReaperAudit();
     expect(audit).toMatchObject({

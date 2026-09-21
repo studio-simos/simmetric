@@ -34,13 +34,32 @@ export function createMockPrisma() {
     },
     projectAccess: {
       findFirst: jest.fn(),
+      // Phase 190 (SKIL-03): the skills list resolves the caller's
+      // ProjectAccess-implied editor workspaces via findMany — the factory
+      // needs the delegate or the routes suite crashes on the missing mock.
+      findMany: jest.fn(),
       create: jest.fn(),
       deleteMany: jest.fn(),
     },
     workspaceAccess: {
       findFirst: jest.fn(),
+      findMany: jest.fn(),
       create: jest.fn(),
+      // Phase 189 (WSIS-03): grant/bulk endpoints upsert WorkspaceAccess —
+      // the factory needs the delegate so workspaceAccess suites mock it.
+      upsert: jest.fn(),
       deleteMany: jest.fn(),
+    },
+    // Phase 189 (WSIS-01): the personal-workspace service issues a
+    // workspaceAgentConfig.upsert (POST /workspaces parity) inside its
+    // transaction — the factory needs the delegate so personalWorkspace
+    // suites mock it.
+    workspaceAgentConfig: {
+      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      upsert: jest.fn(),
+      update: jest.fn(),
+      create: jest.fn(),
     },
     apiKey: {
       findMany: jest.fn(),
@@ -153,6 +172,10 @@ export function createMockPrisma() {
       findMany: jest.fn(),
       findUnique: jest.fn(),
       findFirst: jest.fn(),
+      // quick 260918-qts (T-QTS-02): the DELETE /:entryId in-use guard probes
+      // mCPConnection.count — the delegate must exist or the route crashes
+      // with "count is not a function".
+      count: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
       delete: jest.fn(),
@@ -320,6 +343,10 @@ export function createMockPrisma() {
       findMany: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      // quick 260918-p3h (T-P3H-04 arm a): forwardToCollector's guarded
+      // processing claim issues document.updateMany — the delegate must
+      // exist or the route crashes with "updateMany is not a function".
+      updateMany: jest.fn(),
       delete: jest.fn(),
     },
     documentChunk: {
@@ -351,6 +378,24 @@ export function createMockPrisma() {
     },
     // Quick 260829-ony — DlpPattern CRUD (routes + pattern service unit tests).
     dlpPattern: {
+      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      count: jest.fn(),
+      // Phase 192 (Rule 1/2): seedBuiltinDlpPatterns (seed.ts + boot
+      // seedService) upserts the built-in rows keyed (organizationId, name).
+      upsert: jest.fn(),
+    },
+    // Phase 190 (SKIL-01, Pitfall 7): the AgentSkill delegate — Plan 02
+    // (skillService/skills.routes/registry suites) and Plan 03
+    // (chatStreamSkillDlp) drive prisma.agentSkill.* through this factory;
+    // without it the deep mock hands back undefined and those suites crash
+    // (the "Cannot read properties of undefined" class documented in
+    // server AGENTS.md for missing delegates).
+    agentSkill: {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
       findMany: jest.fn(),

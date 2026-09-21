@@ -27,7 +27,7 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import request from "supertest";
-
+import { ensureOrgMembership } from "../../jest.setup.integration";
 let app: ReturnType<typeof import("../index").createApp>;
 let prisma: import("@prisma/client").PrismaClient;
 let env: import("../config/env").Env;
@@ -102,9 +102,11 @@ beforeAll(async () => {
 
     if (adminRole) {
       await prisma.userRole.create({ data: { userId: user1.id, roleId: adminRole.id } });
+  await ensureOrgMembership(prisma, user1.id);
     }
     if (userRole) {
       await prisma.userRole.create({ data: { userId: user2.id, roleId: userRole.id } });
+  await ensureOrgMembership(prisma, user2.id);
     }
 
     // Seed a project + two workspaces. user1 owns the project (so user1 can
@@ -120,12 +122,12 @@ beforeAll(async () => {
     projectId = project.id;
 
     const wsA = await prisma.workspace.create({
-      data: { name: "workspace-A", projectId, createdBy: user1Id },
+      data: { name: "workspace-A", projectId },
     });
     workspaceAId = wsA.id;
 
     const wsB = await prisma.workspace.create({
-      data: { name: "workspace-B", projectId, createdBy: user1Id },
+      data: { name: "workspace-B", projectId },
     });
     workspaceBId = wsB.id;
 

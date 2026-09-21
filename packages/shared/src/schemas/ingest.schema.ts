@@ -30,9 +30,12 @@ export type IngestChunk = z.infer<typeof IngestChunkSchema>;
 // server. Producer-side safeParse lives in packages/collector/src/routes/ingest.ts.
 // `status` enum includes `"processed"` (the live collector value at ingest.ts:245),
 // plus `"completed"` and `"failed"` for completeness/forward-compat.
+// quick 260918-p3h: `"cancelled"` added additively — the collector finishes a
+// dispatch with this status when the document was cancelled mid-flight (the
+// server's forwardToCollector sees it and skips the completed/failed writes).
 export const IngestResponseSchema = z.object({
   documentId: z.string().uuid(),
-  status: z.enum(["processed", "completed", "failed"]),
+  status: z.enum(["processed", "completed", "failed", "cancelled"]),
   chunkCount: z.number().int().min(0).optional(),
   chunks: z.array(IngestChunkSchema).optional(),
   embeddingModel: z.string().optional(),
@@ -46,17 +49,23 @@ export type IngestResponse = z.infer<typeof IngestResponseSchema>;
 
 // --- Ingest Status Callback Schema ---
 // Validates the collector→server status callback body on PUT /api/documents/:id/status.
-// `status` enum is strict: only `"completed"` and `"failed"` are valid terminal
-// statuses (the collector's notifyServerStatus helper sends these).
+// `status` enum is strict: `"completed"`/`"failed"` are terminal,
+// `"processing"` is the additive progress-notify arm (quick 260918-p3h — the
+// collector PUTs the current % between ingest boundaries; the server handler
+// writes status verbatim, and a "processing" write is idempotent with the
+// row it races).
 // `statusMessage` is kept as an optional alias for backward-compat with the
 // existing collector field at ingest.ts:24-27.
+// quick 260918-p3h: optional `progress` 0–100 — collector-reported ingest
+// progress, stored in Document.progress and surfaced via GET /api/documents.
 export const IngestStatusCallbackSchema = z.object({
-  status: z.enum(["completed", "failed"]),
+  status: z.enum(["completed", "failed", "processing"]),
   chunkCount: z.number().int().min(0).optional(),
   embeddingModel: z.string().optional(),
   error: z.string().optional(),
   statusMessage: z.string().optional(),
   ocrSkipped: z.string().optional(),
+  progress: z.number().int().min(0).max(100).optional(),
 });
 export type IngestStatusCallback = z.infer<typeof IngestStatusCallbackSchema>;
 

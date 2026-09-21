@@ -29,7 +29,7 @@ jest.mock("../services/archiveIndexService", () => ({
 
 import fs from "fs/promises";
 import path from "path";
-import { createPage } from "../services/archivePageService";
+import { createPage, updatePage } from "../services/archivePageService";
 import { validateWritablePath } from "../utils/archivePath";
 import prisma from "../utils/prisma";
 import { logEvent } from "../services/eventLogService";
@@ -131,5 +131,59 @@ describe("non-write: AI write path never touches raw_sources/", () => {
     expect(() =>
       validateWritablePath("/tmp/arch", "raw_sources/foo.md"),
     ).toThrow(/outside wiki/i);
+  });
+
+  // Phase 187 (D-06a): the updatePage (KBPG-02 rename/edit) path carries the
+  // same invariant — a raw_sources/traversal-shaped target is rejected by the
+  // guard BEFORE any fs.writeFile call.
+  describe("updatePage (KBPG-02 rename/edit path) never touches raw_sources/", () => {
+    beforeEach(() => {
+      (prisma.archivePage.findFirst as jest.Mock).mockResolvedValue(mockPage);
+    });
+
+    it("updatePage with a raw_sources category is blocked by the guard — no fs.writeFile call", async () => {
+      await expect(
+        updatePage(
+          ARCHIVE_ID,
+          "foo-page",
+          { category: "../raw_sources" as any },
+          "admin-001",
+        ),
+      ).rejects.toThrow(/outside wiki|traversal/i);
+
+      expect(writeFileSpy).not.toHaveBeenCalled();
+      for (const call of writeFileSpy.mock.calls) {
+        const target = String(call[0]);
+        expect(target).not.toContain("raw_sources");
+      }
+    });
+
+    it("updatePage with a traversal-shaped category (../../etc) is blocked — no fs.writeFile call", async () => {
+      await expect(
+        updatePage(
+          ARCHIVE_ID,
+          "foo-page",
+          { category: "../../etc" as any },
+          "admin-001",
+        ),
+      ).rejects.toThrow(/outside wiki|traversal/i);
+
+      expect(writeFileSpy).not.toHaveBeenCalled();
+    });
+
+    // D-02 (Phase 187): rawSourcesImmutable is documentation only — NO code
+    // path consumes the flag to gate validateWritablePath. A config carrying
+    // `false` must not alter guard behavior: the guard takes no config, so a
+    // raw_sources target still throws with the flag set false in a fixture
+    // passed nowhere near the guard (the flag is inert documentation).
+    it("rawSourcesImmutable: false is inert — validateWritablePath still rejects raw_sources targets (D-02)", () => {
+      // Fixture documenting the inert flag: carried alongside the guard call
+      // shape, never consumed by it (the guard signature takes no config).
+      const docFlagConfig = { rawSourcesImmutable: false, schemaPrompt: undefined as string | undefined };
+      expect(docFlagConfig.rawSourcesImmutable).toBe(false);
+      expect(() =>
+        validateWritablePath("/tmp/arch", "raw_sources/foo.md"),
+      ).toThrow(/raw_sources\/ is immutable/);
+    });
   });
 });

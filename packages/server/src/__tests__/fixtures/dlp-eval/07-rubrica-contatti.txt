@@ -1,0 +1,6 @@
+Rubrica contatti ufficio.
+
+Maria Conte — m.rossi.ufficio@example.net
+Segreteria — +39 02 1234567
+Fax — +39 02 7654321
+Referente esterno: Paolo Neri, n.eri@example.org

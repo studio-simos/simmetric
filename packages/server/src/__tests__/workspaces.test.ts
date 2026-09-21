@@ -53,6 +53,16 @@ jest.mock("../utils/prisma", () => ({
     workspaceAgentConfig: {
       upsert: jest.fn().mockResolvedValue({}),
     },
+    workspaceAccess: {
+      findMany: jest.fn().mockResolvedValue([]),
+      upsert: jest.fn().mockResolvedValue({}),
+      deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+    user: {
+      findUnique: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
+    $transaction: jest.fn().mockResolvedValue([]),
   },
   withSoftDelete: (where: unknown) => where,
 }));
@@ -99,6 +109,11 @@ jest.mock("../middleware/auth", () => {
 jest.mock("../middleware/rbac", () => {
   const mockState = require("../middleware/auth").__mockState;
   return {
+  // Phase 189 (189-02 sweep): routes now import the graded middlewares —
+  // the mock must export them (shadow no-op) or express throws at load.
+  requireWorkspaceWriteAccess: () => (_req: any, _res: any, next: any) => next(),
+  requireWorkspaceRead: () => (_req: any, _res: any, next: any) => next(),
+
     // requireWorkspaceAccess is mocked to pass through so it never touches
     // prisma.workspace.findFirst.
     requireWorkspaceAccess: (_req: Request, _res: Response, next: NextFunction) => next(),
@@ -261,5 +276,249 @@ describe("PUT /api/workspaces/:workspaceId — P2002 → 409 conflict mapping (2
 
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("A workspace with this name already exists in this project");
+  });
+});
+
+// --- Access grants management (D-07 follow-up → Phase 189 D-15..D-17) ------
+
+// Workspace fixture for the owner-or-admin gates the Phase 189 handlers add.
+// The test user is "admin-user-id" (isAdmin mocked true), so the gate passes
+// via the admin arm; the workspace-load shape is still asserted.
+const accessWorkspaceFixture = {
+  id: "ws-1",
+  project: { id: "proj-1", createdBy: "admin-user-id" },
+};
+
+describe("GET /api/workspaces/:workspaceId/access — list grants", () => {
+  it("returns the grants reshaped to the D-15 wire shape (no raw user object)", async () => {
+    (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessWorkspaceFixture);
+    (mockPrisma.workspaceAccess.findMany as jest.Mock).mockResolvedValue([
+      {
+        userId: "user-1",
+        workspaceId: "ws-1",
+        role: "editor",
+        grantedAt: new Date("2026-09-15T00:00:00.000Z"),
+        grantedBy: null,
+        user: { username: "alice" },
+      },
+    ]);
+
+    const app = buildApp();
+    const res = await request(app).get("/api/workspaces/ws-1/access");
+
+    expect(res.status).toBe(200);
+    // D-15 shape: {userId, workspaceId, username, role, grantedAt, grantedBy}
+    // — no raw user:{id,email,...} passthrough (T-189-11), grantedAt ISO
+    // string, legacy grantedBy null-passthrough.
+    expect(res.body).toEqual([
+      {
+        userId: "user-1",
+        workspaceId: "ws-1",
+        username: "alice",
+        role: "editor",
+        grantedAt: "2026-09-15T00:00:00.000Z",
+        grantedBy: null,
+      },
+    ]);
+    expect(mockPrisma.workspaceAccess.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: "ws-1" } })
+    );
+  });
+});
+
+describe("DELETE /api/workspaces/:workspaceId/access/:userId — revoke grant", () => {
+  it("revokes an existing grant → 200 + workspace.access.revoked event (D-22 rename)", async () => {
+    (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessWorkspaceFixture);
+    (mockPrisma.workspaceAccess.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+    const app = buildApp();
+    const res = await request(app).delete("/api/workspaces/ws-1/access/user-1");
+
+    expect(res.status).toBe(200);
+    expect(mockPrisma.workspaceAccess.deleteMany).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", userId: "user-1" },
+    });
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      "workspace",
+      "ws-1",
+      "workspace.access.revoked",
+      "admin-user-id",
+      expect.objectContaining({ targetUserId: "user-1", revokedBy: "admin-user-id" }),
+    );
+  });
+
+  it("returns 404 when no grant exists (existing workspace)", async () => {
+    (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessWorkspaceFixture);
+    (mockPrisma.workspaceAccess.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+
+    const app = buildApp();
+    const res = await request(app).delete("/api/workspaces/ws-1/access/user-1");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Access grant not found");
+    expect(mockLogEvent).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 'Workspace not found' for an unknown workspace (existence hiding)", async () => {
+    (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(null);
+
+    const app = buildApp();
+    const res = await request(app).delete("/api/workspaces/ws-unknown/access/user-1");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Workspace not found");
+    expect(mockPrisma.workspaceAccess.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 'Cannot revoke project owner' when target === project.createdBy (D-16 anti-lockout)", async () => {
+    (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessWorkspaceFixture);
+
+    const app = buildApp();
+    const res = await request(app).delete("/api/workspaces/ws-1/access/admin-user-id");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Cannot revoke project owner");
+    expect(mockPrisma.workspaceAccess.deleteMany).not.toHaveBeenCalled();
+    expect(mockLogEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/workspaces/:workspaceId/access — grant (Phase 189 D-15/D-18)", () => {
+  // Route schemas validate userIds as UUIDs — fixtures follow.
+  const GRANT_USER = "cccccccc-0000-4000-8000-0000000000cc";
+  const GHOST_USER = "dddddddd-0000-4000-8000-0000000000dd";
+  const USER2 = "eeeeeeee-0000-4000-8000-0000000000ee";
+
+  it("persists role + grantedBy in BOTH upsert arms and emits workspace.access.granted", async () => {
+    (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessWorkspaceFixture);
+    (mockPrisma.user.findUnique as jest.Mock).mockResolvedValue({ id: GRANT_USER, username: "alice" });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/workspaces/ws-1/access")
+      .send({ userId: GRANT_USER, role: "editor" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ message: "Access granted", role: "editor" });
+    // 189-REVIEW CR-02: explicit org stamp on the create arm (the tenant
+    // middleware mock resolves org-default — a @default-landed row would be
+    // invisible to the tenant-scoped read path in non-default orgs).
+    expect(mockPrisma.workspaceAccess.upsert).toHaveBeenCalledWith({
+      where: { userId_workspaceId: { userId: GRANT_USER, workspaceId: "ws-1" } },
+      create: { userId: GRANT_USER, workspaceId: "ws-1", role: "editor", grantedBy: "admin-user-id", organizationId: "org-default" },
+      update: { role: "editor", grantedBy: "admin-user-id" },
+    });
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      "workspace",
+      "ws-1",
+      "workspace.access.granted",
+      "admin-user-id",
+      expect.objectContaining({ targetUserId: GRANT_USER, role: "editor" }),
+    );
+  });
+
+  it("returns 404 when the target user does not exist", async () => {
+    (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessWorkspaceFixture);
+    (mockPrisma.user.findUnique as jest.Mock).mockResolvedValue(null);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/workspaces/ws-1/access")
+      .send({ userId: GHOST_USER, role: "editor" });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("User not found");
+    expect(mockPrisma.workspaceAccess.upsert).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 with details on an invalid body (safeParse, not .parse → 500)", async () => {
+    (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessWorkspaceFixture);
+
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/workspaces/ws-1/access")
+      .send({ userId: "not-a-uuid", role: "editor" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid request body");
+    expect(res.body.details).toBeDefined();
+  });
+});
+
+describe("POST /api/workspaces/:workspaceId/access/bulk — bulk grant (D-17)", () => {
+  it("upserts survivors in ONE $transaction and returns { granted, failed }", async () => {
+    const GRANT_USER = "cccccccc-0000-4000-8000-0000000000cc";
+    const GHOST_USER = "dddddddd-0000-4000-8000-0000000000dd";
+    const USER2 = "eeeeeeee-0000-4000-8000-0000000000ee";
+    (mockPrisma.workspace.findFirst as jest.Mock).mockResolvedValue(accessWorkspaceFixture);
+    (mockPrisma.user.findMany as jest.Mock).mockResolvedValue([{ id: GRANT_USER }, { id: USER2 }]);
+    // Real contract: the array form resolves ONE result per op.
+    (mockPrisma.$transaction as jest.Mock).mockImplementation((ops: unknown[]) =>
+      Promise.resolve(Array.isArray(ops) ? ops.map(() => ({})) : []));
+
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/workspaces/ws-1/access/bulk")
+      .send({ userIds: [GRANT_USER, USER2, GHOST_USER], role: "viewer" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      granted: 2,
+      failed: [{ userId: GHOST_USER, error: "User not found" }],
+    });
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    const txArg = (mockPrisma.$transaction as jest.Mock).mock.calls[0][0] as unknown[];
+    expect(txArg).toHaveLength(2);
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      "workspace",
+      "ws-1",
+      "workspace.access.granted",
+      "admin-user-id",
+      expect.objectContaining({ targetUserIds: [GRANT_USER, USER2, GHOST_USER], role: "viewer" }),
+    );
+  });
+});
+
+describe("POST /api/workspaces — preventive auto-grant (D-07 follow-up → Phase 189 D-12)", () => {
+  it("auto-grants WorkspaceAccess (role editor) when the creator is neither project owner nor project-access holder", async () => {
+    const projectId = "00000000-0000-4000-8000-000000000001";
+    // Creator (admin-user-id) is NOT the project owner (d68aa2eb scenario)
+    (mockPrisma.project.findFirst as jest.Mock).mockResolvedValue({
+      id: projectId,
+      createdBy: "other-admin-id",
+    });
+    (mockPrisma.projectAccess.findFirst as jest.Mock).mockResolvedValue(null);
+    (mockPrisma.workspace.create as jest.Mock).mockResolvedValue({ id: "ws-1" });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/workspaces")
+      .send({ projectId, name: "Cross-admin workspace" });
+
+    expect(res.status).toBe(201);
+    // 189-REVIEW CR-02: the auto-grant create arm carries the org stamp too.
+    expect(mockPrisma.workspaceAccess.upsert).toHaveBeenCalledWith({
+      where: { userId_workspaceId: { userId: "admin-user-id", workspaceId: "ws-1" } },
+      create: { userId: "admin-user-id", workspaceId: "ws-1", role: "editor", organizationId: "org-default" },
+      update: {},
+    });
+  });
+
+  it("does NOT auto-grant when the creator already has project access", async () => {
+    const projectId = "00000000-0000-4000-8000-000000000001";
+    (mockPrisma.project.findFirst as jest.Mock).mockResolvedValue({
+      id: projectId,
+      createdBy: "other-admin-id",
+    });
+    (mockPrisma.projectAccess.findFirst as jest.Mock).mockResolvedValue({ id: "pa-1" });
+    (mockPrisma.workspace.create as jest.Mock).mockResolvedValue({ id: "ws-1" });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post("/api/workspaces")
+      .send({ projectId, name: "Project-access workspace" });
+
+    expect(res.status).toBe(201);
+    expect(mockPrisma.workspaceAccess.upsert).not.toHaveBeenCalled();
   });
 });

@@ -65,6 +65,11 @@ export interface UseChatPersistenceArgs {
   debounceRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
   persistedModelRef: React.MutableRefObject<{ providerId?: string; model?: string } | null>;
   messagesRef: React.MutableRefObject<ChatMessage[]>;
+  // Phase 191 (KNOW-02 D-05): restore seam — the per-chat attached-archive
+  // selection lives on the Chat record (server = source of truth). loadChat
+  // invokes the callback with the row's array ([] when the row has none /
+  // the field is absent), so the composer can re-seed its chips.
+  setRestoredArchiveIds?: (ids: string[]) => void;
 }
 
 export function useChatPersistence(args: UseChatPersistenceArgs) {
@@ -80,7 +85,7 @@ export function useChatPersistence(args: UseChatPersistenceArgs) {
         fetch(`${API_BASE}/workspaces/${args.workspaceId}/chats/${chatId}/messages`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         }),
-        apiGet<Array<{ id: string; providerId: string | null; model: string }>>(`/workspaces/${args.workspaceId}/chats`),
+        apiGet<Array<{ id: string; providerId: string | null; model: string; attachedArchiveIds?: string[] | null }>>(`/workspaces/${args.workspaceId}/chats`),
       ]);
 
       if (!messagesRes.ok) throw new Error("Failed to load messages");
@@ -96,6 +101,13 @@ export function useChatPersistence(args: UseChatPersistenceArgs) {
       args.setError(null);
 
       const chat = chats.find((c) => c.id === chatId);
+
+      // Phase 191 (KNOW-02 D-05): surface the server-side per-chat archive
+      // selection through the optional restore callback — server record is
+      // the source of truth; a row without the field restores []. The
+      // composer treats this as the authoritative seed (its localStorage
+      // key is only a draft cache).
+      args.setRestoredArchiveIds?.(chat?.attachedArchiveIds ?? []);
 
       // Resolve the workspace default up front so it's available both as a
       // fallback candidate and for the workspaceDefaultRef (used by the

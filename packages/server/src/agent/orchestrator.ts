@@ -38,7 +38,7 @@ import prisma from "../utils/prisma";
 import { getEnv } from "../config/env";
 import { logger } from "../utils/logger";
 import { resolveSystemPrompt, resolveSkills, getTemplateForWorkspace } from "../services/templateService";
-import { resolveProviderConfig } from "../services/providerService";
+import { resolveProviderConfig, resolveProviderConfigStrict } from "../services/providerService";
 import type { ProviderConfig, AgentPlan, SourceCitation } from "@simmetric-chat/shared";
 import { streamLLM, buildProviderTools, type OnTokenCallback, type OnThinkingCallback, type DoneReason } from "./llmStreaming";
 import { formatPlanInjection } from "./planParser";
@@ -47,6 +47,13 @@ import { resolveToolCall } from "./toolCallResolver";
 import { compact_messages_for_request } from "./contextCompaction";
 import { retrieveAndInjectMemory } from "./memoryRetrieval";
 import { reviewMemoryAfterTurn } from "./memoryExtraction";
+// Phase 187 (WIKS-01/WIKS-02): archive-bound prompt injection (hard rule +
+// advisory schemaPrompt block) — see the gated blocks in runAgent/runAgentStreaming.
+import { getArchiveConfig, buildSchemaPromptBlock, HARD_RULE_RAW_SOURCES } from "../services/archiveConfigService";
+// 260917-qoh: the reply-language directive — composed from the validated
+// visitor locale (params.locale, enum-gated upstream by chatRequestSchema,
+// T-131-15) and appended INSIDE the widget prompt block in BOTH loops.
+import { buildReplyLanguageDirective } from "../services/widgetChatPrompt";
 
 export { generatePlan } from "./planRunner";
 import { generatePlan } from "./planRunner";
@@ -64,6 +71,25 @@ import { generatePlan } from "./planRunner";
  */
 const MAX_ITERATIONS_BACKSTOP = 50;
 
+/**
+ * 260919 model-missing UX — typed error thrown by both ReAct loops when
+ * strict model resolution cannot resolve the user-selected model. The
+ * `[MODEL_NOT_AVAILABLE]` tag is the frontend's discrimination key (mirrors
+ * the CLOUD_MODEL_OFFLINE / CLOUD_MODEL_AUTH_FAILED pattern): useChatStreaming
+ * translates it into a "model unavailable — choose another" state and opens
+ * the model palette instead of auto-falling back to a substitute.
+ */
+export class ModelNotAvailableError extends Error {
+  readonly requestedModel: string;
+  constructor(requestedModel: string) {
+    super(
+      `Model "${requestedModel}" is not available on any enabled provider. Please choose a different model. [MODEL_NOT_AVAILABLE]`,
+    );
+    this.name = "ModelNotAvailableError";
+    this.requestedModel = requestedModel;
+  }
+}
+
 export interface AgentRunParams {
   workspaceId: string;
   userId: string;
@@ -76,6 +102,41 @@ export interface AgentRunParams {
   archiveId?: string;   // D-08: deterministic chat-scoped archiveId (from Chat.archiveId)
   disableRagSearch?: boolean; // WID-02 D-04: filter rag_search from active skills (mirror ragContext)
   locale?: string;      // 131-07 (G-131-19): visitor locale (widget chat) — localizes the no-results sentence
+  // 260917-mz6: the widget grounding system prompt — DB-resolved from the
+  // Widget row by the internal widget route, NEVER client-supplied (T-Q02;
+  // the admin-authored field is validated to max 4000 chars). Prepended
+  // OUTERMOST around the customInstructions composition so the widget prompt
+  // leads. Additive-optional: absent/undefined → byte-identical.
+  widgetSystemPrompt?: string;
+  // Phase 190 (SKIL-04, D-12): explicit /slug skillCall payload built SERVER-
+  // SIDE in routes/chat.ts (resolveInvocableSkill → DLP-masked params →
+  // compileTemplate → wrapSpotlightedTemplate). Additive-optional: requests
+  // without it are byte-identical. Injected as spotlighted USER-level data
+  // through buildToolResultEntry in BOTH loops — NEVER the system prompt
+  // (the delimiters already ride compiledPrompt; injection site appends only).
+  skillCall?: { slug: string; params: Record<string, string>; compiledPrompt: string };
+  // Phase 190 (WR-02, D-13): the request's DLP masking decision (DLP_ENABLED
+  // true AND no bypass role — computed by the chat route exactly like the
+  // skillCall params-masking gate). Threaded into skill.execute so
+  // createPromptSkillExecutor masks LLM-invoked custom-skill tool input
+  // BEFORE compilation (the explicit /slug path is masked in the route).
+  // Additive-optional: absent/undefined → no executor masking (byte-identical
+  // with the pre-fix behavior for callers that do not set it).
+  dlpMaskingEnabled?: boolean;
+  // Phase 191 (KNOW-01 D-04): chat-attached wiki-archive IDs — org-validated
+  // upstream by archiveAttachmentService.resolveAttachedArchives (silent
+  // org-scoped filter); skills never re-validate. rag_search unions them
+  // into its retrieval as archive:<id> pseudo-workspaces. Additive-optional:
+  // absent/empty → byte-identical (the workspace string call is unchanged).
+  attachedArchiveIds?: string[];
+  /**
+   * 260919 model-missing UX — strict model resolution. TRUE on user-facing
+   * chat paths (chat.ts both handlers): the user-selected model must be
+   * honored — a missing model throws a typed error the frontend translates
+   * into a "choose a model" prompt, never a silent substitute. Absent/false
+   * (widget, planRunner, non-chat callers) keeps the lenient degrade chain.
+   */
+  strictModelResolution?: boolean;
 }
 
 import type { ChatMessageEntry } from "./agentTypes";
@@ -232,6 +293,18 @@ export async function runAgent(params: AgentRunParams): Promise<AgentRunResult> 
   if (user?.customInstructions) {
     finalSystemPrompt = `${user.customInstructions}\n\n${resolvedSystemPrompt}`;
   }
+  // 260917-mz6 (Phase 131 prepend pattern): the widget grounding prompt is
+  // prepended OUTERMOST — widget prompt first, then user customInstructions +
+  // resolved prompt. The string content is pre-baked (the internal widget
+  // route resolves the admin-authored field); no client input is interpolated
+  // here. 260917-qoh: the reply-language directive (built server-side from
+  // the enum-validated params.locale) rides INSIDE the widget prompt block,
+  // immediately after the widget prompt — the JWT path (no
+  // widgetSystemPrompt) stays byte-identical.
+  if (params.widgetSystemPrompt) {
+    const directive = buildReplyLanguageDirective(params.locale);
+    finalSystemPrompt = `${params.widgetSystemPrompt}${directive ? `\n\n${directive}` : ""}\n\n${finalSystemPrompt}`;
+  }
 
   // Load constraints — workspace agent config takes priority over template.
   // The workspace constraints are set by the user in Settings > Workspace;
@@ -250,21 +323,32 @@ export async function runAgent(params: AgentRunParams): Promise<AgentRunResult> 
   const isCitationRequired = constraints.citationRequired === true;
   const isHybridSearchForced = constraints.hybridSearchForced === true;
 
-  const skills = await resolveSkillsForChat(workspaceId, chatId, enabledSkillNames);
+  const skills = await resolveSkillsForChat(workspaceId, chatId, enabledSkillNames, { userId: params.userId });
   const env = getEnv();
 
   // Resolve provider config: per-request override > workspace config > default > env fallback
+  // 260919 model-missing UX: strict resolution on user-facing chat paths —
+  // a user-selected model that cannot be resolved throws a typed error the
+  // frontend turns into a "choose a model" prompt (no silent substitute).
   let providerConfig: ProviderConfig;
-  const resolved = await resolveProviderConfig(params.providerId, params.model);
-  if (resolved && resolved.model) {
-    providerConfig = resolved;
-    // Workspace-level model override (only if no per-request override)
-    if (!params.model && agentConfig.model && agentConfig.model !== "default") {
-      providerConfig.model = agentConfig.model;
+  if (params.strictModelResolution) {
+    const { config, requestedModel } = await resolveProviderConfigStrict(params.providerId, params.model);
+    if (!config) {
+      throw new ModelNotAvailableError(requestedModel ?? params.model ?? "default");
     }
-    providerConfig.temperature = agentConfig.temperature ?? 0.7;
+    providerConfig = config;
   } else {
-    providerConfig = buildFallbackConfig(env, params.model || agentConfig.model || "gemma4:latest", agentConfig.temperature ?? 0.7);
+    const resolved = await resolveProviderConfig(params.providerId, params.model);
+    if (resolved && resolved.model) {
+      providerConfig = resolved;
+      // Workspace-level model override (only if no per-request override)
+      if (!params.model && agentConfig.model && agentConfig.model !== "default") {
+        providerConfig.model = agentConfig.model;
+      }
+      providerConfig.temperature = agentConfig.temperature ?? 0.7;
+    } else {
+      providerConfig = buildFallbackConfig(env, params.model || agentConfig.model || "gemma4:latest", agentConfig.temperature ?? 0.7);
+    }
   }
 
   // Enforce localLLMOnly constraint (Medical template)
@@ -280,6 +364,22 @@ export async function runAgent(params: AgentRunParams): Promise<AgentRunResult> 
   // (or wiki_query) before answering any factual question.
   if (isHybridSearchForced && !ragContext) {
     finalSystemPrompt += "\n\nMANDATORY SEARCH RULE: You MUST call rag_search (or wiki_query if available) to retrieve documents from the knowledge base BEFORE answering any factual question. Do NOT answer from your training knowledge. If search returns no results, state that no information was found.";
+  }
+
+  // Phase 187 (WIKS-01/WIKS-02): archive-bound chats only. The hard rule is
+  // ALWAYS appended (raw_sources immutability is code-enforced via
+  // validateWritablePath — this is the prompt-layer mirror, WIKS-02/D-06b);
+  // the advisory schemaPrompt block only when the archive config carries one
+  // (WIKS-01/D-03). Injected AFTER the MANDATORY SEARCH RULE block, BEFORE
+  // the systemPrompt ternary — do NOT touch buildSystemPrompt (blocks land
+  // upstream on finalSystemPrompt). Injected in BOTH loop variants.
+  if (params.archiveId) {
+    const archiveConfig = await getArchiveConfig(params.archiveId);
+    finalSystemPrompt += HARD_RULE_RAW_SOURCES;
+    const advisory = buildSchemaPromptBlock(archiveConfig);
+    if (advisory) {
+      finalSystemPrompt += advisory;
+    }
   }
 
   // Build the ReAct prompt (using template-resolved system prompt)
@@ -318,6 +418,30 @@ export async function runAgent(params: AgentRunParams): Promise<AgentRunResult> 
     ...history.slice(-10), // Last 10 messages for context
     pinnedUserMsg,
   ];
+
+  // Phase 190 (SKIL-04, D-12): explicit skillCall injection — ONE spotlighted
+  // user-level entry through buildToolResultEntry (never the system prompt,
+  // never a hand-rolled object — Pitfall 1: the "[Used tool: custom_" prefix
+  // contract keeps agentBudgetService.isToolResult / contextCompaction
+  // classification intact). Recorded in toolCalls (A6) so message metadata
+  // shows the invocation. Runs BEFORE the first streamLLM iteration.
+  if (params.skillCall) {
+    const toolName = `custom_${params.skillCall.slug}`;
+    context.push(
+      buildToolResultEntry(
+        toolName,
+        params.skillCall.params ?? {},
+        params.skillCall.compiledPrompt, // spotlight delimiters already wrapped in chat.ts
+        toolCalls, // repeat-guard sees no prior → clean first call
+      ),
+    );
+    toolCalls.push({
+      tool: toolName,
+      input: params.skillCall.params ?? {},
+      output: params.skillCall.compiledPrompt,
+      sources: [],
+    });
+  }
 
   // Agent budget tracker (replaces the old maxIterations cap).
   // The ReAct loop runs `while (true)` and exits via the budget watchdogs.
@@ -393,7 +517,10 @@ export async function runAgent(params: AgentRunParams): Promise<AgentRunResult> 
       // memory). Only runs once per request (first iteration) — the
       // injected block persists across ReAct iterations and is stripped+
       // recomposed fresh on the next user turn by the stripMemoryBlock helper.
-      if (iterations === 0 && context[0]?.role === "system") {
+      // WR-03 (Phase 187 code review): the guard shipped as `iterations === 0`
+      // but the loop increments BEFORE this check, so the hook never fired
+      // (dead since Phase 97). The first pass after the increment is 1.
+      if (iterations === 1 && context[0]?.role === "system") {
         try {
           context[0] = {
             ...context[0],
@@ -477,6 +604,13 @@ export async function runAgent(params: AgentRunParams): Promise<AgentRunResult> 
             archiveId: params.archiveId,
             locale: params.locale,
             metadata: toolInput,
+            // WR-02/D-13: thread the request's DLP masking decision so the
+            // prompt-skill executor masks LLM-supplied tool input (see
+            // createPromptSkillExecutor).
+            dlpMaskingEnabled: params.dlpMaskingEnabled,
+            // Phase 191 (D-04): chat-attached archives → rag_search union
+            // (additive-optional — absent stays byte-identical).
+            ...(params.attachedArchiveIds?.length ? { attachedArchiveIds: params.attachedArchiveIds } : {}),
           }),
           toolName
         );
@@ -736,6 +870,15 @@ export async function runAgentStreaming(
   if (user?.customInstructions) {
     finalSystemPrompt = `${user.customInstructions}\n\n${resolvedSystemPrompt}`;
   }
+  // 260917-mz6: same widget grounding prepend as runAgent (OUTERMOST — the
+  // widget prompt leads). Pre-baked string, no client interpolation.
+  // 260917-qoh: the reply-language directive rides INSIDE the widget prompt
+  // block (after the widget prompt) in this loop too — the JWT path (no
+  // widgetSystemPrompt) stays byte-identical.
+  if (params.widgetSystemPrompt) {
+    const directive = buildReplyLanguageDirective(params.locale);
+    finalSystemPrompt = `${params.widgetSystemPrompt}${directive ? `\n\n${directive}` : ""}\n\n${finalSystemPrompt}`;
+  }
 
   // Load constraints — workspace agent config takes priority over template.
   const template = await getTemplateForWorkspace(workspaceId);
@@ -751,21 +894,30 @@ export async function runAgentStreaming(
   const isCitationRequired = constraints.citationRequired === true;
   const isHybridSearchForced = constraints.hybridSearchForced === true;
 
-  const skills = await resolveSkillsForChat(workspaceId, chatId, enabledSkillNames);
+  const skills = await resolveSkillsForChat(workspaceId, chatId, enabledSkillNames, { userId: params.userId });
   const env = getEnv();
 
   // Resolve provider config: per-request override > workspace config > default > env fallback
+  // 260919 model-missing UX: streaming twin of the runAgent strict arm.
   let providerConfig: ProviderConfig;
-  const resolved = await resolveProviderConfig(params.providerId, params.model);
-  if (resolved && resolved.model) {
-    providerConfig = resolved;
-    // Workspace-level model override (only if no per-request override)
-    if (!params.model && agentConfig.model && agentConfig.model !== "default") {
-      providerConfig.model = agentConfig.model;
+  if (params.strictModelResolution) {
+    const { config, requestedModel } = await resolveProviderConfigStrict(params.providerId, params.model);
+    if (!config) {
+      throw new ModelNotAvailableError(requestedModel ?? params.model ?? "default");
     }
-    providerConfig.temperature = agentConfig.temperature ?? 0.7;
+    providerConfig = config;
   } else {
-    providerConfig = buildFallbackConfig(env, params.model || agentConfig.model || "gemma4:latest", agentConfig.temperature ?? 0.7);
+    const resolved = await resolveProviderConfig(params.providerId, params.model);
+    if (resolved && resolved.model) {
+      providerConfig = resolved;
+      // Workspace-level model override (only if no per-request override)
+      if (!params.model && agentConfig.model && agentConfig.model !== "default") {
+        providerConfig.model = agentConfig.model;
+      }
+      providerConfig.temperature = agentConfig.temperature ?? 0.7;
+    } else {
+      providerConfig = buildFallbackConfig(env, params.model || agentConfig.model || "gemma4:latest", agentConfig.temperature ?? 0.7);
+    }
   }
 
   if (isLocalLLMOnly && providerConfig.type !== "ollama") {
@@ -777,6 +929,19 @@ export async function runAgentStreaming(
   // Enforce hybridSearchForced constraint (streaming path)
   if (isHybridSearchForced && !ragContext) {
     finalSystemPrompt += "\n\nMANDATORY SEARCH RULE: You MUST call rag_search (or wiki_query if available) to retrieve documents from the knowledge base BEFORE answering any factual question. Do NOT answer from your training knowledge. If search returns no results, state that no information was found.";
+  }
+
+  // Phase 187 (WIKS-01/WIKS-02): archive-bound chats only — streaming twin of
+  // the runAgent injection (the streaming seam is separately load-bearing).
+  // Hard rule always (WIKS-02/D-06b); advisory schemaPrompt block only when
+  // present (WIKS-01/D-03). Before the systemPrompt ternary, in BOTH variants.
+  if (params.archiveId) {
+    const archiveConfig = await getArchiveConfig(params.archiveId);
+    finalSystemPrompt += HARD_RULE_RAW_SOURCES;
+    const advisory = buildSchemaPromptBlock(archiveConfig);
+    if (advisory) {
+      finalSystemPrompt += advisory;
+    }
   }
 
   const systemPrompt = ragContext
@@ -827,6 +992,28 @@ export async function runAgentStreaming(
     ...history.slice(-10),
     pinnedUserMsg,
   ];
+
+  // Phase 190 (SKIL-04, D-12): explicit skillCall injection — streaming twin
+  // of the runAgent block (same buildToolResultEntry entry, same toolCalls
+  // record). One spotlighted user-level entry BEFORE the first streamLLM;
+  // NEVER the system prompt (SC-4 five-point pin).
+  if (params.skillCall) {
+    const toolName = `custom_${params.skillCall.slug}`;
+    context.push(
+      buildToolResultEntry(
+        toolName,
+        params.skillCall.params ?? {},
+        params.skillCall.compiledPrompt, // spotlight delimiters already wrapped in chat.ts
+        toolCalls, // repeat-guard sees no prior → clean first call
+      ),
+    );
+    toolCalls.push({
+      tool: toolName,
+      input: params.skillCall.params ?? {},
+      output: params.skillCall.compiledPrompt,
+      sources: [],
+    });
+  }
 
   // Agent budget tracker (replaces the old maxIterations cap).
   const budget = new AgentBudgetTracker();
@@ -912,7 +1099,9 @@ export async function runAgentStreaming(
       // always-ON. Only runs once per request (first iteration) — the
       // injected block persists across ReAct iterations and is stripped+
       // recomposed fresh on the next user turn.
-      if (iterations === 0 && context[0]?.role === "system") {
+      // WR-03 (Phase 187 code review): same dead-guard fix as runAgent —
+      // `iterations === 0` never fired because the loop increments first.
+      if (iterations === 1 && context[0]?.role === "system") {
         try {
           context[0] = {
             ...context[0],
@@ -1058,6 +1247,13 @@ export async function runAgentStreaming(
             locale: params.locale,
             metadata: toolInput,
             sendEvent: onEvent,
+            // WR-02/D-13: thread the request's DLP masking decision so the
+            // prompt-skill executor masks LLM-supplied tool input (see
+            // createPromptSkillExecutor).
+            dlpMaskingEnabled: params.dlpMaskingEnabled,
+            // Phase 191 (D-04): chat-attached archives → rag_search union
+            // (additive-optional — absent stays byte-identical).
+            ...(params.attachedArchiveIds?.length ? { attachedArchiveIds: params.attachedArchiveIds } : {}),
           }),
           toolName
         );

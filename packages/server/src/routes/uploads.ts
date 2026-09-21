@@ -33,7 +33,17 @@ import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { authMiddleware } from "../middleware/auth";
 import { tenantContextMiddleware } from "../middleware/tenantContext";
-import { requirePermission } from "../middleware/rbac";
+// Phase 189 (D-13, Plan 04 gate swap): graded write middleware ENFORCED
+// (bypassAdmin:false — D-04 upload normalization, Pitfall 2) on the STAGE
+// routes (chain mount AFTER multer — CR-01: multer must parse the multipart
+// body before the gate reads req.body.workspaceId). The local
+// assertWorkspaceAccess helper (inline D-04 check) stays as the
+// admin-does-not-bypass + upload-toggle arm (documents.ts semantic variation);
+// the graded gate is the enforcement boundary. Draft-scoped routes (/assign,
+// /retry, /pending) resolve the graded decision IN-HANDLER via
+// shadowResolveWorkspaceWrite after the draft supplies the workspaceId —
+// same contract, now enforced (name kept historical).
+import { requirePermission, requireWorkspaceWriteAccess, resolveWorkspaceRole } from "../middleware/rbac";
 import { assertNonAdminUploadAllowed } from "../middleware/uploadGate";
 import { assertArchiveAccess } from "../middleware/archiveAccess";
 import prisma from "../utils/prisma";
@@ -41,15 +51,17 @@ import { getSetting } from "../services/systemConfigService";
 import { getStorageProvider } from "../services/storageProvider";
 import { getUniqueFilePath, isDraftStorageKey } from "../utils/fileUtils";
 import { isAdmin } from "../utils/auth";
-import { createUploadDraftSchema, createUploadDraftUrlSchema, assignDraftSchema, renameUploadSchema, sanitizeFileName } from "@simmetric-chat/shared";
+import { createUploadDraftSchema, createUploadDraftUrlSchema, assignDraftSchema, cancelDraftLegSchema, renameUploadSchema, sanitizeFileName } from "@simmetric-chat/shared";
 import {
   dispatchUploadDraft,
   dispatchKbLegUrl,
   enrichDraftWithLegStatus,
   tryRestoreDraftFromOcrCopy,
+  cancelOcrJob,
   RAG_TERMINAL,
   KB_TERMINAL,
 } from "../services/uploadDraftService";
+import { logEvent } from "../services/eventLogService";
 import { logger } from "../utils/logger";
 
 /**
@@ -187,6 +199,58 @@ async function assertWorkspaceAccess(
 }
 
 /**
+ * Phase 189 (D-11/D-13, additively-mounted contract): the graded write
+ * decision for DRAFT-SCOPED upload routes (/assign, /retry, /pending) —
+ * the workspaceId is only known after the draft row loads, so the graded
+ * middleware cannot be chain-mounted there. This helper mirrors
+ * requireWorkspaceWriteAccess({ bypassAdmin: false }) EXACTLY: resolve the
+ * role once, expose req.workspaceRole. Post-flip (Plan 04) the flag
+ * persisted "true", so this helper IS the enforcement gate for the
+ * draft-scoped routes: null → 403 "Access denied to this workspace"
+ * (D-04 byte shape — bypassAdmin:false), owner/editor → next, else 403.
+ * The name stays (historical); it is the enforced gate, not a shadow.
+ * Pitfall 9: no caching — per-request resolution IS the revocation contract.
+ */
+async function shadowResolveWorkspaceWrite(
+  req: Request,
+  res: Response,
+  workspaceId: string,
+): Promise<boolean> {
+  const flagEntry = await getSetting("WORKSPACE_ROLE_ENFORCEMENT");
+  const enforced = flagEntry.value === "true";
+  const role = await resolveWorkspaceRole(req.userId!, workspaceId, req.user);
+  (req as Request & { workspaceRole?: unknown }).workspaceRole = role;
+  if (!enforced) {
+    // 260919: debug level — shadow fires per-request; info flooded prod logs.
+    logger.debug("[workspace-access] shadow decision", {
+      userId: req.userId,
+      workspaceId,
+      role,
+      middleware: "uploads.draftScopedWrite",
+    });
+    return true; // shadow — never deny; the inline D-04 gate decides
+  }
+  if (role === null) {
+    // bypassAdmin:false normalization — D-04 byte shape (NOT 404).
+    res.status(403).json({ error: "Access denied to this workspace" });
+    return false;
+  }
+  if (isAdmin(req.user)) {
+    // Admin's underlying grant (skipAdminBypass re-resolution).
+    const underlying = await resolveWorkspaceRole(req.userId!, workspaceId, req.user, {
+      skipAdminBypass: true,
+    });
+    (req as Request & { workspaceRole?: unknown }).workspaceRole = underlying;
+    if (underlying === null) {
+      res.status(403).json({ error: "Access denied to this workspace" });
+      return false;
+    }
+    return true; // admin's editor/owner grant passes the editor gate
+  }
+  return role === "owner" || role === "editor";
+}
+
+/**
  * Response serializers for UploadDraft — D-06 / T-69-e filePath hardening.
  *
  * `filePath` is a server-absolute path to a staged file on disk; leaking it
@@ -241,6 +305,8 @@ function serializeDraftPending(d: {
   expiresAt: Date;
   ragStatus: string | null;
   kbStatus: string | null;
+  ragProgress?: number | null;
+  kbProgress?: number | null;
   ragEnabled: boolean;
   kbEnabled: boolean;
   assignedArchiveId: string | null;
@@ -254,6 +320,8 @@ function serializeDraftPending(d: {
     expiresAt: d.expiresAt,
     ragStatus: d.ragStatus,
     kbStatus: d.kbStatus,
+    ragProgress: d.ragProgress ?? null,
+    kbProgress: d.kbProgress ?? null,
     ragEnabled: d.ragEnabled,
     kbEnabled: d.kbEnabled,
     assignedArchiveId: d.assignedArchiveId,
@@ -263,9 +331,15 @@ function serializeDraftPending(d: {
 /**
  * POST /api/uploads — stage a draft.
  *
- * Multer writes the file to DRAFTS_DIR before the handler runs (same
- * middleware order as documents.ts:232). `unlinkUploadIfPresent(req)`
- * on every rejection path prevents orphan accumulation (T-69-07).
+ * 189-REVIEW CR-01: multer parses the multipart payload BEFORE the graded
+ * gate — `req.body.workspaceId` only exists after `upload.single("file")`
+ * runs (express.json() never gates multipart), so the previous order
+ * (gate → multer) 400'd EVERY staging request with "Workspace ID required"
+ * in both shadow and enforced mode. Chain order now mirrors
+ * documents.ts /upload: auth → tenant → permission → multer → graded gate
+ * → handler. `unlinkUploadIfPresent(req)` on every rejection path prevents
+ * orphan accumulation (T-69-07) — multer writing the tmp before the deny is
+ * the same trade-off documents.ts /upload already accepts.
  *
  * `expiresAt` uses a NaN-safe fallback to 30 days (Pitfall 7, C2): a
  * corrupted `upload_draft_retention_days` config value cannot produce
@@ -277,7 +351,12 @@ router.post(
   // Phase 185 (D-09): tenant slot — auth → tenant → permission.
   tenantContextMiddleware,
   requirePermission("document:write"),
+  // CR-01 fix: parse multipart FIRST (multer populates req.body.workspaceId),
+  // THEN the graded write gate (189 D-13, Plan 04 gate swap; ENFORCED
+  // bypassAdmin:false — D-04). The in-handler D-04 admin-does-not-bypass arm
+  // below stays as the allowMemberUploads toggle gate.
   upload.single("file"),
+  requireWorkspaceWriteAccess({ bypassAdmin: false }),
   async (req: Request, res: Response) => {
     try {
       // 71-02 D-17: URL stage body branch. When `req.body.sourceType === "url"`,
@@ -525,6 +604,14 @@ router.post(
         return;
       }
 
+      // Phase 189 (D-13, Plan 04): graded write decision — the flag persisted
+      // "true", so this call IS the enforcement gate (D-04 byte shape on deny).
+      // The in-handler assertWorkspaceAccess arm below stays for the
+      // admin-does-not-bypass upload semantic (D-04) + the upload toggle.
+      if (!(await shadowResolveWorkspaceWrite(req, res, draft.workspaceId))) {
+        return; // enforced-mode deny already written (D-04 byte shape)
+      }
+
       // IDOR scope (D-69-08 base): the owner may assign directly; any
       // other caller must pass the same workspace-access check as the
       // stage route. Phase 70 D-07: admin non-bypass workspace access via
@@ -712,6 +799,11 @@ router.post(
         return;
       }
 
+      // Phase 189 (D-13, Plan 04): graded write gate ENFORCED (mirror /assign).
+      if (!(await shadowResolveWorkspaceWrite(req, res, draft.workspaceId))) {
+        return; // enforced-mode deny already written (D-04 byte shape)
+      }
+
       // IDOR scope — mirror /assign exactly (D-69-08 base, admin non-bypass).
       if (draft.uploadedBy !== req.userId) {
         const workspace = await assertWorkspaceAccess(req, res, draft.workspaceId);
@@ -881,6 +973,11 @@ router.get(
         return;
       }
 
+      // Phase 189 (D-13, Plan 04): graded write gate ENFORCED (draft-panel route).
+      if (!(await shadowResolveWorkspaceWrite(req, res, workspaceId))) {
+        return; // enforced-mode deny already written (D-04 byte shape)
+      }
+
       // Phase 71-06 CR-01/CR-02: the previous `ragEnabled: false,
       // kbEnabled: false, parseStatus: "uploaded"` filter restricted the
       // result set to unassigned drafts only, hiding in-flight (assigned)
@@ -1030,6 +1127,115 @@ router.delete("/:id", authMiddleware, tenantContextMiddleware, requirePermission
       }
       // T-76-04 / D-06: NEVER include filePath.
       res.json({ message: "Draft deleted" });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
+    }
+  },
+);
+
+/**
+ * POST /api/uploads/:id/cancel — cancel the in-flight legs of a draft
+ * (quick 260918-p3h, D-3 + T-P3H-02).
+ *
+ * Access posture mirrors DELETE /:id (D-08): owner-only IDOR — 404 hides
+ * existence for missing / soft-deleted / cross-org / non-owner callers.
+ * NO assertWorkspaceAccess fallback (the pending panel is personal,
+ * owner-only). Permission: document:write (same PEND-01 rationale —
+ * document:delete is admin-only and would break the User role).
+ *
+ * Body: cancelDraftLegSchema — { leg?: "rag" | "kb" }; leg omitted cancels
+ * EVERY in-flight enabled leg. Cooperative: the endpoint only flips rows;
+ * the collector's status poll / the OCR pipeline's per-page check stop the
+ * actual work at the next unit-of-work boundary.
+ *
+ * For the KB leg the AIJ's result.ocrJobId drives a companion OcrJob flip
+ * (PENDING/PROCESSING → CANCELLED) so the running pipeline's between-page
+ * check trips. Response: { id, cancelled: string[] } — the legs actually
+ * cancelled.
+ */
+router.post("/:id/cancel", authMiddleware, tenantContextMiddleware, requirePermission("document:write"), async (req: Request, res: Response) => {
+    try {
+      const parsed = cancelDraftLegSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({
+          error: "Invalid request body",
+          details: parsed.error.flatten().fieldErrors,
+        });
+        return;
+      }
+      const targetLeg = parsed.data.leg;
+
+      const draft = await prisma.uploadDraft.findUnique({
+        where: { id: req.params.id as string },
+      });
+      // 404 hides existence for missing, soft-deleted, cross-org AND
+      // non-owner (same D-08 posture as DELETE /:id above).
+      if (!draft || draft.deletedAt !== null) {
+        res.status(404).json({ error: "Draft not found" });
+        return;
+      }
+      if (draft.organizationId !== req.organizationId) {
+        res.status(404).json({ error: "Draft not found" });
+        return;
+      }
+      if (draft.uploadedBy !== req.userId) {
+        res.status(404).json({ error: "Draft not found" });
+        return;
+      }
+
+      const cancelled: string[] = [];
+      const now = new Date();
+
+      // --- RAG leg ---
+      if ((!targetLeg || targetLeg === "rag") && draft.ragEnabled && draft.ragJobId) {
+        const doc = await prisma.document.findUnique({
+          where: { id: draft.ragJobId },
+          select: { status: true },
+        });
+        if (doc && (doc.status === "pending" || doc.status === "processing")) {
+          await prisma.document.update({
+            where: { id: draft.ragJobId },
+            data: { status: "cancelled", cancelledAt: now, statusMessage: "Cancelled by user" },
+          });
+          cancelled.push("rag");
+        }
+      }
+
+      // --- KB leg ---
+      if ((!targetLeg || targetLeg === "kb") && draft.kbEnabled && draft.kbJobId) {
+        const aij = await prisma.archiveImportJob.findUnique({
+          where: { id: draft.kbJobId },
+          select: { status: true, result: true },
+        });
+        if (aij && aij.status === "PROCESSING") {
+          await prisma.archiveImportJob.update({
+            where: { id: draft.kbJobId },
+            data: { status: "CANCELLED", cancelledAt: now, error: "Cancelled by user" },
+          });
+          cancelled.push("kb");
+          // Companion OcrJob flip: the OCR pipeline's between-page check
+          // reads the OcrJob status (not the AIJ), so a running page loop
+          // must see CANCELLED there. result.ocrJobId is seeded by
+          // dispatchKbLeg for OCR MIME drafts.
+          const ocrJobId = (aij.result as { ocrJobId?: string } | null)?.ocrJobId;
+          if (typeof ocrJobId === "string" && ocrJobId) {
+            await cancelOcrJob(ocrJobId, "Cancelled by user");
+          }
+        }
+      }
+
+      // T-P3H-06: who cancelled? — same logEvent discipline as DELETE.
+      await logEvent("upload_draft", draft.id, "upload_draft.leg_cancelled", req.userId!, {
+        legs: cancelled,
+      });
+
+      logger.info("[uploads] Draft legs cancelled", {
+        draftId: draft.id,
+        legs: cancelled,
+        userId: req.userId,
+      });
+      res.json({ id: draft.id, cancelled });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: message });

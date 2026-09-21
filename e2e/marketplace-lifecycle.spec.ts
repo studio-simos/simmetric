@@ -95,9 +95,15 @@ test.describe("MCP Marketplace Lifecycle", () => {
       } catch { /* best-effort cleanup */ }
     }
     if (catalogEntryId) {
+      // quick 260918-qts (D-1): best-effort per-entry delete via the new
+      // DELETE endpoint. 404 tolerates a re-run against an already-deleted
+      // entry; a 409 cannot happen here (the connection was deleted above).
       try {
-        // No delete endpoint; connection cleanup is sufficient
-      } catch { /* best-effort */ }
+        const res = await request.delete(`${SERVER_URL}/api/mcp-marketplace/${catalogEntryId}`, {
+          headers: { Authorization: `Bearer ${adminToken}` },
+        });
+        expect(res.ok() || res.status() === 404).toBeTruthy();
+      } catch { /* best-effort cleanup */ }
     }
     // Stop echo server
     try {

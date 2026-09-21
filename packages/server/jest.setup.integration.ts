@@ -9,6 +9,12 @@
 import { Client } from "pg";
 import { createHash } from "crypto";
 
+// The worker-DB drop+clone hook can exceed the 5s default under parallel
+// workers / prior-run connection churn — a mid-hook timeout leaves the OLD
+// worker DB in place and the suite's seeding then collides with stale rows
+// (dup usernames). Give the lifecycle hooks a 60s budget.
+jest.setTimeout(60000);
+
 const BASE_DB_URL =
   process.env.DATABASE_URL ||
   "postgresql://simmetricchat:simmetricchat@host.docker.internal:5432/simmetricchat";
@@ -47,6 +53,31 @@ export async function getTestPrisma() {
   jest.resetModules();
   const { default: prisma } = await import("./src/utils/prisma");
   return prisma;
+}
+
+export const TEST_DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * Grant a test-seeded user membership in the Default org so the Phase 189
+ * tenantContextMiddleware (fail-closed D-02) resolves an org for them.
+ * Without a live membership every tenant-scoped request 404s — production
+ * users always carry one (invitation/JIT landing), so suites that mint
+ * bare users must seed the membership to mirror that behavior.
+ */
+export async function ensureOrgMembership(
+  prisma: import("@prisma/client").PrismaClient,
+  userId: string,
+  organizationId: string = TEST_DEFAULT_ORG_ID,
+): Promise<void> {
+  await prisma.organizationMember.create({
+    data: {
+      id: `itest-member-${userId}`,
+      organizationId,
+      userId,
+      roleInOrg: "member",
+      joinedAt: new Date(),
+    },
+  });
 }
 
 /**

@@ -26,6 +26,8 @@ export interface AppSelectProps {
   name?: string
   id?: string
   className?: string
+  /** Pass-through for the wrapper div (test hooks like data-testid). */
+  "data-testid"?: string
 }
 
 export function AppSelect({
@@ -40,12 +42,13 @@ export function AppSelect({
   name,
   id: providedId,
   className,
+  "data-testid": testId,
 }: AppSelectProps) {
   const generatedId = React.useId()
   const id = providedId ?? generatedId
 
   return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
+    <div data-testid={testId} className={cn("flex flex-col gap-1.5", className)}>
       {label && <Label htmlFor={id}>{label}</Label>}
       <Select
         value={value}

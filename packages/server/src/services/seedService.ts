@@ -5,13 +5,17 @@
 
 import crypto from "node:crypto";
 import prisma from "../utils/prisma";
-import { PERMISSION_NAMES, DEFAULT_ROLES, DEFAULT_ROLE_MENU_SECTIONS } from "@simmetric-chat/shared";
+import { PERMISSION_NAMES, DEFAULT_ROLES, DEFAULT_ROLE_MENU_SECTIONS, DEFAULT_ORG_ID } from "@simmetric-chat/shared";
 import { logger } from "../utils/logger";
 import { getEnv } from "../config/env";
 import bcrypt from "bcryptjs";
 import { getSetting } from "./systemConfigService";
 import { hmacSha256 } from "./apiKeyService";
 import { ensureDefaultOrgMembership } from "./organizationService";
+import { getAllBuiltinSkills } from "../agent/skills";
+// Side-effect import: registers the 7 builtin skills into the in-memory
+// registry so getAllBuiltinSkills() returns them (routes/skills.ts idiom).
+import "../agent/builtinSkills";
 
 /**
  * Legacy hardcoded passwords that older deployments seeded onto the
@@ -579,7 +583,7 @@ export async function seedBootstrapAdmin(): Promise<void> {
   // existing account instead of creating a duplicate bootstrap admin that
   // locks the operator out of their real account.
   const existingAdmin = await prisma.user.findFirst({
-    where: { username: "admin", deletedAt: null },
+    where: { username: "admin" },
   });
   if (existingAdmin) {
     await prisma.userRole.create({
@@ -637,11 +641,102 @@ export async function seedBootstrapAdmin(): Promise<void> {
   );
 }
 
+/**
+ * Phase 190 (SKIL-01 D-16): seed the 7 builtin skill catalog rows. The rows are
+ * INERT for resolution — Plan 02 filters type "custom" out of the custom-skill
+ * merge, so these rows never shadow the in-memory registry (their execute stays
+ * in code). They exist so the PUT/DELETE builtin→400 arm has stable DB targets
+ * and the management UI can render the builtin catalog. Upsert keyed by the
+ * unique name, empty update arm (idempotent — values are code-owned constants).
+ */
+export async function seedBuiltinSkills(): Promise<void> {
+  const builtins = getAllBuiltinSkills();
+  for (const skill of builtins) {
+    await prisma.agentSkill.upsert({
+      where: { name: skill.name },
+      update: {},
+      create: {
+        name: skill.name,
+        slug: skill.name,
+        displayName: skill.displayName,
+        description: skill.description,
+        type: "builtin",
+        skillMode: "prompt",
+        isBuiltIn: true,
+        organizationId: DEFAULT_ORG_ID,
+      },
+    });
+  }
+  logger.info(`[seed] Seeded ${builtins.length} builtin skill catalog rows`);
+}
+
 /** Run all seed steps (idempotent, safe to call on every startup) */
 export async function seedDatabase(): Promise<void> {
   logger.info("[seed] Running auto-seed...");
   await seedPermissions();
   await seedRoles();
   await seedMenuSections();
+  // Phase 190 (SKIL-01 D-16): builtin skill catalog rows (inert for resolution).
+  await seedBuiltinSkills();
+  // Phase 192 (DLP twin discovery): builtin DLP pattern rows. The flattened
+  // init migration is DDL-only and prisma db seed never touched this table,
+  // so every FRESH install booted with an EMPTY dlp_patterns — the scan read
+  // returned [] (not an error, so the built-in fallback never fired) and the
+  // whole document scan silently no-opped. Upsert keyed (organizationId,
+  // name) — idempotent, never touches admin customs (isBuiltIn forced true
+  // and existing non-builtin rows with the same name are left alone).
+  await seedBuiltinDlpPatterns();
   logger.info("[seed] Auto-seed completed");
+}
+
+/**
+ * Phase 192 (Rule 1/2 fix — fresh-install DLP fail-open): seed the 10
+ * built-in pattern rows from the dlpFilter.DLP_PATTERNS const (the SAME
+ * source the DB-down fallback uses — regex .source + 'gu' flags, so DB rows
+ * and the degraded fallback can never drift). eu_phone seeds DISABLED
+ * (mirrors the 20260829215854_add_dlp_patterns_eu seed state — high
+ * false-positive risk, admin review required). Replacement is the migration
+ * default '[REDACTED]' — the deterministic scan tier routes classes from the
+ * pattern TYPE, not the replacement string. Upsert keyed (organizationId,
+ * name) with an empty update arm: existing rows (admin-toggled) are NEVER
+ * rewritten by re-seeding.
+ */
+export async function seedBuiltinDlpPatterns(): Promise<void> {
+  const { DLP_PATTERNS } = await import("./dlpFilter");
+  const DISPLAY_NAMES: Record<string, string> = {
+    email: "Email",
+    credit_card: "Credit Card",
+    api_key: "API Key",
+    ssn: "SSN",
+    aws_key: "AWS Key",
+    private_key: "Private Key",
+    it_vat_iva: "Partita IVA (IT)",
+    it_codice_fiscale: "Codice Fiscale (IT)",
+    iban: "IBAN",
+    eu_phone: "Phone (IT/EU) — high false positives",
+  };
+  let seeded = 0;
+  for (const pattern of DLP_PATTERNS) {
+    await prisma.dlpPattern.upsert({
+      where: {
+        organizationId_name: {
+          organizationId: DEFAULT_ORG_ID,
+          name: pattern.type,
+        },
+      },
+      update: {}, // idempotent — an admin's isEnabled toggle is never reset
+      create: {
+        organizationId: DEFAULT_ORG_ID,
+        name: pattern.type,
+        displayName: DISPLAY_NAMES[pattern.type] ?? pattern.type,
+        pattern: pattern.regex.source,
+        patternFlags: pattern.regex.flags.includes("u") ? pattern.regex.flags : pattern.regex.flags + "u",
+        replacement: "[REDACTED]",
+        isEnabled: pattern.enabled !== false,
+        isBuiltIn: true,
+      },
+    });
+    seeded += 1;
+  }
+  logger.info(`[seed] Seeded ${seeded} builtin DLP pattern rows (isBuiltIn, org-pinned)`);
 }

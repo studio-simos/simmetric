@@ -14,6 +14,11 @@ interface WidgetPreviewPaneProps {
   position?: string;
   locale?: string;
   autoOpenDelay?: string;
+  // 260917-mz6: bumped by WidgetForm after each successful save — the src
+  // gains &r=<key> so the iframe remounts and refetches the config (the
+  // loader iframe route is per-request fresh; PUT already cache-busts).
+  // 0 (never bumped) omits the param entirely (Pitfall 3: omission-not-empty).
+  reloadKey?: number;
 }
 
 /**
@@ -36,6 +41,7 @@ export default function WidgetPreviewPane({
   position,
   locale,
   autoOpenDelay,
+  reloadKey,
 }: WidgetPreviewPaneProps) {
   const { t } = useTranslation();
   const { getValue } = useSettingsHelpers();
@@ -64,8 +70,11 @@ export default function WidgetPreviewPane({
       autoOpenDelay && autoOpenDelay !== ""
         ? `&autoOpenDelay=${encodeURIComponent(autoOpenDelay)}`
         : "";
-    return `${widgetServiceUrl}/widget/${widgetId}?primaryColor=${color}&position=${pos}${loc}${delay}`;
-  }, [widgetId, primaryColor, position, locale, autoOpenDelay, widgetServiceUrl]);
+    // 260917-mz6: reload-on-save — a non-zero reloadKey appends &r=<key> so
+    // the iframe remounts with fresh config. 0/undefined omits the param.
+    const reload = reloadKey ? `&r=${encodeURIComponent(String(reloadKey))}` : "";
+    return `${widgetServiceUrl}/widget/${widgetId}?primaryColor=${color}&position=${pos}${loc}${delay}${reload}`;
+  }, [widgetId, primaryColor, position, locale, autoOpenDelay, reloadKey, widgetServiceUrl]);
 
   const [src, setSrc] = useState<string>(buildSrc);
 

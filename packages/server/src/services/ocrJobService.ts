@@ -196,6 +196,72 @@ export async function updateJobProgress(
       currentPage: data.currentPage,
     },
   });
+
+  // quick 260918-p3h (D-2): mirror the OCR page-loop progress onto the
+  // owning ArchiveImportJob so the KB leg surfaces a live % in the pending
+  // panel. Keyed on the server-side OcrJob id read from our own row
+  // (never client input) — same raw-SQL disposition class as the
+  // document_chunks unnest write (T-185-10 / T-P3H-05): reachable only from
+  // server-internal pipeline code with an id proven same-org upstream.
+  // Wrapped best-effort: standalone OCR jobs have no AIJ — a miss must
+  // never fail the progress write.
+  try {
+    await prisma.$executeRaw`
+      UPDATE "archive_import_jobs"
+      SET "progress" = ${clampedProgress}
+      WHERE "result"->>'ocrJobId' = ${jobId} AND "status" = 'PROCESSING'
+    `;
+  } catch (mirrorErr: unknown) {
+    const mirrorMessage = mirrorErr instanceof Error ? mirrorErr.message : String(mirrorErr);
+    logger.warn("[ocr] AIJ progress mirror failed (best-effort)", {
+      jobId,
+      error: mirrorMessage,
+    });
+  }
+}
+
+/**
+ * quick 260918-p3h (D-3): cooperative cancellation for a running OCR job.
+ * Loads the job; null when missing (404-shape at the route); returns the job
+ * UNCHANGED when already terminal (CANCELLED/COMPLETED/FAILED — idempotent);
+ * else flips to CANCELLED(+cancelledAt, error message). The running
+ * pipeline's between-page getOcrJobStatus check then trips and the pipeline
+ * stops WITHOUT the failOcrJob side effects (OcrJobCancelledError arm).
+ *
+ * @param jobId - Job ID to cancel
+ * @param message - Reason stored in the error column
+ * @returns The updated job, the unchanged job (already terminal), or null when not found
+ */
+export async function cancelOcrJob(jobId: string, message = "Cancelled by user") {
+  const job = await prisma.ocrJob.findUnique({ where: { id: jobId } });
+  if (!job) {
+    return null;
+  }
+  if (job.status === "CANCELLED" || job.status === "COMPLETED" || job.status === "FAILED") {
+    logger.info("[ocr] Cancel skipped: job already terminal", { jobId, status: job.status });
+    return job;
+  }
+  const updated = await prisma.ocrJob.update({
+    where: { id: jobId },
+    data: { status: "CANCELLED", cancelledAt: new Date(), error: message },
+  });
+  logger.info("[ocr] Job cancelled", { jobId });
+  return updated;
+}
+
+/**
+ * quick 260918-p3h (D-3): minimal status read for the OCR pipeline's
+ * cooperative cancellation check (select-status-only projection).
+ *
+ * @param jobId - Job ID to read
+ * @returns The OcrJobStatus value, or null when the job is missing
+ */
+export async function getOcrJobStatus(jobId: string): Promise<string | null> {
+  const job = await prisma.ocrJob.findUnique({
+    where: { id: jobId },
+    select: { status: true },
+  });
+  return job?.status ?? null;
 }
 
 /**

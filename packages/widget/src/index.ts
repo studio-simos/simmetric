@@ -38,6 +38,11 @@ export function createApp(): Express {
   // Route mounting
   // Serve Preact bundle (dist-widget/ created by Vite build in Plan 05)
   app.use("/widget", express.static(path.join(__dirname, "..", "dist-widget")));
+  // 188-03 (D-11): serve the TRACKED static branding assets (favicon.svg) —
+  // mounted BEFORE the loader routes so /widget/favicon.svg is served by the
+  // static middleware (exact filename wins) while /widget/:widgetId still
+  // falls through to the loader router (mount-order preserved, PATTERNS §10).
+  app.use("/widget", express.static(path.join(__dirname, "..", "public")));
   // Loader routes AFTER static serving so /widget/app.js is served by static middleware
   app.use("/widget", loaderRoutes);
   // D-02: express-rate-limit v8 RateLimitRequestHandler type-pinned — devDep resolved root cause, cast silences residual

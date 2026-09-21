@@ -93,6 +93,19 @@ describe("IngestResponseSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  // quick 260918-p3h: additive enum widening — the collector may finish a
+  // dispatch with "cancelled" when the document was cancelled mid-flight.
+  it("accepts `cancelled` status (quick 260918-p3h additive enum)", () => {
+    const result = IngestResponseSchema.safeParse({
+      documentId: validUUID,
+      status: "cancelled",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.status).toBe("cancelled");
+    }
+  });
+
   it("accepts ocrSkipped optional field (Test 7 / D-04)", () => {
     const result = IngestResponseSchema.safeParse({
       documentId: validUUID,
@@ -124,9 +137,12 @@ describe("IngestStatusCallbackSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("rejects status `processing` — enum only completed/failed (Test 6)", () => {
+  // quick 260918-p3h: enum widened additively — "processing" is now a legal
+  // callback status (the collector's progress notify); the pin flipped from
+  // reject to accept in this change.
+  it("accepts status `processing` — additive progress-notify arm (was Test 6 reject)", () => {
     const result = IngestStatusCallbackSchema.safeParse({ status: "processing" });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it("accepts failed status with error + ocrSkipped", () => {
@@ -136,6 +152,40 @@ describe("IngestStatusCallbackSchema", () => {
       ocrSkipped: "OCR skipped: no vision model",
     });
     expect(result.success).toBe(true);
+  });
+
+  // quick 260918-p3h: additive status arm + progress field on the
+  // collector→server callback contract.
+  it("accepts status `processing` WITHOUT progress (quick 260918-p3h additive arm)", () => {
+    const result = IngestStatusCallbackSchema.safeParse({ status: "processing" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.status).toBe("processing");
+    }
+  });
+
+  it("accepts optional progress 0-100 on any status (quick 260918-p3h)", () => {
+    expect(
+      IngestStatusCallbackSchema.safeParse({ status: "processing", progress: 42 }).success,
+    ).toBe(true);
+    expect(
+      IngestStatusCallbackSchema.safeParse({ status: "completed", progress: 100 }).success,
+    ).toBe(true);
+    expect(
+      IngestStatusCallbackSchema.safeParse({ status: "processing", progress: 0 }).success,
+    ).toBe(true);
+  });
+
+  it("rejects progress outside 0-100 or non-integer (quick 260918-p3h)", () => {
+    expect(
+      IngestStatusCallbackSchema.safeParse({ status: "processing", progress: 101 }).success,
+    ).toBe(false);
+    expect(
+      IngestStatusCallbackSchema.safeParse({ status: "processing", progress: -1 }).success,
+    ).toBe(false);
+    expect(
+      IngestStatusCallbackSchema.safeParse({ status: "processing", progress: 42.5 }).success,
+    ).toBe(false);
   });
 });
 

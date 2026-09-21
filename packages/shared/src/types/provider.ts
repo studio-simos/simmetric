@@ -66,6 +66,17 @@ export interface ProviderConfig {
    * per D-01 auto context-window-source decision.
    */
   contextWindowTokens?: number;
+  /**
+   * 260919 model-missing UX — additive optional. Set by
+   * `resolveProviderConfig` ONLY when the requested named model was missing
+   * on the provider and the resolver degraded to the first available
+   * non-OCR/non-embedding model (`degradeToAvailableModel`). Holds the
+   * originally requested model name. The strict chat resolver
+   * (`resolveProviderConfigStrict`) reads this to reject the degraded
+   * config and report the model as not-found instead of silently
+   * substituting it (widget/headless paths keep the degrade).
+   */
+  degradedFrom?: string;
 }
 
 /**

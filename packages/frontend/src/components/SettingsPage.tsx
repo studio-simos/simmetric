@@ -20,6 +20,8 @@ import SettingsLLM from "./SettingsLLM";
 import SettingsProviders from "./SettingsProviders";
 import SettingsVectorDB from "./SettingsVectorDB";
 import SettingsUsers from "./SettingsUsers";
+// Phase 189 (WSIS-03, D-19): per-workspace admin access panel.
+import SettingsWorkspaceAccess from "./SettingsWorkspaceAccess";
 import SettingsApiKeys from "./SettingsApiKeys";
 import SettingsRoles from "./SettingsRoles";
 import SettingsMcpConnections from "./SettingsMcpConnections";
@@ -44,6 +46,9 @@ import SettingsVapid from "./SettingsVapid";
 import { FiltersTab } from "./FiltersTab";
 import DlpAuditPanel from "./DlpAuditPanel";
 import SettingsDlpPatterns from "./SettingsDlpPatterns";
+// Phase 192 (DLP-05/DLP-06, UI-SPEC surface 4): eval-gate panel + legacy
+// backfill trigger — sibling card rendered DIRECTLY below SettingsGeneralDlp.
+import DlpDocumentScanPanel from "./DlpDocumentScanPanel";
 import { SettingsTemplates } from "./SettingsTemplates";
 import { SettingsSecurityNonAdminUpload } from "./SettingsSecurityNonAdminUpload";
 import SettingsPushNotifications from "./SettingsPushNotifications";
@@ -134,7 +139,9 @@ type SectionId =
   | "dlpPatterns"
   | "templates"
   | "chatData"
-  | "resetDb";
+  | "resetDb"
+  // Phase 189 (WSIS-03, D-19): admin per-workspace access panel (Security tab).
+  | "workspaceAccess";
 
 /** i18n label key for each sub-section id (matches `settings.subSections.*`). */
 const SECTION_LABEL: Record<SectionId, string> = {
@@ -164,6 +171,8 @@ const SECTION_LABEL: Record<SectionId, string> = {
   templates: "settings.subSections.templates",
   chatData: "settings.subSections.chatData",
   resetDb: "settings.subSections.resetDb",
+  // Phase 189 (WSIS-03, D-19): admin per-workspace access panel.
+  workspaceAccess: "settings.subSections.workspaceAccess",
 };
 
 /** DOM anchor id for a sub-section — used by SettingsMenu scroll-to-section. */
@@ -349,6 +358,14 @@ function GroupPage({ tab }: { tab: Tab }) {
           <SubSection id="users" label={t("settings.subSections.users")} show={has("admin:users")}>
             <SettingsUsers />
           </SubSection>
+          {/* Phase 189 (WSIS-03, D-19): per-workspace admin access panel.
+              189-REVIEW WR-05: gated to admin:settings ONLY — the server's
+              isAdmin authorization tier is admin:settings (utils/auth.ts:69),
+              so an admin:users-only admin was advertised a capability the
+              server 403s on every list/grant/revoke call. */}
+          <SubSection id="workspaceAccess" label={t("settings.subSections.workspaceAccess")} show={has("admin:settings")}>
+            <SettingsWorkspaceAccess />
+          </SubSection>
           {/* Phase 70 D-11 / SC-4: ALLOW_NON_ADMIN_UPLOAD admin toggle. */}
           <SubSection id="nonAdminUpload" label={t("settings.subSections.nonAdminUpload")} show={has("admin:settings")}>
             <SettingsSecurityNonAdminUpload />
@@ -399,6 +416,9 @@ function GroupPage({ tab }: { tab: Tab }) {
           </SubSection>
           <SubSection id="dlp" label={t("settings.subSections.dlp")} show={has("admin:settings")}>
             <SettingsGeneralDlp />
+            {/* Phase 192 (UI-SPEC surface 4): eval-gate + backfill panel sits
+                DIRECTLY below the chat-side DLP card, same sub-section. */}
+            <DlpDocumentScanPanel />
           </SubSection>
           <SubSection id="webSearch" label={t("settings.subSections.webSearch")} show={has("admin:settings")}>
             <SettingsWebSearch />
@@ -470,6 +490,10 @@ function SectionPage({ id }: { id: SectionId }) {
       return <SettingsRoles />;
     case "users":
       return <SettingsUsers />;
+    // Phase 189 (WSIS-03, D-19): detail-page arm of the per-workspace
+    // access panel (rail sub-menu voice open as its own page).
+    case "workspaceAccess":
+      return <SettingsWorkspaceAccess />;
     case "nonAdminUpload":
       return <SettingsSecurityNonAdminUpload />;
     case "notifications":
@@ -494,7 +518,14 @@ function SectionPage({ id }: { id: SectionId }) {
         />
       );
     case "dlp":
-      return <SettingsGeneralDlp />;
+      // Phase 192: the detail-page arm carries BOTH DLP cards in the same
+      // order as the group page (chat-side card, then the document-scan panel).
+      return (
+        <div className="space-y-8">
+          <SettingsGeneralDlp />
+          <DlpDocumentScanPanel />
+        </div>
+      );
     case "webSearch":
       return <SettingsWebSearch />;
     case "agentWatchdog":
@@ -626,6 +657,10 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
         return [
           { id: "roles", show: has("admin:roles") },
           { id: "users", show: has("admin:users") },
+          // Phase 189 (WSIS-03, D-19): per-workspace access panel — gated to
+          // admin:settings ONLY (WR-05: matches the server authorization tier,
+          // isAdmin = admin:settings in utils/auth.ts:69).
+          { id: "workspaceAccess", show: has("admin:settings") },
           // Phase 70 D-11 / Pitfall 6: non-admin upload toggle visible to
           // a settings-only admin. The Security tab itself is visible
           // because SETTINGS_TAB_PERMISSIONS.security includes admin:settings.
@@ -653,6 +688,9 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
           { id: "vapid", show: has("admin:settings") },
           { id: "filters", show: has("filters:manage") },
           { id: "dlpAudit", show: has("admin:settings") },
+          // Quick 260910-dzh — menu/page parity: GroupPage + SectionPage
+          // render dlpPatterns; the rail must carry the same voice.
+          { id: "dlpPatterns", show: has("admin:settings") },
           { id: "templates", show: has("admin:settings") },
           { id: "chatData", show: true },
           { id: "resetDb", show: has("admin:settings") },

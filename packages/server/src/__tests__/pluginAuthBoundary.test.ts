@@ -102,8 +102,18 @@ jest.mock("../services/authService", () => {
   return {
     ...actual,
     generateToken: jest.fn((userId: string) => `mock-jwt-for-${userId}`),
+    // Phase 193 (LDAP-03, RESEARCH Pitfall 4 option b): the ctx delegate
+    // require()s this export — spy it so the delegate-forwarding test can
+    // pin the arg passthrough while the spread-requireActual above keeps
+    // authMiddleware's real dependencies working.
+    invalidateAuthCache: jest.fn(() => Promise.resolve()),
   };
 });
+jest.mock("../services/personalWorkspaceService", () => ({
+  // Phase 193 (LDAP-03, RESEARCH Open Q1 option b): the ctx delegate
+  // require()s this export — spy it to pin the 3-arg verbatim forward.
+  createPersonalWorkspace: jest.fn(() => Promise.resolve({ id: "ws-1" })),
+}));
 jest.mock("../services/encryptionService", () => {
   const encode = (plaintext: string) => `iv:authTag:${Buffer.from(plaintext).toString("hex")}`;
   return {
@@ -367,5 +377,57 @@ describe("plugin auth boundary — community CI skip path (D-01, D-08, Pitfall 7
       expect(stubEnterprisePlugin.apiVersion).toBe(1);
       expect(typeof stubEnterprisePlugin.register).toBe("function");
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 193 (LDAP-03 — RESEARCH Open Q1/Q2 option b, VALIDATION row 193-02-1
+// "extend" arm): the two NEW PluginContext delegates added this phase.
+//
+// Proves both ctx methods lazy-require their community service and forward
+// args verbatim — the additive-only contract amendment (no apiVersion bump;
+// enterpriseLoader's contract check is shape-tolerant). The delegates run via
+// the same buildPluginContext used by loadEnterprisePlugin, so the real ctx
+// factory is exercised, not a hand-rolled shim.
+//
+// The authService mock above uses the spread-requireActual pattern (the
+// file's existing idiom) so mocking authService does NOT break the existing
+// 401-boundary describes — authMiddleware keeps its real dependencies.
+// ─────────────────────────────────────────────────────────────────────────────
+import {
+  buildPluginContext,
+} from "../services/pluginLoaderCore";
+import type { Express } from "express";
+
+describe("both ctx delegates lazy-require their community service and forward args verbatim", () => {
+  it("invalidateAuthCache forwards userId verbatim to authService.invalidateAuthCache", async () => {
+    const { invalidateAuthCache } = require("../services/authService") as {
+      invalidateAuthCache: jest.Mock;
+    };
+    const registries = { schedulers: new Map(), shutdownCallbacks: [] };
+    const ctx = buildPluginContext(express() as Express, registries);
+
+    await ctx.invalidateAuthCache("u1");
+
+    expect(invalidateAuthCache).toHaveBeenCalledTimes(1);
+    expect(invalidateAuthCache).toHaveBeenCalledWith("u1");
+  });
+
+  it("provisionPersonalWorkspace forwards the three args verbatim, in order, to createPersonalWorkspace", async () => {
+    const { createPersonalWorkspace } = require("../services/personalWorkspaceService") as {
+      createPersonalWorkspace: jest.Mock;
+    };
+    const registries = { schedulers: new Map(), shutdownCallbacks: [] };
+    const ctx = buildPluginContext(express() as Express, registries);
+
+    await ctx.provisionPersonalWorkspace("u1", "ws", "org1");
+
+    expect(createPersonalWorkspace).toHaveBeenCalledTimes(1);
+    expect(createPersonalWorkspace).toHaveBeenCalledWith("u1", "ws", "org1");
+    // Verbatim order pin (the plan's contract — args arrive in the exact
+    // (userId, workspaceName, organizationId) sequence):
+    expect(createPersonalWorkspace.mock.calls[0][0]).toBe("u1");
+    expect(createPersonalWorkspace.mock.calls[0][1]).toBe("ws");
+    expect(createPersonalWorkspace.mock.calls[0][2]).toBe("org1");
   });
 });

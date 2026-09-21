@@ -109,7 +109,8 @@
     "dateView": {
       "dndDisabled": "Arrastar e soltar desativado na visualização por data"
     },
-    "uploads": "Uploads"
+    "uploads": "Uploads",
+    "skills": "Skills"
   },
   "login": {
     "signIn": "Entrar",
@@ -139,6 +140,9 @@
       "success": "Senha atualizada com sucesso",
       "mismatch": "As senhas não coincidem",
       "signOut": "Sair"
+    },
+    "ldap": {
+      "hint": "Entre com as suas credenciais do diretório corporativo."
     }
   },
   "chat": {
@@ -186,6 +190,15 @@
       "error": "Não foi possível atualizar o arquivo vinculado. Tente novamente.",
       "badge": "Arquivo"
     },
+    "attach": {
+      "menuItem": "Conhecimento",
+      "back": "Voltar",
+      "pickerTitle": "Anexar conhecimento de arquivo",
+      "empty": "Nenhum arquivo disponível para anexar.",
+      "maxReached": "Podes anexar até {{max}} arquivos.",
+      "remove": "Remover arquivo anexado",
+      "pageCount": "{{count}} páginas"
+    },
     "selectWorkspace": "Selecione um workspace para iniciar a conversa",
     "openSidebar": "Abrir lista de conversas",
     "closeSidebar": "Fechar lista de conversas",
@@ -228,6 +241,14 @@
     },
     "modelCommand": {
       "notFound": "Modelo não encontrado"
+    },
+    "skillsPalette": {
+      "empty": "Nenhuma skill correspondente",
+      "hint": "↑↓ para navegar, Enter para inserir, Esc para fechar",
+      "manageLink": "Gerenciar skills",
+      "paramError": "Não foi possível ler os parâmetros de /{{slug}}. Tente /{{slug}} chave=valor.",
+      "customGroup": "Skills",
+      "builtinGroup": "Integradas (ferramentas LLM — não comandos slash)"
     },
     "capabilities": {
       "localOnly": "Somente local",
@@ -283,7 +304,7 @@
       "loadingChats": "Carregando conversas..."
     },
     "renameChatTitle": "Renomear conversa",
-    "compareModelsTitle": "Comparar modelos",
+    "compareModelsTitle": "Comparar",
     "noSourcesAvailable": "Nenhuma fonte disponível",
     "sendLabel": "Enviar mensagem",
     "emptyState": {
@@ -325,7 +346,7 @@
     "input": {
       "label": "Campo de mensagem",
       "hint": "Pressione Enter para enviar, Shift+Enter para nova linha",
-      "attach": "Anexar um documento",
+      "attach": "Anexar",
       "moreActions": "Mais ações",
       "model": "Selecionar modelo",
       "placeholder": {
@@ -350,9 +371,10 @@
     "attachedDocument": "Documento anexado",
     "aiDisclaimer": "As respostas são geradas por inteligência artificial",
     "dlp": {
-      "showTexts": "Mostrar textos DLP",
-      "hideTexts": "Ocultar textos DLP"
-    }
+      "showTexts": "Mostrar DLP",
+      "hideTexts": "Ocultar DLP"
+    },
+    "modelUnavailable": "O modelo \"{{model}}\" não está disponível. Escolha um modelo diferente."
   },
   "eventLog": {
     "title": "Log de eventos",
@@ -416,7 +438,31 @@
       "localization": "Localização",
       "questions": "Perguntas",
       "credits": "Créditos",
-      "leads": "Leads"
+      "leads": "Leads",
+      "list": "Widgets"
+    },
+    "archive": {
+      "tabLabel": "Arquivo de workspaces",
+      "statTotalWidgets": "Total de widgets",
+      "statTotalWorkspaces": "Workspaces vinculados",
+      "statTotalProjects": "Projetos",
+      "statOrphans": "Widgets órfãos",
+      "filterProject": "Filtrar por projeto",
+      "filterAllProjects": "Todos os projetos",
+      "filterWidget": "Filtrar por widget",
+      "filterAllWidgets": "Todos os widgets",
+      "viewGrouped": "Agrupado",
+      "viewFlat": "Plano",
+      "activeBadge": "Ativo",
+      "inactiveBadge": "Inativo",
+      "emptyState": "Nenhum vínculo widget-workspace corresponde aos filtros atuais.",
+      "exportCsv": "Exportar CSV",
+      "exportError": "Falha ao exportar CSV",
+      "colProject": "Projeto",
+      "colWidget": "Widget",
+      "colStatus": "Status",
+      "colWorkspace": "Workspace",
+      "attribution": "Simmetric Chat por"
     },
     "localization": {
       "fallbackLocaleLabel": "Idioma padrão",
@@ -568,7 +614,8 @@
       "agentWatchdog": "Watchdog do agente",
       "reranker": "Reranker RAG",
       "vapid": "Web Push (VAPID)",
-      "dlpPatterns": "Padrões DLP"
+      "dlpPatterns": "Padrões DLP",
+      "workspaceAccess": "Acesso aos workspaces"
     },
     "appearance": {
       "themeTitle": "Tema",
@@ -1111,7 +1158,11 @@
       "limitsSection": "Limites",
       "sessionLimitPerDay": "Mensagens por dia",
       "sessionLimitPerDayPlaceholder": "ex., 50",
-      "sessionLimitPerDayHint": "Máximo de mensagens que cada visitante pode enviar por dia. Deixe vazio para o padrão global (5 por dia).",
+      "sessionLimitPerDayHint": "Máximo de mensagens que cada visitante pode enviar por dia. Deixe vazio para o padrão global (5 por dia). Marque 'Sem limite' para remover o teto.",
+      "rateLimitPerMinute": "Solicitações por minuto",
+      "rateLimitPerMinutePlaceholder": "ex., 60",
+      "rateLimitPerMinuteHint": "Número máximo de solicitações de chat por widget por minuto. Deixe vazio para o padrão global (30 por minuto). Marque 'Sem limite' para remover o teto.",
+      "unlimited": "Sem limite",
       "exitIntentCooldownPlaceholder": "ex., 30",
       "leadCaptureSection": "Captura de lead",
       "leadCaptureToggle": "Ativar captura de lead",
@@ -1132,7 +1183,32 @@
       "columnDate": "Data",
       "downloadCsv": "Baixar CSV",
       "viewTranscript": "Ver transcrição",
-      "hideTranscript": "Ocultar transcrição"
+      "hideTranscript": "Ocultar transcrição",
+      "chatBehaviorSection": "Comportamento do chat",
+      "systemPromptLabel": "Prompt do sistema",
+      "systemPromptHint": "Cada widget tem o seu próprio prompt. Deixe vazio para manter a alternativa integrada que fundamenta cada resposta na base de conhecimento deste widget. Um prompt personalizado substitui-o.",
+      "systemPromptPlaceholder": "Instruções personalizadas para o assistente deste widget…",
+      "leadTimingLabel": "Pedir o e-mail",
+      "leadTimingStart": "Quando o chat abre",
+      "leadTimingEnd": "Quando o limite diário é atingido",
+      "leadTimingTimeout": "Após um atraso",
+      "leadTimeoutSecondsLabel": "Espera antes de pedir (segundos)",
+      "leadTimeoutSecondsHint": "Quanto esperar após a primeira mensagem do visitante antes de mostrar o cartão de e-mail (5–86400).",
+      "contactOptionsSection": "Opções de contacto no limite diário",
+      "contactFormUrlLabel": "URL do formulário de contacto",
+      "contactFormUrlPlaceholder": "https://exemplo.pt/contacto",
+      "contactBookingUrlLabel": "URL de marcação",
+      "contactBookingUrlPlaceholder": "https://cal.exemplo.pt/owner",
+      "contactEmailLabel": "Endereço de e-mail",
+      "contactEmailPlaceholder": "owner@exemplo.pt",
+      "contactCustomUrlLabel": "URL da ligação personalizada",
+      "contactCustomUrlPlaceholder": "https://exemplo.pt/vendas",
+      "contactCustomLabelLabel": "Etiqueta da ligação personalizada",
+      "contactCustomLabelPlaceholder": "Falar com as vendas",
+      "privacyUrlLabel": "URL da política de privacidade",
+      "privacyUrlPlaceholder": "https://example.com/privacy",
+      "privacyUrlHint": "Mostrado aos visitantes como um link ao lado da caixa de consentimento para compartilhar o e-mail. Abre em uma nova aba. Deixe vazio para mostrar a caixa sem link.",
+      "leadsPrivacyConsent": "Consentimento de privacidade"
     },
     "maintenance": {
       "title": "Manutenção do sistema",
@@ -1464,7 +1540,100 @@
       "blocked": "As notificações foram bloqueadas pelo navegador. Altere as configurações do site para reativá-las.",
       "permissionHint": "Clicar em \"Ativar notificações\" solicitará permissão ao navegador."
     },
-    "back": "Voltar"
+    "back": "Voltar",
+    "workspaceAccess": {
+      "title": "Acesso aos workspaces",
+      "grantTitle": "Acesso a {{name}}",
+      "userSearch": "Pesquisar usuários...",
+      "role": "Papel",
+      "roleOwner": "Proprietário",
+      "roleEditor": "Editor",
+      "roleViewer": "Visualizador",
+      "grant": "Conceder",
+      "grantBulk": "Concessão em massa",
+      "revoke": "Revogar",
+      "grantedList": "Permissões de acesso atuais",
+      "grantedAt": "Concedido em",
+      "grantedBy": "Concedido por",
+      "noAccess": "Nenhuma permissão de acesso para este workspace.",
+      "bulkPartial": "Concessão concluída com falhas para: {{failed}}",
+      "success": "Acesso atualizado",
+      "revokeSuccess": "Acesso revogado",
+      "error": "Falha ao atualizar o acesso",
+      "loadError": "Não foi possível carregar o acesso aos workspaces. Verifique a conexão e tente novamente.",
+      "retry": "Tentar novamente"
+    },
+    "sso": {
+      "ldap": {
+        "testPending": "A testar…",
+        "testFailed": "O teste de conexão falhou. Verifique o URL do servidor, a acessibilidade de rede a partir do servidor e a confiança do certificado, e tente novamente.",
+        "saveFailed": "Não foi possível guardar a configuração LDAP. Reveja os campos destacados e tente novamente.",
+        "mapEmptyTitle": "Sem mapeamentos de grupo",
+        "mapEmptyBody": "Os utilizadores LDAP recebem o papel predefinido ao entrar. Adicione um mapeamento para conceder papéis da plataforma por pertença ao grupo.",
+        "mapAdminWarning": "Este grupo está mapeado para um papel de administrador. Cada membro obterá acesso de administrador no próximo início de sessão LDAP.",
+        "removeMapping": "Remover mapeamento",
+        "exclusiveHint": "Ativar o LDAP desativa o fornecedor SAML/OIDC atualmente configurado — um fornecedor ativo por instalação.",
+        "diag": {
+          "reachable": "Servidor alcançável",
+          "bindOk": "Ligação de serviço bem-sucedida",
+          "userFound": "Utilizador de teste encontrado",
+          "groupsFound": "Pesquisa de grupos configurada"
+        },
+        "url": "URL do servidor LDAP",
+        "bindDn": "Bind DN (conta de serviço)",
+        "bindPassword": "Palavra-passe de ligação",
+        "bindPasswordViaEnv": "configurado via variável de ambiente",
+        "bindPasswordReadOnly": "LDAP_BIND_PASSWORD está definida via variável de ambiente e não pode ser alterada a partir da interface. Para a alterar, atualize o ficheiro .env do servidor.",
+        "searchBase": "Base de pesquisa",
+        "searchFilter": "Filtro de pesquisa de utilizadores",
+        "groupSearchBase": "Base de pesquisa de grupos",
+        "groupSearchFilter": "Filtro de pesquisa de grupos",
+        "useTls": "Usar StartTLS",
+        "tlsHint": "O StartTLS atualiza uma ligação ldap:// em texto claro para TLS. Desative-o apenas para URLs ldaps://, que já são cifrados.",
+        "acceptCert": "Certificado CA personalizado (PEM, opcional)",
+        "fallbackToLocal": "Reverter para o início de sessão local quando o LDAP estiver inacessível",
+        "fallbackHint": "Quando ativo, se o LDAP estiver inacessível o utilizador pode entrar com a sua conta local em vez de ver um erro.",
+        "mapTitle": "Mapeamento grupo → papel",
+        "mapDescription": "Os membros de um grupo LDAP mapeado recebem o papel da plataforma no próximo início de sessão. As linhas são aplicadas ao guardar.",
+        "addMapping": "Adicionar mapeamento",
+        "groupDn": "DN do grupo",
+        "duplicateMapping": "Este par de grupo e papel já está em fase de gravação."
+      }
+    },
+    "dlpDocs": {
+      "title": "Verificação DLP de documentos",
+      "description": "Execute a avaliação de qualidade de deteção sobre o corpus de exemplo de PII italiano e, em seguida, voltar a verificar documentos antigos para que nenhum vetor não mascarado permaneça pesquisável.",
+      "eval": {
+        "run": "Executar avaliação",
+        "running": "A executar avaliação…",
+        "empty": {
+          "heading": "Ainda sem avaliação",
+          "body": "Execute a avaliação sobre o corpus de exemplo de PII italiano para verificar a qualidade de deteção antes de ativar a verificação de documentos."
+        },
+        "passed": "Limiar aprovado — {{fpRate}} falsos positivos em {{total}} verificações. Pode ativar.",
+        "failed": "Limiar não aprovado — a taxa de falsos positivos {{fpRate}} excede o limiar. Reveja os padrões antes de ativar.",
+        "lastRun": "Última execução {{date}}",
+        "documentedOnly": "documentado, não bloqueia",
+        "error": "A avaliação falhou — corrija o problema e execute-a novamente.",
+        "retry": "Tentar novamente",
+        "perClassTitle": "Resultados por classe",
+        "detected": "Detetados: {{count}}",
+        "expected": "Esperados: {{count}}",
+        "falsePositives": "Falsos positivos: {{count}}"
+      },
+      "backfill": {
+        "run": "Verificar documentos antigos",
+        "running": "A verificar documentos antigos…",
+        "confirmTitle": "Verificar documentos antigos?",
+        "confirmBody": "{{count}} documentos serão verificados novamente e o texto pesquisável será substituído por texto mascarado. Os originais permanecem encriptados. A operação corre em segundo plano e pode ser repetida com segurança.",
+        "confirmRun": "Verificar {{count}} documentos",
+        "cancel": "Agora não",
+        "result": "{{scanned}} verificados · {{masked}} mascarados · {{failed}} falhados",
+        "empty": "Nenhum documento antigo precisa de nova verificação.",
+        "error": "A nova verificação terminou com {{failed}} falhas. Execute novamente para repetir apenas os documentos pendentes.",
+        "runError": "Não foi possível iniciar a nova verificação."
+      }
+    }
   },
   "upgrade": {
     "title": "Recurso Enterprise",
@@ -1587,7 +1756,35 @@
       "deleteError": "Falha ao excluir os workspaces selecionados.",
       "selectAll": "Selecionar tudo"
     },
-    "selectRow": "Selecionar workspace {{name}}"
+    "selectRow": "Selecionar workspace {{name}}",
+    "access": {
+      "button": "Acesso",
+      "title": "Acesso a {{name}}",
+      "description": "Os utilizadores com acesso podem abrir este espaço de trabalho e carregar documentos mesmo que não sejam proprietários do projeto.",
+      "selectUser": "Selecionar utilizador...",
+      "grantButton": "Conceder",
+      "granted": "Acesso concedido",
+      "grantError": "Falha ao conceder acesso",
+      "revoked": "Acesso revogado",
+      "revokeError": "Falha ao revogar acesso",
+      "revoke": "Revogar acesso",
+      "empty": "Sem concessões de acesso adicionais para este espaço de trabalho.",
+      "listLabel": "Concessões de acesso atuais",
+      "roleOwner": "Proprietário",
+      "roleEditor": "Editor",
+      "roleViewer": "Visualizador",
+      "role": "Papel",
+      "usersLoadError": "Não foi possível carregar os usuários.",
+      "retryUsers": "Recarregar usuários"
+    },
+    "dlp": {
+      "scanToggle": "Verificação DLP de documentos",
+      "scanDescription": "Verifica documentos em busca de dados pessoais após o carregamento e mascara-os antes de os modelos de IA lerem.",
+      "gateBlocked": "Execute a avaliação DLP em Definições → Avançado antes de ativar.",
+      "enabled": "Verificação DLP de documentos ativada",
+      "disabled": "Verificação DLP de documentos desativada",
+      "saveError": "Não foi possível guardar a definição de verificação DLP."
+    }
   },
   "workspaceCreate": {
     "title": "Criar workspace",
@@ -1677,7 +1874,8 @@
     "errorBoundaryDescription": "Ocorreu um erro inesperado ao renderizar a página. Tente recarregar.",
     "errorDetails": "Detalhes do erro",
     "reloadPage": "Recarregar página",
-    "back": "Voltar"
+    "back": "Voltar",
+    "uninstall": "Desinstalar"
   },
   "export": {
     "buttonLabel": "Exportar",
@@ -1833,6 +2031,21 @@
       "dialogTitle": "Copiar {{count}} documentos para o arquivo",
       "success": "Copiando {{count}} documentos para {{archiveName}}.",
       "forbidden": "Acesso negado a um ou mais documentos selecionados."
+    },
+    "cancel": "Cancelar",
+    "cancelling": "Cancelando…",
+    "cancelFailed": "Não foi possível cancelar: {{error}}",
+    "cancelled": "Ingestão cancelada",
+    "dlp": {
+      "scanPending": "Verificação DLP em fila",
+      "scanning": "Verificação DLP em curso…",
+      "clean": "Verificado por DLP",
+      "entities": "DLP · {{count}}",
+      "failed": "Falha na verificação DLP",
+      "maskedNotice": "Os dados pessoais neste documento estão mascarados — marcadores como [PERSON_1] substituem os valores sensíveis.",
+      "show": "Mostrar dados não mascarados",
+      "hide": "Ocultar dados sensíveis",
+      "unmaskError": "Não foi possível carregar o texto não mascarado."
     }
   },
   "workspaces": {
@@ -1861,7 +2074,71 @@
     "document_temp_process": {
       "displayName": "Processamento temporário de documento",
       "description": "Processe um arquivo enviado durante o chat. O arquivo será embutido temporariamente e analisado; então você pode decidir se salvá-lo permanentemente no workspace."
-    }
+    },
+    "page": {
+      "heading": "Skills",
+      "subtitle": "Crie modelos de prompt reutilizáveis e invoque-os no chat com /slug.",
+      "create": "Criar skill",
+      "limit": "{{used}} de {{limit}} skills personalizadas usadas",
+      "limitUnlimited": "Skills personalizadas ilimitadas",
+      "limitReached": "Você atingiu o limite do seu plano de {{limit}} skills personalizadas. Faça upgrade para Enterprise para skills ilimitadas."
+    },
+    "form": {
+      "save": "Salvar skill",
+      "saving": "Salvando...",
+      "slugInvalid": "Use apenas letras minúsculas, números e hífens (ex. translate-text).",
+      "slugReserved": "Este slug está reservado por um comando integrado. Escolha outro.",
+      "slugDuplicate": "Já existe uma skill com este slug.",
+      "jsonError": "JSON inválido — corrija o esquema para salvar.",
+      "test": "Testar skill",
+      "testPreview": "Pré-visualização do prompt compilado",
+      "testNeedsSave": "Salve a skill para habilitar os testes.",
+      "modePrompt": "Prompt",
+      "modeWebhook": "Webhook",
+      "modeWebhookSoon": "Skills de webhook em breve",
+      "scopePersonal": "Pessoal",
+      "scopeWorkspace": "Workspace",
+      "scopeGlobal": "Global (admin)",
+      "scopeGlobalAdminOnly": "Apenas administradores podem criar skills globais",
+      "workspace": "Workspace",
+      "selectWorkspace": "Selecione o workspace...",
+      "name": "Nome",
+      "template": "Modelo",
+      "defaultParams": "Parâmetros padrão",
+      "paramKey": "Chave",
+      "paramValue": "Valor",
+      "addParam": "Adicionar parâmetro",
+      "removeParam": "Remover",
+      "inputSchema": "Esquema de entrada",
+      "inputSchemaAuto": "Geração automática",
+      "inputSchemaManual": "JSON manual",
+      "enabled": "Ativada",
+      "createTitle": "Criar skill",
+      "editTitle": "Editar skill",
+      "mode": "Modo",
+      "scope": "Escopo"
+    },
+    "error": {
+      "limit402": "Você atingiu o limite de skills personalizadas do seu plano.",
+      "save": "Falha ao salvar a skill",
+      "delete": "Falha ao excluir a skill"
+    },
+    "success": {
+      "created": "Skill criada",
+      "updated": "Skill atualizada",
+      "deleted": "Skill excluída"
+    },
+    "empty": {
+      "heading": "Nenhuma skill personalizada ainda",
+      "body": "Crie uma skill baseada em modelo de prompt e depois invoque-a no chat com /slug."
+    },
+    "delete": {
+      "title": "Excluir a skill /{{slug}}?",
+      "body": "As mensagens que a invocam não serão mais resolvidas no chat imediatamente. Isso não pode ser desfeito."
+    },
+    "builtinSection": "Skills integradas",
+    "builtinBadge": "Integrada",
+    "customSection": "Skills personalizadas"
   },
   "roles": {
     "admin": {
@@ -1936,7 +2213,10 @@
       "installFailed": "Falha ao instalar {{name}}. Tente novamente.",
       "uninstallSuccess": "{{name}} desinstalado",
       "uninstallFailed": "Falha ao desinstalar {{name}}. Tente novamente.",
-      "alreadyInstalled": "{{name}} já está instalado neste workspace"
+      "alreadyInstalled": "{{name}} já está instalado neste workspace",
+      "deleteSuccess": "{{name}} excluído do marketplace",
+      "deleteFailed": "Falha ao excluir {{name}}. Tente novamente.",
+      "deleteInUse": "{{name}} ainda está instalado em um ou mais workspaces — desinstale-o desses workspaces primeiro."
     },
     "empty": {
       "noResults": "Nenhum servidor encontrado",
@@ -1944,6 +2224,11 @@
       "notFound": "Entrada do catálogo não encontrada",
       "loading": "Carregando marketplace...",
       "error": "Falha ao carregar o marketplace. Verifique sua conexão e tente novamente."
+    },
+    "delete": {
+      "title": "Excluir {{name}}?",
+      "body": "Isso remove permanentemente o servidor do catálogo do marketplace. Ele não pode ser excluído enquanto estiver instalado em um workspace.",
+      "confirm": "Excluir"
     }
   },
   "mcp": {
@@ -1966,7 +2251,8 @@
       "tooltipVerifiedCommunity": "Servidor verificado pela comunidade. Revisado e confirmado funcionando pela comunidade.",
       "tooltipActiveMaintenance": "Último commit foi nos últimos 6 meses.",
       "tooltipStaleMaintenance": "Último commit foi há 6-12 meses. O servidor pode não estar sendo ativamente mantido."
-    }
+    },
+    "uninstallConfirm": "Isso desconectará e removerá o servidor MCP deste workspace. Esta ação não pode ser desfeita."
   },
   "mcpPinner": {
     "title": "Conexões MCP",
@@ -2078,6 +2364,12 @@
     "customInstructionsLabel": "Instruções personalizadas",
     "customInstructionsPlaceholder": "Adicione instruções específicas para o modelo de OCR...",
     "customInstructionsHint": "Estas instruções são anexadas ao prompt do sistema",
+    "failedPagesBadge": "{{count}} página(s) falharam no OCR",
+    "pageFailed": "Página falhou no OCR",
+    "retryFailedPages": "Repetir páginas com falha",
+    "repairing": "A repetir OCR nas páginas com falha…",
+    "repairSuccess": "{{repaired}} página(s) reparada(s)",
+    "repairStillFailed": "Páginas continuam a falhar após a repetição",
     "characterCount": "{{count}} / 500",
     "previewLabel": "Pré-visualização do prompt",
     "previewEmpty": "Selecione um modelo para ver a pré-visualização do prompt",
@@ -2442,6 +2734,19 @@
       "success": "{{count}} páginas excluídas.",
       "processing": "Atribuindo em andamento...",
       "partialError": "Excluídas {{ok}}, falharam {{failed}}: {{message}}"
+    },
+    "schemaPrompt": {
+      "save": "Salvar configuração",
+      "saving": "Salvando configuração…",
+      "label": "Diretrizes editoriais (Schema Prompt)",
+      "helper": "Instruções em linguagem natural que dizem ao LLM como manter este wiki — como um arquivo CLAUDE.md para um repositório.",
+      "placeholder": "Nenhum schema prompt definido — o LLM segue apenas os campos estruturados. Use o modelo para começar a partir de um exemplo pré-compilado.",
+      "useTemplate": "Usar modelo",
+      "tabEdit": "Editar",
+      "tabPreview": "Pré-visualizar",
+      "charCount": "{{count}} / 10000",
+      "overLimitError": "O schema prompt é limitado a 10.000 caracteres. Reduza abaixo do limite para salvar.",
+      "advisoryNote": "As diretrizes são consultivas — as regras rígidas sempre têm precedência."
     }
   },
   "archiveDetail": {
@@ -2700,6 +3005,12 @@
       "partialError": "Repetição em massa falhou: {{message}}",
       "archiveRequired": "Selecione um arquivo primeiro",
       "processing": "Repetindo..."
+    },
+    "ingest": {
+      "cancel": "Cancelar",
+      "cancelling": "Cancelando…",
+      "cancelFailed": "Não foi possível cancelar a ingestão: {{error}}",
+      "cancelled": "Trabalho cancelado"
     }
   },
   "providerPreset": {
@@ -2820,5 +3131,20 @@
       "saveError": "Não foi possível salvar o padrão.",
       "deleteError": "Não foi possível excluir o padrão."
     }
+  },
+  "onboarding": {
+    "welcome": "Bem-vindo! Crie seu primeiro workspace",
+    "welcomeBody": "Seu workspace pessoal mantém seus chats e documentos separados. Dê um nome para começar.",
+    "workspaceNameLabel": "Nome do workspace",
+    "workspaceNamePlaceholder": "ex. Meu workspace",
+    "create": "Criar workspace",
+    "creating": "Criando...",
+    "createSuccess": "Workspace criado",
+    "createError": "Falha ao criar o workspace",
+    "duplicateName": "Já existe um workspace com este nome neste projeto",
+    "noAccessMessage": "Você ainda não tem acesso a nenhum workspace.",
+    "askAdmin": "Peça a um administrador que conceda a você acesso a um workspace.",
+    "loadError": "Não foi possível carregar seus workspaces. Verifique a conexão e tente novamente.",
+    "retry": "Tentar novamente"
   }
 }

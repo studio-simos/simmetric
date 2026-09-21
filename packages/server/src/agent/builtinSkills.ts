@@ -22,6 +22,7 @@ import { hybridSearchWithRerank, type HybridSearchResult } from "../services/hyb
 import type { HybridSearchFilters } from "@simmetric-chat/shared";
 import { RagMetadataFilterSchema } from "@simmetric-chat/shared";
 import { getSetting, upsertSystemConfigRow } from "../services/systemConfigService";
+import { collectorDispatchAgent } from "../utils/collectorDispatchAgent";
 import { getPage, getPages } from "../services/archivePageService";
 import { generatePreview } from "../services/wikiWriteService";
 import { searchWeb } from "../services/webSearchService";
@@ -122,13 +123,34 @@ registerSkill({
     }
 
     try {
-      // 260830-ur9 byte-identity: the 4th argument is spread conditionally so
-      // the no-filter call remains literally the 3-arg call it always was.
+      // Phase 191 (KNOW-01 D-04): chat-attached archives — the retrieval
+      // UNION. When archives are attached, the workspace call becomes the
+      // ARRAY form: hybridSearchWithRerank(query, [workspaceId, ...archive:<id>],
+      // 5, ...) routes through multiWorkspaceHybridSearch, whose archive:
+      // prefix branch already skips filters for pseudo-workspaces and
+      // preserves pageSlug metadata. multiWorkspaceHybridSearch stamps
+      // metadata.sourceWorkspaceId per leg ("archive:<id>" for archive legs).
+      // When empty, the EXISTING single-workspace string call stays
+      // byte-identical (the 260830-ur9 4th-arg conditional spread holds).
+      const attachedIds = params.attachedArchiveIds ?? [];
       let results = await hybridSearchWithRerank(
         query,
-        workspaceId,
+        attachedIds.length > 0 ? [workspaceId, ...attachedIds.map((id) => `archive:${id}`)] : workspaceId,
         5,
         ...(filters ? [filters] : []),
+      );
+
+      // Phase 191 (D-09): archive provenance re-tag for UNION results —
+      // results whose leg came from an archive pseudo-workspace carry
+      // metadata.sourceWorkspaceId "archive:<id>" (multiWorkspaceHybridSearch
+      // stamps it per leg). Re-tag them source: "archive" so the sources
+      // mapper below forwards provenance to the SSE citations event (D-14
+      // contract — no mapper change needed). Workspace results keep their
+      // vector/fts/both source and stay untagged.
+      results = results.map((r) =>
+        typeof r.metadata?.sourceWorkspaceId === "string" && r.metadata.sourceWorkspaceId.startsWith("archive:")
+          ? { ...r, source: "archive" as const }
+          : r,
       );
 
       // 260721-np3 Task 3 — archive fallback (D-07 partially mutated):
@@ -205,12 +227,22 @@ registerSkill({
 
       const textChunks = results.map((r: HybridSearchResult) => {
         const sourceTag = r.documentName || "Unknown";
-        // 260721-np3 Task 3 — distinguish archive-fallback results from
-        // workspace match results so the LLM can cite them appropriately.
+        // 260721-np3 Task 3 — distinguish archive results from workspace
+        // match results so the LLM can cite them appropriately.
+        // Phase 191 (D-04): three arms — chat-ATTACHED archive union hits
+        // (source: "archive" + a stamped archive: sourceWorkspaceId) are
+        // labeled "archive-attached"; the workspace-zero FALLBACK arm
+        // (bound-archiveId, no sourceWorkspaceId stamp) keeps
+        // "archive-fallback"; workspace hits keep the existing labels.
+        const archiveUnionHit =
+          r.source === "archive" &&
+          typeof r.metadata?.sourceWorkspaceId === "string" &&
+          r.metadata.sourceWorkspaceId.startsWith("archive:");
         const searchType =
           r.source === "both" ? "semantic+keyword"
-            : r.source === "archive" ? "archive-fallback"
-              : r.source;
+            : r.source === "archive" && archiveUnionHit ? "archive-attached"
+              : r.source === "archive" ? "archive-fallback"
+                : r.source;
         return `[Source: ${sourceTag} (match: ${searchType}, score: ${r.score.toFixed(4)})]\n${r.chunkText || "(text available in vector store only)"}`;
       }).join("\n\n---\n\n");
 
@@ -482,16 +514,41 @@ registerSkill({
       if (workspaceId) formData.append("workspaceId", workspaceId);
       if (env.EMBEDDING_MODEL) formData.append("embeddingModel", env.EMBEDDING_MODEL);
 
+      // quick 260918-gxs + 260918-p3h (D-1): same env-driven ingest wait cap
+      // as forwardToCollector (documents.ts) — one knob for both call sites.
+      // UNSET = no cap (unbounded dispatch); the timeout message + connection
+      // diagnostics stay intact when the operator configures a cap.
+      const ingestTimeoutMs = env.COLLECTOR_INGEST_TIMEOUT_MS;
+      const capConfigured = typeof ingestTimeoutMs === "number" && ingestTimeoutMs > 0;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 300_000);
+      const timeoutId = capConfigured ? setTimeout(() => controller.abort(), ingestTimeoutMs) : null;
 
-      const response = await fetch(`${env.COLLECTOR_URL}/api/ingest`, {
-        method: "POST",
-        body: formData,
-        signal: controller.signal,
-        headers: { "X-Collector-Secret": env.COLLECTOR_SECRET },
-      });
-      clearTimeout(timeoutId);
+      let response: Response;
+      try {
+        response = await fetch(`${env.COLLECTOR_URL}/api/ingest`, {
+          method: "POST",
+          body: formData,
+          ...(capConfigured ? { signal: controller.signal } : {}),
+          headers: { "X-Collector-Secret": env.COLLECTOR_SECRET },
+          // quick 260918-j9m precedent (documents.ts:1379-1385): same
+          // timeout-exempt dispatcher as forwardToCollector — long local-CPU
+          // embeds must not die at the global 300s headersTimeout. One
+          // transport, all three ingest sites; the D-1 operator cap above
+          // stays armed.
+          dispatcher: collectorDispatchAgent,
+        } as unknown as Parameters<typeof fetch>[1]);
+      } catch (fetchErr: unknown) {
+        if (controller.signal.aborted) {
+          const cappedTimeoutMs = ingestTimeoutMs as number;
+          throw new Error(
+            `Collector ingest timed out after ${Math.round(cappedTimeoutMs / 1000)}s — raise COLLECTOR_INGEST_TIMEOUT_MS or retry the document from its upload draft`,
+            { cause: fetchErr },
+          );
+        }
+        throw fetchErr;
+      } finally {
+        if (timeoutId !== null) clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: "Unknown error" }));

@@ -379,20 +379,27 @@ export default function MarketplaceDetail() {
 
         <div>
           {entry.isInstalled ? (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-2">
+              {/* quick 260919-l6s: the ✓ Installed indicator stays so the
+                  state remains explicit next to the now-visible uninstall
+                  control. */}
               <span className="flex items-center gap-1 text-primary font-medium text-sm">
                 <Check className="w-3.5 h-3.5" />
                 {t("marketplace.card.installed")}
               </span>
+              {/* quick 260919-l6s: Uninstall is a visible, clearly-labeled
+                  destructive-outline button (previously a hidden three-dots
+                  ghost icon — undiscoverable). Same styling family as the
+                  card's Uninstall button. Opens the EXISTING confirmation
+                  dialog; confirming uninstalls from the current workspace. */}
               <Button
-                variant="ghost"
-                size="icon"
+                variant="outline"
+                size="sm"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
+                disabled={uninstalling}
                 onClick={() => setShowUninstallConfirm(true)}
-                aria-label={`Uninstall ${entry.name}`}
               >
-                <svg className="w-4 h-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v.01M12 12v.01M12 18v.01" />
-                </svg>
+                {t("marketplace.install.uninstall")}
               </Button>
             </div>
           ) : (

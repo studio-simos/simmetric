@@ -17,6 +17,11 @@ export { createWorkspaceSchema, updateWorkspaceSchema, permanentDeleteWorkspaces
 export { chatRequestSchema, renameChatSchema, updateChatModelSchema, linkArchiveSchema, createFolderSchema, updateFolderSchema, moveChatSchema, editMessageSchema } from "./chat.schema";
 export type { AgentPlan } from "./chat.schema";
 
+// Phase 190 (SKIL-01..05) — custom prompt-template skill contracts +
+// the skillCall transport schema consumed by chat.schema.ts.
+export { createSkillSchema, updateSkillSchema, testSkillSchema, skillCallSchema, skillIdParamSchema, promptSkillConfigSchema, skillInputSchemaSchema, skillScopeSchema, slugSchema, RESERVED_SLUGS, SPOTLIGHT_DELIMITER_MARKERS } from "./skill.schema";
+export type { CreateSkillInput, UpdateSkillInput, TestSkillInput, SkillCallInput, PromptSkillConfig, SkillInputSchema, SkillScope } from "./skill.schema";
+
 export { bulkDeleteDocumentsSchema } from "./document.schema";
 
 export { configKeySchema, bulkSetConfigSchema } from "./config.schema";
@@ -25,6 +30,16 @@ export type { ConfigKey, SetConfigInput } from "./config.schema";
 export { chatRetentionSchema } from "./chatRetention.schema";
 
 export { createRoleSchema, updateRoleSchema, grantWorkspaceAccessSchema, roleIdParamSchema } from "./role.schema";
+
+// Phase 189 (WSIS-03, D-18): route-specific workspace-access contracts —
+// grant (WITHOUT the optional workspaceId; route takes it from the URL),
+// bulk grant, list-entry wire shape, and the revoke path-param guard.
+export { grantWorkspaceAccessRouteSchema, bulkGrantWorkspaceAccessSchema, workspaceAccessListEntrySchema, workspaceAccessParamsSchema } from "./workspaceAccess.schema";
+export type { GrantWorkspaceAccessRouteInput, BulkGrantWorkspaceAccessInput, WorkspaceAccessListEntry } from "./workspaceAccess.schema";
+
+// Phase 189 (WSIS-01, D-05): personal-workspace creation body.
+export { createPersonalWorkspaceSchema } from "./personalWorkspace.schema";
+export type { CreatePersonalWorkspaceInput } from "./personalWorkspace.schema";
 
 // Phase 182 (SAAS-01d/D-04) — org membership contracts (roleInOrg tier above the 31-permission RBAC).
 export { roleInOrgSchema, createOrganizationMemberSchema } from "./organization.schema";
@@ -38,8 +53,8 @@ export type { LicensePayload } from "./license.schema";
 export { initializeSchema } from "./system.schema";
 export type { InitializeInput } from "./system.schema";
 
-export { widgetChatRequestSchema, widgetSessionCreateSchema, createWidgetSchema, updateWidgetSchema, widgetSessionIncrementSchema, widgetSearchRequestSchema, widgetLeadSubmitSchema, widgetAnalyticsQuerySchema, WIDGET_LOCALES, isHttpUrl, resolveWidgetTexts, resolveSuggestedQuestions } from "./widget.schema";
-export type { WidgetConfigResponse, WidgetCredits } from "./widget.schema";
+export { widgetChatRequestSchema, widgetSessionCreateSchema, createWidgetSchema, updateWidgetSchema, widgetSessionIncrementSchema, widgetSearchRequestSchema, widgetLeadSubmitSchema, widgetAnalyticsQuerySchema, widgetWorkspaceArchiveFilterSchema, WIDGET_LOCALES, isHttpUrl, resolveWidgetTexts, resolveSuggestedQuestions, widgetContactOptionsSchema } from "./widget.schema";
+export type { WidgetConfigResponse, WidgetCredits, WidgetContactOptions, WidgetWorkspaceArchiveFilterInput } from "./widget.schema";
 
 export { createMcpConnectionSchema, updateMcpConnectionSchema, toggleMcpConnectionSchema, mcpConnectionIdParamSchema, mcpCatalogEntryIdParamSchema, installMcpServerSchema, uninstallMcpServerSchema, mcpHeadersSchema } from "./mcpConnection.schema";
 
@@ -49,6 +64,10 @@ export { chatIdParamSchema, createMcpPinSchema, mcpPinIdParamSchema } from "./mc
 
 export { ocrJobApproveSchema, ocrJobRejectSchema, ocrPreviewRequestSchema, ocrPreferencesSchema } from "./ocr.schema";
 export type { OcrModelConfig } from "./ocr.schema";
+
+// 260919-kvm — post-job page-repair contracts (re-OCR only [FAILED: pages).
+export { ocrPageRetryRequestSchema, ocrPageRepairResultSchema } from "./ocr.schema";
+export type { OcrPageRetryRequest, OcrPageRepairResult } from "./ocr.schema";
 
 export { wikiWritePreviewSchema, wikiWriteApproveRejectSchema, wikilinkResolveSchema, wikiDistillSchema, mergePagesSchema } from "./wiki.schema";
 
@@ -65,8 +84,8 @@ export type { SynthesisPreview, SynthesisConfidence } from "./synthesis.schema";
 export { IngestResponseSchema, IngestStatusCallbackSchema, ReembedRequestSchema, WikiPagesIngestSchema, IngestQueryRequestSchema, IngestDeleteRequestSchema, IngestUploadBodySchema, RerankRequestSchema, archivePageParseRequestSchema, archivePageParseCallbackSchema, RagMetadataFilterSchema } from "./ingest.schema";
 export type { HybridSearchFilters } from "./ingest.schema";
 
-export { createUploadDraftSchema, createUploadDraftUrlSchema, assignDraftSchema, renameUploadSchema } from "./uploadDraft.schema";
-export type { AssignDraftInput, DraftDestination } from "./uploadDraft.schema";
+export { createUploadDraftSchema, createUploadDraftUrlSchema, assignDraftSchema, cancelDraftLegSchema, renameUploadSchema } from "./uploadDraft.schema";
+export type { AssignDraftInput, CancelDraftLegInput, DraftDestination } from "./uploadDraft.schema";
 
 export { nativeToolCallSchema } from "./toolCall.schema";
 
@@ -98,6 +117,14 @@ export type { SsoStatusResponse } from "./sso.schema";
 // Phase 143 (D-07) — pure OIDC provider derivation (shared single source of
 // truth; community auth.ts imports it, enterprise keeps a local copy for now).
 export { getOidcProviderFromDiscoveryUrl } from "./sso.schema";
+
+// Phase 193 (LDAP-01/02, D-03/D-04) — LDAP login + group-map contracts.
+/**
+ * @enterpriseConsumed — RUNTIME-imported by the private enterprise repo
+ * (routes/ldap.ts login parse + routes/ldapAdmin.ts map CRUD safeParse).
+ */
+export { ldapLoginSchema, ldapMapRowSchema, ldapMapPutSchema } from "./sso.schema";
+export type { LdapLoginInput, LdapMapRow, LdapMapPutInput } from "./sso.schema";
 
 // Phase 153 (WIKI-01) — graph-wiki trigger request validation (separate
 // endpoint from the LLM synthesis trigger; D-01 + A2).
@@ -189,6 +216,35 @@ export type {
 export { createDlpPatternSchema, updateDlpPatternSchema, testPatternSchema } from "./dlp.schema";
 export type { DlpPatternResponse } from "./dlp.schema";
 export { dlpPatternIdParamSchema } from "./dlp.schema";
+
+// Phase 192 (DLP-01..04) — document-pipeline DLP contract vocabulary:
+// entity classes, scan-job payload, eval result (discriminated noRun union),
+// backfill request/response, preview unmask query.
+export {
+  DLP_ENTITY_CLASSES,
+  dlpEntityClassSchema,
+  dlpScanJobPayloadSchema,
+  dlpEvalClassRowSchema,
+  dlpEvalResultSchema,
+  dlpEvalRunResponseSchema,
+  dlpBackfillRequestSchema,
+  dlpBackfillResponseSchema,
+  dlpUnmaskQuerySchema,
+  nerResponseSchema,
+  nerRequestPayloadSchema,
+} from "./dlpDocumentScan.schema";
+export type {
+  DlpEntityClass,
+  DlpScanJobPayload,
+  DlpEvalClassRow,
+  DlpEvalResult,
+  DlpEvalRunResponse,
+  DlpBackfillRequest,
+  DlpBackfillResponse,
+  DlpUnmaskQuery,
+  NerResponse,
+  NerRequestPayload,
+} from "./dlpDocumentScan.schema";
 
 // Phase 176 (CF-01/D-01) — shared env-config surface (server + collector
 // config/env.ts consume these fields; single source kills the "update BOTH"

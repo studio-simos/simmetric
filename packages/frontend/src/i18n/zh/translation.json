@@ -109,7 +109,8 @@
     "dateView": {
       "dndDisabled": "日期视图中已禁用拖放"
     },
-    "uploads": "上传"
+    "uploads": "上传",
+    "skills": "技能"
   },
   "login": {
     "signIn": "登录",
@@ -139,7 +140,10 @@
       "signOut": "退出登录"
     },
     "ssoOr": "or sign in with SSO",
-    "ssoSignIn": "Login with SSO"
+    "ssoSignIn": "Login with SSO",
+    "ldap": {
+      "hint": "使用您的企业目录凭据登录。"
+    }
   },
   "chat": {
     "placeholder": "输入消息...",
@@ -184,6 +188,15 @@
       "error": "无法更新链接的归档。请重试。",
       "badge": "归档"
     },
+    "attach": {
+      "menuItem": "知识",
+      "back": "返回",
+      "pickerTitle": "附加知识库档案",
+      "empty": "没有可附加的档案。",
+      "maxReached": "最多可附加 {{max}} 个档案。",
+      "remove": "移除已附加的档案",
+      "pageCount": "{{count}} 页"
+    },
     "selectWorkspace": "选择工作区以开始聊天",
     "attachedToNext": "已附加到下一条消息",
     "removeAttachment": "移除附件",
@@ -221,6 +234,14 @@
     },
     "modelCommand": {
       "notFound": "未找到模型"
+    },
+    "skillsPalette": {
+      "empty": "没有匹配的技能",
+      "hint": "↑↓ 导航，Enter 插入，Esc 关闭",
+      "manageLink": "管理技能",
+      "paramError": "无法读取 /{{slug}} 的参数。请尝试 /{{slug}} 键=值。",
+      "customGroup": "技能",
+      "builtinGroup": "内置（LLM 工具 — 非 slash 命令）"
     },
     "capabilities": {
       "localOnly": "仅本地",
@@ -283,7 +304,7 @@
     "sidebarTitle": "聊天列表",
     "sidebarDescription": "此工作区中的聊天列表",
     "renameChatTitle": "重命名聊天",
-    "compareModelsTitle": "比较模型",
+    "compareModelsTitle": "比较",
     "noSourcesAvailable": "无可用的来源",
     "sendLabel": "发送消息",
     "emptyState": {
@@ -350,9 +371,10 @@
     "attachedDocument": "已附加文档",
     "aiDisclaimer": "回复由人工智能生成",
     "dlp": {
-      "showTexts": "显示 DLP 文本",
-      "hideTexts": "隐藏 DLP 文本"
-    }
+      "showTexts": "显示 DLP",
+      "hideTexts": "隐藏 DLP"
+    },
+    "modelUnavailable": "模型 \"{{model}}\" 不可用。请选择其他模型。"
   },
   "eventLog": {
     "title": "事件日志",
@@ -518,6 +540,19 @@
       "success": "已删除 {{count}} 个页面。",
       "processing": "Assegnazione in corso...",
       "partialError": "已删除 {{ok}}，失败 {{failed}}：{{message}}"
+    },
+    "schemaPrompt": {
+      "save": "保存配置",
+      "saving": "正在保存配置…",
+      "label": "编辑准则（Schema Prompt）",
+      "helper": "用自然语言告诉 LLM 如何维护这个 wiki 的指令 — 就像代码仓库中的 CLAUDE.md 文件。",
+      "placeholder": "未设置 schema prompt — LLM 仅遵循结构化字段。使用模板可以从预编译示例开始。",
+      "useTemplate": "使用模板",
+      "tabEdit": "编辑",
+      "tabPreview": "预览",
+      "charCount": "{{count}} / 10000",
+      "overLimitError": "Schema prompt 限制为 10,000 个字符。请精简到限制以下才能保存。",
+      "advisoryNote": "准则仅供参考 — 硬性规则始终优先。"
     }
   },
   "widgets": {
@@ -528,7 +563,31 @@
       "localization": "本地化",
       "questions": "问题",
       "credits": "积分",
-      "leads": "线索"
+      "leads": "线索",
+      "list": "小部件"
+    },
+    "archive": {
+      "tabLabel": "工作区归档",
+      "statTotalWidgets": "小部件总数",
+      "statTotalWorkspaces": "已关联工作区",
+      "statTotalProjects": "项目数",
+      "statOrphans": "孤立小部件",
+      "filterProject": "按项目筛选",
+      "filterAllProjects": "所有项目",
+      "filterWidget": "按小部件筛选",
+      "filterAllWidgets": "所有小部件",
+      "viewGrouped": "分组",
+      "viewFlat": "平铺",
+      "activeBadge": "启用",
+      "inactiveBadge": "停用",
+      "emptyState": "没有与当前筛选条件匹配的小部件-工作区关联。",
+      "exportCsv": "导出 CSV",
+      "exportError": "CSV 导出失败",
+      "colProject": "项目",
+      "colWidget": "小部件",
+      "colStatus": "状态",
+      "colWorkspace": "工作区",
+      "attribution": "Simmetric Chat 由"
     },
     "localization": {
       "fallbackLocaleLabel": "默认语言",
@@ -1121,7 +1180,11 @@
       "limitsSection": "限制",
       "sessionLimitPerDay": "每天消息数",
       "sessionLimitPerDayPlaceholder": "例如 50",
-      "sessionLimitPerDayHint": "每位访客每天可发送的最大消息数。留空则使用全局默认值（每天 5 条）。",
+      "sessionLimitPerDayHint": "每位访客每天可发送的最大消息数。留空则使用全局默认值（每天 5 条）。勾选“无限制”可取消上限。",
+      "rateLimitPerMinute": "每分钟请求数",
+      "rateLimitPerMinutePlaceholder": "例如 60",
+      "rateLimitPerMinuteHint": "每个小部件每分钟的最大聊天请求数。留空则使用全局默认值（每分钟 30 次）。勾选“无限制”可取消上限。",
+      "unlimited": "无限制",
       "exitIntentCooldownPlaceholder": "例如：30",
       "leadCaptureSection": "线索收集",
       "leadCaptureToggle": "启用线索收集",
@@ -1142,7 +1205,32 @@
       "columnDate": "日期",
       "downloadCsv": "下载 CSV",
       "viewTranscript": "查看对话记录",
-      "hideTranscript": "隐藏对话记录"
+      "hideTranscript": "隐藏对话记录",
+      "chatBehaviorSection": "聊天行为",
+      "systemPromptLabel": "系统提示词",
+      "systemPromptHint": "每个组件都有自己的提示词。留空则保留内置提示词，将每个回答锚定在该组件的知识库上。自定义提示词会替换它。",
+      "systemPromptPlaceholder": "为该组件的助手输入自定义的接地指令……",
+      "leadTimingLabel": "请求邮箱",
+      "leadTimingStart": "聊天打开时",
+      "leadTimingEnd": "达到每日上限时",
+      "leadTimingTimeout": "延迟之后",
+      "leadTimeoutSecondsLabel": "请求前的延迟（秒）",
+      "leadTimeoutSecondsHint": "访客发送第一条消息后等待多久再显示邮箱卡片（5–86400）。",
+      "contactOptionsSection": "达到每日上限时的联系方式",
+      "contactFormUrlLabel": "联系表单 URL",
+      "contactFormUrlPlaceholder": "https://example.com/contact",
+      "contactBookingUrlLabel": "预约 URL",
+      "contactBookingUrlPlaceholder": "https://cal.example.com/owner",
+      "contactEmailLabel": "邮箱地址",
+      "contactEmailPlaceholder": "owner@example.com",
+      "contactCustomUrlLabel": "自定义链接 URL",
+      "contactCustomUrlPlaceholder": "https://example.com/sales",
+      "contactCustomLabelLabel": "自定义链接名称",
+      "contactCustomLabelPlaceholder": "联系销售",
+      "privacyUrlLabel": "隐私政策 URL",
+      "privacyUrlPlaceholder": "https://example.com/privacy",
+      "privacyUrlHint": "作为链接显示在访客的邮件共享同意复选框旁。在新标签页中打开。留空则显示不带链接的复选框。",
+      "leadsPrivacyConsent": "隐私同意"
     },
     "ocr": {
       "title": "OCR 偏好设置",
@@ -1409,7 +1497,8 @@
       "agentWatchdog": "代理看门狗",
       "reranker": "RAG 重排器",
       "vapid": "Web 推送 (VAPID)",
-      "dlpPatterns": "DLP 模式"
+      "dlpPatterns": "DLP 模式",
+      "workspaceAccess": "工作区访问权限"
     },
     "appearance": {
       "themeTitle": "主题",
@@ -1576,7 +1665,100 @@
       "blocked": "通知已被浏览器阻止。更改网站设置以重新启用。",
       "permissionHint": "点击\"启用通知\"将提示浏览器请求权限。"
     },
-    "back": "返回"
+    "back": "返回",
+    "workspaceAccess": {
+      "title": "工作区访问权限",
+      "grantTitle": "访问权限：{{name}}",
+      "userSearch": "搜索用户...",
+      "role": "角色",
+      "roleOwner": "所有者",
+      "roleEditor": "编辑者",
+      "roleViewer": "查看者",
+      "grant": "授予",
+      "grantBulk": "批量授予",
+      "revoke": "撤销",
+      "grantedList": "当前访问授权",
+      "grantedAt": "授予时间",
+      "grantedBy": "授予人",
+      "noAccess": "该工作区尚无访问授权。",
+      "bulkPartial": "授权完成，但以下用户失败：{{failed}}",
+      "success": "访问权限已更新",
+      "revokeSuccess": "访问权限已撤销",
+      "error": "更新访问权限失败",
+      "loadError": "无法加载工作区访问权限。请检查网络连接后重试。",
+      "retry": "重试"
+    },
+    "sso": {
+      "ldap": {
+        "testPending": "正在测试…",
+        "testFailed": "连接测试失败。请验证服务器 URL、从服务器出发的网络可达性以及证书信任，然后重试。",
+        "saveFailed": "无法保存 LDAP 配置。请检查高亮显示的字段并重试。",
+        "mapEmptyTitle": "暂无组映射",
+        "mapEmptyBody": "LDAP 用户在登录时获得默认角色。添加映射以按组成员身份授予平台角色。",
+        "mapAdminWarning": "该组映射到管理员角色。每位成员将在下次 LDAP 登录时获得管理员权限。",
+        "removeMapping": "移除映射",
+        "exclusiveHint": "启用 LDAP 会禁用当前配置的 SAML/OIDC 提供商——每个安装仅一个活动提供商。",
+        "diag": {
+          "reachable": "服务器可达",
+          "bindOk": "服务绑定成功",
+          "userFound": "找到测试用户",
+          "groupsFound": "组搜索已配置"
+        },
+        "url": "LDAP 服务器 URL",
+        "bindDn": "绑定 DN（服务账户）",
+        "bindPassword": "绑定密码",
+        "bindPasswordViaEnv": "已通过环境变量配置",
+        "bindPasswordReadOnly": "LDAP_BIND_PASSWORD 已通过环境变量设置，无法从界面修改。如需更改，请更新服务器的 .env 文件。",
+        "searchBase": "搜索基础",
+        "searchFilter": "用户搜索过滤器",
+        "groupSearchBase": "组搜索基础",
+        "groupSearchFilter": "组搜索过滤器",
+        "useTls": "使用 StartTLS",
+        "tlsHint": "StartTLS 将明文的 ldap:// 连接升级为 TLS。仅对 ldaps://（已加密）禁用。",
+        "acceptCert": "自定义 CA 证书（PEM，可选）",
+        "fallbackToLocal": "LDAP 不可达时回退到本地登录",
+        "fallbackHint": "启用后，当 LDAP 不可达时，用户可以使用本地账户登录，而不会看到错误。",
+        "mapTitle": "组 → 角色映射",
+        "mapDescription": "已映射 LDAP 组的成员将在下次登录时获得平台角色。行在保存时生效。",
+        "addMapping": "添加映射",
+        "groupDn": "组 DN",
+        "duplicateMapping": "该组与角色的配对已暂存。"
+      }
+    },
+    "dlpDocs": {
+      "title": "文档 DLP 扫描",
+      "description": "在意大利 PII 样本语料上运行检测质量评估，然后重新扫描历史文档，确保不留下可检索的未脱敏向量。",
+      "eval": {
+        "run": "运行评估",
+        "running": "正在运行评估…",
+        "empty": {
+          "heading": "尚未运行评估",
+          "body": "在启用文档扫描之前，请先在意大利 PII 样本语料上运行评估，以验证检测质量。"
+        },
+        "passed": "阈值通过 — {{total}} 项检查中有 {{fpRate}} 个误报。可以启用。",
+        "failed": "阈值未通过 — 误报率 {{fpRate}} 超过阈值。启用前请先检查模式。",
+        "lastRun": "上次运行 {{date}}",
+        "documentedOnly": "仅记录，不拦截",
+        "error": "评估失败 — 请修复问题后重新运行。",
+        "retry": "重试",
+        "perClassTitle": "分类结果",
+        "detected": "检测到：{{count}}",
+        "expected": "预期：{{count}}",
+        "falsePositives": "误报：{{count}}"
+      },
+      "backfill": {
+        "run": "扫描历史文档",
+        "running": "正在扫描历史文档…",
+        "confirmTitle": "扫描历史文档？",
+        "confirmBody": "将对 {{count}} 个文档重新扫描，并把其可检索文本替换为脱敏文本。原文保持加密。该任务在后台运行，可安全地重复执行。",
+        "confirmRun": "扫描 {{count}} 个文档",
+        "cancel": "暂不",
+        "result": "{{scanned}} 个已扫描 · {{masked}} 个已脱敏 · {{failed}} 个失败",
+        "empty": "没有需要重新扫描的历史文档。",
+        "error": "历史文档重新扫描以 {{failed}} 个失败结束。请重新运行，仅重试待处理的文档。",
+        "runError": "无法启动历史文档重新扫描。"
+      }
+    }
   },
   "upgrade": {
     "title": "企业版功能",
@@ -1699,7 +1881,35 @@
       "deleteError": "删除所选工作区失败。",
       "selectAll": "全选"
     },
-    "selectRow": "选择工作空间 {{name}}"
+    "selectRow": "选择工作空间 {{name}}",
+    "access": {
+      "button": "访问权限",
+      "title": "{{name}} 的访问权限",
+      "description": "获得授权的用户可以打开此工作区并上传文档，即使他们不是项目所有者。",
+      "selectUser": "选择用户...",
+      "grantButton": "授权",
+      "granted": "已授予访问权限",
+      "grantError": "授予访问权限失败",
+      "revoked": "已撤销访问权限",
+      "revokeError": "撤销访问权限失败",
+      "revoke": "撤销访问权限",
+      "empty": "此工作区没有其他访问授权。",
+      "listLabel": "当前访问授权",
+      "roleOwner": "所有者",
+      "roleEditor": "编辑者",
+      "roleViewer": "查看者",
+      "role": "角色",
+      "usersLoadError": "无法加载用户。",
+      "retryUsers": "重新加载用户"
+    },
+    "dlp": {
+      "scanToggle": "文档 DLP 扫描",
+      "scanDescription": "上传后扫描文档中的个人数据，并在 AI 模型读取前进行脱敏。",
+      "gateBlocked": "启用前请先在 设置 → 高级 中运行 DLP 评估。",
+      "enabled": "文档 DLP 扫描已启用",
+      "disabled": "文档 DLP 扫描已停用",
+      "saveError": "无法保存 DLP 扫描设置。"
+    }
   },
   "workspaceCreate": {
     "title": "创建工作区",
@@ -1789,7 +1999,8 @@
     "errorDetails": "错误详情",
     "reloadPage": "重新加载页面",
     "unexpectedError": "出了点问题",
-    "back": "返回"
+    "back": "返回",
+    "uninstall": "卸载"
   },
   "export": {
     "buttonLabel": "导出",
@@ -1945,6 +2156,21 @@
       "dialogTitle": "复制 {{count}} 个文档到归档",
       "success": "正在复制 {{count}} 个文档到 {{archiveName}}。",
       "forbidden": "拒绝访问一个或多个选定的文档。"
+    },
+    "cancel": "取消",
+    "cancelling": "正在取消…",
+    "cancelFailed": "无法取消：{{error}}",
+    "cancelled": "摄取已取消",
+    "dlp": {
+      "scanPending": "DLP 扫描已排队",
+      "scanning": "正在 DLP 扫描…",
+      "clean": "已完成 DLP 扫描",
+      "entities": "DLP · {{count}}",
+      "failed": "DLP 扫描失败",
+      "maskedNotice": "本文档中的个人数据已脱敏 — 使用 [PERSON_1] 等占位符替换敏感值。",
+      "show": "显示未脱敏数据",
+      "hide": "隐藏敏感数据",
+      "unmaskError": "无法加载未脱敏文本。"
     }
   },
   "workspaces": {
@@ -1973,7 +2199,71 @@
     "document_temp_process": {
       "displayName": "临时文档处理",
       "description": "处理聊天期间上传的文件。文件将被临时嵌入和分析，然后您可以决定是否将其永久保存到工作区。"
-    }
+    },
+    "page": {
+      "heading": "技能",
+      "subtitle": "创建可复用的提示模板，并在聊天中通过 /slug 调用。",
+      "create": "创建技能",
+      "limit": "已使用 {{used}}/{{limit}} 个自定义技能",
+      "limitUnlimited": "自定义技能无限制",
+      "limitReached": "您已达到套餐的 {{limit}} 个自定义技能上限。升级到 Enterprise 即可无限制使用。"
+    },
+    "form": {
+      "save": "保存技能",
+      "saving": "保存中...",
+      "slugInvalid": "只能使用小写字母、数字和连字符（例如 translate-text）。",
+      "slugReserved": "该 slug 已被内置命令保留。请选择其他名称。",
+      "slugDuplicate": "已存在使用此 slug 的技能。",
+      "jsonError": "JSON 无效 — 请修复架构后再保存。",
+      "test": "测试技能",
+      "testPreview": "已编译提示预览",
+      "testNeedsSave": "保存技能后才能启用测试。",
+      "modePrompt": "提示",
+      "modeWebhook": "Webhook",
+      "modeWebhookSoon": "Webhook 技能即将推出",
+      "scopePersonal": "个人",
+      "scopeWorkspace": "工作区",
+      "scopeGlobal": "全局（管理员）",
+      "scopeGlobalAdminOnly": "仅管理员可创建全局技能",
+      "workspace": "工作区",
+      "selectWorkspace": "选择工作区...",
+      "name": "名称",
+      "template": "模板",
+      "defaultParams": "默认参数",
+      "paramKey": "键",
+      "paramValue": "值",
+      "addParam": "添加参数",
+      "removeParam": "移除",
+      "inputSchema": "输入架构",
+      "inputSchemaAuto": "自动生成",
+      "inputSchemaManual": "手动 JSON",
+      "enabled": "已启用",
+      "createTitle": "创建技能",
+      "editTitle": "编辑技能",
+      "mode": "模式",
+      "scope": "范围"
+    },
+    "error": {
+      "limit402": "您已达到套餐的自定义技能上限。",
+      "save": "保存技能失败",
+      "delete": "删除技能失败"
+    },
+    "success": {
+      "created": "技能已创建",
+      "updated": "技能已更新",
+      "deleted": "技能已删除"
+    },
+    "empty": {
+      "heading": "还没有自定义技能",
+      "body": "创建一个基于提示模板的技能，然后在聊天中通过 /slug 调用。"
+    },
+    "delete": {
+      "title": "删除技能 /{{slug}}？",
+      "body": "调用它的消息将不再立即在聊天中解析。此操作无法撤销。"
+    },
+    "builtinSection": "内置技能",
+    "builtinBadge": "内置",
+    "customSection": "自定义技能"
   },
   "roles": {
     "admin": {
@@ -2048,7 +2338,10 @@
       "installFailed": "安装 {{name}} 失败。请重试。",
       "uninstallSuccess": "{{name}} 已卸载",
       "uninstallFailed": "卸载 {{name}} 失败。请重试。",
-      "alreadyInstalled": "{{name}} 已安装在此工作区中"
+      "alreadyInstalled": "{{name}} 已安装在此工作区中",
+      "deleteSuccess": "{{name}} 已从市场中删除",
+      "deleteFailed": "删除 {{name}} 失败。请重试。",
+      "deleteInUse": "{{name}} 仍安装在一个或多个工作区中——请先从这些工作区卸载它。"
     },
     "empty": {
       "noResults": "未找到服务器",
@@ -2056,6 +2349,11 @@
       "notFound": "未找到目录条目",
       "loading": "加载市场中...",
       "error": "加载市场失败。请检查您的连接后重试。"
+    },
+    "delete": {
+      "title": "删除 {{name}}？",
+      "body": "这将从市场目录中永久删除该服务器。在它安装于某个工作区时无法删除。",
+      "confirm": "删除"
     }
   },
   "mcp": {
@@ -2078,7 +2376,8 @@
       "tooltipVerifiedCommunity": "社区验证服务器。经社区审查并确认可用。",
       "tooltipActiveMaintenance": "上次提交在 6 个月内。",
       "tooltipStaleMaintenance": "上次提交在 6-12 个月前。该服务器可能未在积极维护。"
-    }
+    },
+    "uninstallConfirm": "这将断开连接并从该工作区移除该 MCP 服务器。此操作无法撤销。"
   },
   "mcpPinner": {
     "title": "MCP 连接",
@@ -2190,6 +2489,12 @@
     "customInstructionsLabel": "自定义指令",
     "customInstructionsPlaceholder": "为 OCR 模型添加特定指令...",
     "customInstructionsHint": "这些指令将附加到系统提示中",
+    "failedPagesBadge": "{{count}} 页 OCR 失败",
+    "pageFailed": "该页 OCR 失败",
+    "retryFailedPages": "重试失败页面",
+    "repairing": "正在重新识别失败页面…",
+    "repairSuccess": "已修复 {{repaired}} 页",
+    "repairStillFailed": "重试后页面仍然失败",
     "characterCount": "{{count}} / 500",
     "previewLabel": "提示预览",
     "previewEmpty": "选择一个模型以查看提示预览",
@@ -2700,6 +3005,12 @@
       "partialError": "批量重试失败：{{message}}",
       "archiveRequired": "请先选择一个归档",
       "processing": "重试中..."
+    },
+    "ingest": {
+      "cancel": "取消",
+      "cancelling": "正在取消…",
+      "cancelFailed": "无法取消摄取：{{error}}",
+      "cancelled": "任务已取消"
     }
   },
   "providerPreset": {
@@ -2820,5 +3131,20 @@
       "saveError": "无法保存模式。",
       "deleteError": "无法删除模式。"
     }
+  },
+  "onboarding": {
+    "welcome": "欢迎！创建你的第一个工作区",
+    "welcomeBody": "你的个人工作区会单独保存你的聊天和文档。给它起个名字即可开始。",
+    "workspaceNameLabel": "工作区名称",
+    "workspaceNamePlaceholder": "例如：我的工作区",
+    "create": "创建工作区",
+    "creating": "创建中...",
+    "createSuccess": "工作区已创建",
+    "createError": "创建工作区失败",
+    "duplicateName": "此项目中已存在同名工作区",
+    "noAccessMessage": "你还没有访问任何工作区的权限。",
+    "askAdmin": "请管理员授予你工作区访问权限。",
+    "loadError": "无法加载你的工作区。请检查网络连接后重试。",
+    "retry": "重试"
   }
 }

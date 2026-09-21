@@ -114,3 +114,35 @@ describe("WidgetPreviewPane", () => {
     );
   });
 });
+
+// ─── 260917-mz6: reload-on-save key ──────────────────────────────────
+
+describe("WidgetPreviewPane — reloadKey (260917-mz6)", () => {
+  it("omits the &r= param when reloadKey is 0/undefined (omission-not-empty)", () => {
+    render(<WidgetPreviewPane widgetId="widget-1" primaryColor="#4c6ef5" position="bottom-right" />);
+    expect(screen.getByTitle("Widget preview").getAttribute("src")).not.toContain("&r=");
+  });
+
+  it("appends &r=<key> when reloadKey is non-zero", () => {
+    render(
+      <WidgetPreviewPane widgetId="widget-1" primaryColor="#4c6ef5" position="bottom-right" reloadKey={1730000000000} />
+    );
+    expect(screen.getByTitle("Widget preview").getAttribute("src")).toContain("&r=1730000000000");
+  });
+
+  it("bumping reloadKey refires the debounced effect and changes the src (fake timers)", () => {
+    jest.useFakeTimers();
+    const { rerender } = render(
+      <WidgetPreviewPane widgetId="widget-1" primaryColor="#4c6ef5" position="bottom-right" reloadKey={0} />
+    );
+    const initialSrc = screen.getByTitle("Widget preview").getAttribute("src");
+    rerender(
+      <WidgetPreviewPane widgetId="widget-1" primaryColor="#4c6ef5" position="bottom-right" reloadKey={1730000000001} />
+    );
+    // Before the debounce elapses the src is unchanged
+    expect(screen.getByTitle("Widget preview").getAttribute("src")).toBe(initialSrc);
+    act(() => { jest.advanceTimersByTime(500); });
+    expect(screen.getByTitle("Widget preview").getAttribute("src")).toContain("&r=1730000000001");
+    jest.useRealTimers();
+  });
+});

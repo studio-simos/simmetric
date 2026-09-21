@@ -55,6 +55,7 @@ interface MarketplaceCardProps {
   onInstall: (entryId: string) => void;
   onUninstall: (entryId: string) => void;
   onNavigate: (entryId: string) => void;
+  onDelete: (entryId: string) => void;
 }
 
 export default function MarketplaceCard({
@@ -63,9 +64,17 @@ export default function MarketplaceCard({
   onInstall,
   onUninstall,
   onNavigate,
+  onDelete,
 }: MarketplaceCardProps) {
   const { t } = useTranslation();
   const [showUninstallDialog, setShowUninstallDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+
+  const threeDotsIcon = (
+    <svg className="w-4 h-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v.01M12 12v.01M12 18v.01" />
+    </svg>
+  );
 
   return (
     <Card
@@ -189,34 +198,65 @@ export default function MarketplaceCard({
         </span>
 
         {entry.isInstalled ? (
-          <>
+          <div className="flex items-center gap-1">
+            {/* quick 260919-l6s: Uninstall is now a visible, labeled,
+                destructive-outline button — the three-dots menu no longer
+                hides it (the only uninstall affordance was an unlabeled
+                icon, making uninstall undiscoverable). Still guarded by the
+                confirmation dialog: a single click never uninstalls. */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowUninstallDialog(true);
+              }}
+            >
+              {t("marketplace.install.uninstall")}
+            </Button>
+            {/* quick 260918-qts (D-1): installed cards keep a three-dots
+                trigger, now dedicated to Delete only (the visible Uninstall
+                button replaced the Uninstall menu item — single obvious
+                uninstall path). The Delete item is blocked server-side
+                while connections exist (409). */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
                   onClick={(e) => e.stopPropagation()}
-                  aria-label={`Uninstall ${entry.name}`}
+                  aria-label={`Delete ${entry.name}`}
                 >
-                  <svg className="w-4 h-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v.01M12 12v.01M12 18v.01" />
-                  </svg>
+                  {threeDotsIcon}
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
+              {/* 260919 propagation fix: Radix portals the content to
+                  document.body, but React synthetic events still bubble
+                  through the React tree — up to the Card's onNavigate
+                  onClick. Without stopPropagation here, clicking Uninstall/
+                  Delete (or Cancel) navigated to the detail page and
+                  unmounted the dialog mid-interaction (the delete never
+                  ran). */}
+              <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                {/* quick 260918-qts (D-1): per-entry catalog delete —
+                    blocked server-side while connections exist (409) */}
                 <DropdownMenuItem
                   className="text-destructive"
                   onSelect={(e) => {
                     e.preventDefault();
-                    setShowUninstallDialog(true);
+                    setShowDeleteDialog(true);
                   }}
                 >
-                  {t("common.uninstall", "Uninstall")}
+                  {t("marketplace.delete.confirm")}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <AlertDialog open={showUninstallDialog} onOpenChange={setShowUninstallDialog}>
-              <AlertDialogContent>
+              {/* stopPropagation — same portal-bubbling rationale as the
+                  dropdown above: the AlertDialogContent portals to body and
+                  clicks bubble to the Card's onNavigate. */}
+              <AlertDialogContent onClick={(e) => e.stopPropagation()}>
                 <AlertDialogHeader>
                   <AlertDialogTitle>
                     {t("common.uninstall", "Uninstall")} {entry.name}?
@@ -241,25 +281,89 @@ export default function MarketplaceCard({
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
-          </>
+          </div>
         ) : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onInstall(entry.id);
-                }}
-                disabled={!currentWorkspaceId}
-              >
-                {t("marketplace.install.button")}
-              </Button>
-            </TooltipTrigger>
-            {!currentWorkspaceId && <TooltipContent side="top">{t("marketplace.install.selectWorkspace")}</TooltipContent>}
-          </Tooltip>
+          <div className="flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onInstall(entry.id);
+                  }}
+                  disabled={!currentWorkspaceId}
+                >
+                  {t("marketplace.install.button")}
+                </Button>
+              </TooltipTrigger>
+              {!currentWorkspaceId && <TooltipContent side="top">{t("marketplace.install.selectWorkspace")}</TooltipContent>}
+            </Tooltip>
+            {/* quick 260918-qts (D-1): dedicated delete dropdown for
+                non-installed cards (the three-dots menu only exists on
+                installed cards) */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label={`Delete ${entry.name}`}
+                >
+                  {threeDotsIcon}
+                </Button>
+              </DropdownMenuTrigger>
+              {/* stopPropagation — portal-bubbling fix (see the installed
+                  arm above): without it the Delete item click navigated to
+                  the detail page instead of opening the dialog. */}
+              <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                <DropdownMenuItem
+                  className="text-destructive"
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    setShowDeleteDialog(true);
+                  }}
+                >
+                  {t("marketplace.delete.confirm")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         )}
       </CardFooter>
+
+      {/* quick 260918-qts: shared delete confirmation dialog (both card arms) */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        {/* stopPropagation — portal-bubbling fix: confirm/cancel clicks must
+            not bubble to the Card's onNavigate (which unmounted the dialog
+            mid-interaction and never ran the delete). */}
+        <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("marketplace.delete.title", { name: entry.name })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("marketplace.delete.body")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShowDeleteDialog(false)}>
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground"
+              data-testid="marketplace-delete-confirm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(entry.id);
+                setShowDeleteDialog(false);
+              }}
+            >
+              {t("common.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

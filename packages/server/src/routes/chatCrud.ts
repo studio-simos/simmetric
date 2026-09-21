@@ -6,7 +6,10 @@
 import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { tenantContextMiddleware } from "../middleware/tenantContext";
-import { requirePermission, requireWorkspaceAccess } from "../middleware/rbac";
+// Phase 189 (D-13, Plan 04 gate swap): requireWorkspaceWriteAccess is the SOLE
+// enforcement gate on the chat mutates (the binary gate retired at the flip —
+// flag persisted "true").
+import { requirePermission, requireWorkspaceWriteAccess } from "../middleware/rbac";
 import prisma, { withSoftDelete } from "../utils/prisma";
 import { renameChatSchema, updateChatModelSchema, moveChatSchema, editMessageSchema, linkArchiveSchema } from "@simmetric-chat/shared";
 import { z } from "zod";
@@ -21,7 +24,7 @@ router.use(authMiddleware);
 router.use(tenantContextMiddleware);
 
 // PUT /api/workspaces/:workspaceId/chats/:chatId — rename a chat
-router.put("/:workspaceId/chats/:chatId", requireWorkspaceAccess, async (req: Request, res: Response) => {
+router.put("/:workspaceId/chats/:chatId", requireWorkspaceWriteAccess(), async (req: Request, res: Response) => {
   const chatId = req.params.chatId as string;
   const workspaceId = req.params.workspaceId as string;
 
@@ -51,7 +54,7 @@ router.put("/:workspaceId/chats/:chatId", requireWorkspaceAccess, async (req: Re
 });
 
 // PATCH /api/workspaces/:workspaceId/chats/:chatId/model — update chat model selection
-router.patch("/:workspaceId/chats/:chatId/model", requireWorkspaceAccess, async (req: Request, res: Response) => {
+router.patch("/:workspaceId/chats/:chatId/model", requireWorkspaceWriteAccess(), async (req: Request, res: Response) => {
   const chatId = req.params.chatId as string;
   const workspaceId = req.params.workspaceId as string;
 
@@ -93,7 +96,7 @@ router.patch("/:workspaceId/chats/:chatId/model", requireWorkspaceAccess, async 
 // Delegates to shared linkArchive service (D-10) so the widget API-key route (80-07) reuses the same logic.
 router.patch(
   "/:workspaceId/chats/:chatId/archive",
-  requireWorkspaceAccess,
+  requireWorkspaceWriteAccess(),
   requirePermission("chat:write"),
   async (req: Request, res: Response) => {
     const chatId = req.params.chatId as string;
@@ -132,7 +135,7 @@ router.patch(
 );
 
 // DELETE /api/workspaces/:workspaceId/chats/:chatId/messages/:messageId — delete a single message
-router.delete("/:workspaceId/chats/:chatId/messages/:messageId", requireWorkspaceAccess, async (req: Request, res: Response) => {
+router.delete("/:workspaceId/chats/:chatId/messages/:messageId", requireWorkspaceWriteAccess(), async (req: Request, res: Response) => {
   const chatId = req.params.chatId as string;
   const messageId = req.params.messageId as string;
   const workspaceId = req.params.workspaceId as string;
@@ -168,7 +171,7 @@ router.delete("/:workspaceId/chats/:chatId/messages/:messageId", requireWorkspac
 });
 
 // PUT /api/workspaces/:workspaceId/chats/:chatId/messages/:messageId — edit a user message
-router.put("/:workspaceId/chats/:chatId/messages/:messageId", requireWorkspaceAccess, async (req: Request, res: Response) => {
+router.put("/:workspaceId/chats/:chatId/messages/:messageId", requireWorkspaceWriteAccess(), async (req: Request, res: Response) => {
   const chatId = req.params.chatId as string;
   const messageId = req.params.messageId as string;
   const workspaceId = req.params.workspaceId as string;
@@ -222,7 +225,7 @@ router.put("/:workspaceId/chats/:chatId/messages/:messageId", requireWorkspaceAc
 });
 
 // DELETE /api/workspaces/:workspaceId/chats/:chatId — delete a chat and its messages
-router.delete("/:workspaceId/chats/:chatId", requireWorkspaceAccess, async (req: Request, res: Response) => {
+router.delete("/:workspaceId/chats/:chatId", requireWorkspaceWriteAccess(), async (req: Request, res: Response) => {
   const chatId = req.params.chatId as string;
   const workspaceId = req.params.workspaceId as string;
 
@@ -250,7 +253,7 @@ router.delete("/:workspaceId/chats/:chatId", requireWorkspaceAccess, async (req:
 });
 
 // PUT /api/workspaces/:workspaceId/chats/:chatId/move — move chat to a folder
-router.put("/:workspaceId/chats/:chatId/move", requireWorkspaceAccess, async (req: Request, res: Response) => {
+router.put("/:workspaceId/chats/:chatId/move", requireWorkspaceWriteAccess(), async (req: Request, res: Response) => {
   const chatId = req.params.chatId as string;
   const workspaceId = req.params.workspaceId as string;
 
@@ -290,7 +293,7 @@ router.put("/:workspaceId/chats/:chatId/move", requireWorkspaceAccess, async (re
 });
 
 // POST /api/workspaces/:workspaceId/chats/:chatId/pin — pin a chat
-router.post("/:workspaceId/chats/:chatId/pin", requireWorkspaceAccess, async (req: Request, res: Response) => {
+router.post("/:workspaceId/chats/:chatId/pin", requireWorkspaceWriteAccess(), async (req: Request, res: Response) => {
   const chatId = req.params.chatId as string;
   const workspaceId = req.params.workspaceId as string;
 
@@ -315,7 +318,7 @@ router.post("/:workspaceId/chats/:chatId/pin", requireWorkspaceAccess, async (re
 });
 
 // DELETE /api/workspaces/:workspaceId/chats/:chatId/pin — unpin a chat
-router.delete("/:workspaceId/chats/:chatId/pin", requireWorkspaceAccess, async (req: Request, res: Response) => {
+router.delete("/:workspaceId/chats/:chatId/pin", requireWorkspaceWriteAccess(), async (req: Request, res: Response) => {
   const chatId = req.params.chatId as string;
   const workspaceId = req.params.workspaceId as string;
 

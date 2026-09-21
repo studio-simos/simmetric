@@ -11,6 +11,7 @@ import {
   ocrJobRejectSchema,
   ocrPreviewRequestSchema,
   ocrPreferencesSchema,
+  ocrPageRetryRequestSchema,
 } from "@simmetric-chat/shared";
 import { authMiddleware } from "../middleware/auth";
 import { tenantContextMiddleware } from "../middleware/tenantContext";
@@ -18,6 +19,7 @@ import { requirePermission } from "../middleware/rbac";
 import { verifyToken, getUserWithRoles } from "../services/authService";
 import { isTokenRevoked } from "../services/tokenRevocation";
 import {
+  cancelOcrJob,
   deleteOcrJob,
   getOcrJob,
   getOcrJobsByArchive,
@@ -29,6 +31,7 @@ import { isAdmin } from "../utils/auth";
 import { logEvent } from "../services/eventLogService";
 import { getSetting, upsertSystemConfigRow } from "../services/systemConfigService";
 import { resolveModelConfig, type OcrModelConfig } from "../ocr/modelRegistry";
+import { repairOcrPages } from "../ocr/ocrRepair";
 import {
   buildDeepseekOcrPrompt,
   buildGlmOcrPrompt,
@@ -529,6 +532,60 @@ router.post(
   }
 );
 
+// POST /api/archives/:id/jobs/:jobId/cancel — cooperative cancellation of a
+// running OCR job (quick 260918-p3h, D-3 + T-P3H-02). Mirrors the approve
+// route's ownership shape: getOcrJob load, 404 when missing or archiveId
+// mismatch, 409 when already terminal. Flips ONLY the OcrJob — for the draft
+// KB leg the uploads cancel route owns the AIJ flip, and a standalone OCR
+// job may have no AIJ at all (the progress mirror naturally no-ops).
+router.post(
+  "/:id/jobs/:jobId/cancel",
+  requirePermission("archive:write"),
+  async (req: Request, res: Response) => {
+    const archiveId = String(req.params.id);
+    const jobId = String(req.params.jobId);
+    try {
+      const job = await getOcrJob(jobId);
+      if (!job || job.archiveId !== archiveId) {
+        res.status(404).json({ error: "Job not found" });
+        return;
+      }
+
+      if (
+        job.status === "CANCELLED" ||
+        job.status === "COMPLETED" ||
+        job.status === "FAILED"
+      ) {
+        res.status(409).json({ error: "Job is not running" });
+        return;
+      }
+
+      await cancelOcrJob(jobId, "Cancelled by user");
+
+      // T-P3H-06: who cancelled? — same logEvent discipline as approve.
+      logEvent("ocr_job", jobId, "job.cancelled", req.userId!, {
+        archiveId,
+      }).catch((err: Error) => {
+        logger.error("[ocr] Failed to log cancellation event", {
+          jobId,
+          error: err.message,
+        });
+      });
+
+      logger.info("[ocr] Job cancelled via API", { jobId, archiveId });
+      res.json({ message: "Job cancelled", jobId, status: "CANCELLED" });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error("[ocr] Cancel route error", {
+        error: message,
+        archiveId,
+        jobId,
+      });
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
 // POST /api/archives/:id/jobs/:jobId/reject — reject OCR output
 router.post(
   "/:id/jobs/:jobId/reject",
@@ -596,6 +653,67 @@ router.post(
     } catch (err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
       logger.error("[ocr] Route error", { error: message });
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+// POST /api/archives/:id/jobs/:jobId/pages/retry — re-OCR only [FAILED:
+// pages of a COMPLETED job (260919-kvm). Body via ocrPageRetryRequestSchema
+// (omitted pages = every [FAILED: page); 409-guards non-COMPLETED jobs;
+// >50 targets → 400.
+router.post(
+  "/:id/jobs/:jobId/pages/retry",
+  requirePermission("archive:write"),
+  async (req: Request, res: Response) => {
+    const archiveId = String(req.params.id);
+    const jobId = String(req.params.jobId);
+    try {
+      const parsed = ocrPageRetryRequestSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({
+          error: "Invalid request body",
+          details: parsed.error.flatten().fieldErrors,
+        });
+        return;
+      }
+
+      const job = await getOcrJob(jobId);
+      if (!job || job.archiveId !== archiveId) {
+        res.status(404).json({ error: "Job not found" });
+        return;
+      }
+
+      if (job.status !== "COMPLETED") {
+        res.status(409).json({ error: "Job not completed" });
+        return;
+      }
+
+      const outcome = await repairOcrPages(jobId, parsed.data.pages, req.userId ?? null);
+
+      logger.info("[ocr] Pages repaired", {
+        jobId,
+        archiveId,
+        repaired: outcome.repaired.filter((r) => !r.stillFailed).length,
+        stillFailed: outcome.repaired.filter((r) => r.stillFailed).length,
+      });
+
+      res.json({
+        repaired: outcome.repaired,
+        failedPages: outcome.failedPages,
+        qualityScore: outcome.qualityScore,
+      });
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.startsWith("Too many failed pages")) {
+        res.status(400).json({ error: "Too many failed pages (max 50 per request)" });
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error("[ocr] Repair route error", {
+        error: message,
+        archiveId,
+        jobId,
+      });
       res.status(500).json({ error: "Internal server error" });
     }
   }

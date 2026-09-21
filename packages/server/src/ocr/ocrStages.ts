@@ -40,11 +40,13 @@ import path from "path";
 import fs from "fs/promises";
 import crypto from "crypto";
 import { logger } from "../utils/logger";
+import { getPdfStandardFontDataUrl } from "../utils/pdfjsFonts";
 import { validateArchivePath } from "../utils/archivePath";
 import prisma from "../utils/prisma";
 import { logEvent } from "../services/eventLogService";
 import {
   getOcrJob,
+  getOcrJobStatus,
   startOcrJob,
   updateJobProgress,
   completeOcrJob,
@@ -55,7 +57,7 @@ import { renderPageToPng } from "./pdfRenderer";
 import { ocrPage } from "./ollamaVisionClient";
 import { resolveModelConfig } from "./modelRegistry";
 import { getSetting } from "../services/systemConfigService";
-import { applyHallucinationGuard } from "./hallucinationGuard";
+import { applyHallucinationGuard, DegenerationMode } from "./hallucinationGuard";
 import { stripGroundingTags, sanitizeChatTokens } from "./groundingCleanup";
 import {
   computePageQualityScore,
@@ -71,9 +73,51 @@ const UPLOADS_BASE = path.resolve(process.cwd(), "storage/uploads");
 const MAX_CONCATENATED_LENGTH = 100_000;
 const MAX_EMPTY_RETRIES = 1;
 
+/**
+ * quick 260918-p3h (D-3): cooperative cancellation signal. Thrown by the OCR
+ * stage when the between-page / pre-image getOcrJobStatus check observes
+ * CANCELLED. runOcrPipeline's catch treats it as a NORMAL stop: no
+ * failOcrJob, no auto-approve-on-fail side effects — the row was already
+ * flipped by the cancel route.
+ */
+export class OcrJobCancelledError extends Error {
+  constructor(message = "OCR job cancelled by user") {
+    super(message);
+    this.name = "OcrJobCancelledError";
+  }
+}
+
+/**
+ * quick 260918-p3h (D-3): one cooperative check at a unit-of-work boundary.
+ * Throws OcrJobCancelledError when the job row is CANCELLED — the page loop
+ * / image branch catches nothing here, letting the pipeline's outer catch
+ * short-circuit on the cancelled arm.
+ */
+async function assertNotCancelled(jobId: string, page: number): Promise<void> {
+  const currentStatus = await getOcrJobStatus(jobId);
+  if (currentStatus === "CANCELLED") {
+    logger.info("[ocr] Job cancelled between units", { jobId, page });
+    throw new OcrJobCancelledError(`OCR job ${jobId} cancelled at page ${page}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers (module-private — shared by OCR + Finalize groups, RESEARCH A3)
 // ---------------------------------------------------------------------------
+
+/**
+ * Map an OCR job's archiveId to the hallucinationGuard degeneration mode
+ * (260918-oa9): archive jobs run discard-only — the < 0.3 HARD discard arm
+ * stays active so a vision-OCR repetition loop (verified incident: appendix
+ * heading repeated 1741×, uniqueness ≈ 0.006, on a clean source page) can
+ * never reach raw_sources → LanceDB → RAG — while the < 0.5 soft warning
+ * prefix arm is waived because legislative documents legitimately repeat
+ * structures. Regular (RAG) jobs keep full mode: both arms, byte-identical
+ * to the old skipDegeneration=false behavior.
+ */
+export function resolveGuardMode(archiveId: string): DegenerationMode {
+  return archiveId ? "discard-only" : "full";
+}
 
 /**
  * Truncate markdown at the specified character limit, breaking at the nearest
@@ -99,6 +143,33 @@ function truncateAtParagraph(
   }
 
   return slice;
+}
+
+/**
+ * Build the concatenated.md body from page results (260919-kvm — extracted
+ * from runOcrFinalizeStage so the post-job repair endpoint rewrites the file
+ * with the SAME join + truncation semantics; single source, no duplication).
+ */
+export function buildConcatenatedMarkdown(
+  pageResults: Array<{ pageNumber: number; markdown: string }>,
+  totalPages: number,
+): string {
+  let fullMarkdown = pageResults
+    .map((r) => `## Page ${r.pageNumber}\n\n${r.markdown}`)
+    .join("\n\n---\n\n");
+
+  if (fullMarkdown.length > MAX_CONCATENATED_LENGTH) {
+    const truncated = truncateAtParagraph(
+      fullMarkdown,
+      MAX_CONCATENATED_LENGTH,
+    );
+    fullMarkdown =
+      truncated +
+      `\n\n[TRUNCATED: Output exceeds ${MAX_CONCATENATED_LENGTH} characters. ` +
+      `Total pages: ${totalPages}. Full per-page files available in raw/]`;
+  }
+
+  return fullMarkdown;
 }
 
 // ---------------------------------------------------------------------------
@@ -636,6 +707,10 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
     const totalPages = 1;
     await startOcrJob(jobId, totalPages);
 
+    // quick 260918-p3h (D-3): cooperative cancel check before the single
+    // ocrPage call (image branch's only unit-of-work boundary).
+    await assertNotCancelled(jobId, 1);
+
     let imageOcrResult: Awaited<ReturnType<typeof ocrPage>>;
     try {
       imageOcrResult = await ocrPage(
@@ -664,7 +739,11 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
     }
     // Universal chat-template token sanitize pass (always-on, all templates)
     cleanMarkdown = sanitizeChatTokens(cleanMarkdown);
-    const guardResult = applyHallucinationGuard(cleanMarkdown, 1, !!job.archiveId);
+    const guardResult = applyHallucinationGuard(
+      cleanMarkdown,
+      1,
+      resolveGuardMode(job.archiveId),
+    );
 
     const imagePageResult = {
       pageNumber: 1,
@@ -754,6 +833,7 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
       data: new Uint8Array(pdfBuffer),
       disableAutoFetch: true,
       disableStream: true,
+      standardFontDataUrl: getPdfStandardFontDataUrl(),
     })
     .promise;
 
@@ -779,6 +859,11 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
   let failedPages = 0;
 
   for (let currentPage = 1; currentPage <= totalPages; currentPage++) {
+    // quick 260918-p3h (D-3): cooperative cancel check at the TOP of every
+    // page iteration — a user cancellation stops the loop at the next page
+    // boundary (the current page finishes, work already written stays).
+    await assertNotCancelled(jobId, currentPage);
+
     logger.info("[ocr] Processing page", {
       jobId,
       page: currentPage,
@@ -797,26 +882,53 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
           page: currentPage,
           error: message,
         });
-        pageResults.push({
-          pageNumber: currentPage,
-          markdown: `[FAILED: Could not render page — PDF rendering error]`,
-          tokensUsed: 0,
-          durationMs: 0,
-        });
-        failedPages++;
 
-        // Still update progress for the failed page
-        const progress = Math.round((currentPage / totalPages) * 100);
-        await updateJobProgress(jobId, {
-          processedPages: currentPage,
-          progress,
-          currentPage,
+        // 260919-kvm: ONE bounded auto-retry for transient render failures
+        logger.info("[ocr] Auto-retrying page render", {
+          jobId,
+          page: currentPage,
+          retry: 1,
+          reason: "render-error",
         });
-        continue;
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        try {
+          pngBuffer = await renderPageToPng(pdfPath, currentPage, 2.0);
+          logger.info("[ocr] Render retry succeeded", {
+            jobId,
+            page: currentPage,
+            retry: 1,
+            reason: "render-error",
+          });
+        } catch (renderRetryErr: unknown) {
+          const retryMessage = renderRetryErr instanceof Error ? renderRetryErr.message : String(renderRetryErr);
+          logger.error("[ocr] Render retry failed", {
+            jobId,
+            page: currentPage,
+            retry: 1,
+            reason: "render-error",
+            error: retryMessage,
+          });
+          pageResults.push({
+            pageNumber: currentPage,
+            markdown: `[FAILED: Could not render page — PDF rendering error]`,
+            tokensUsed: 0,
+            durationMs: 0,
+          });
+          failedPages++;
+
+          // Still update progress for the failed page
+          const progress = Math.round((currentPage / totalPages) * 100);
+          await updateJobProgress(jobId, {
+            processedPages: currentPage,
+            progress,
+            currentPage,
+          });
+          continue;
+        }
       }
 
       // ---- 5b. OCR ----
-      let ocrResult: Awaited<ReturnType<typeof ocrPage>>;
+      let ocrResult: Awaited<ReturnType<typeof ocrPage>> | null = null;
       try {
         ocrResult = await ocrPage(
           pngBuffer,
@@ -838,29 +950,116 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
             page: currentPage,
             error: message,
           });
-        } else {
-          logger.error("[ocr] OCR failed", {
+          pageResults.push({
+            pageNumber: currentPage,
+            markdown: `[FAILED: OCR model not installed — ${message}]`,
+            tokensUsed: 0,
+            durationMs: 0,
+          });
+          failedPages++;
+
+          const progress = Math.round((currentPage / totalPages) * 100);
+          await updateJobProgress(jobId, {
+            processedPages: currentPage,
+            progress,
+            currentPage,
+          });
+          continue;
+        }
+
+        logger.error("[ocr] OCR failed", {
+          jobId,
+          page: currentPage,
+          error: message,
+        });
+
+        // 260919-kvm: ONE bounded auto-retry with the fallback prompt for
+        // transient model errors. Model-not-installed is deterministic —
+        // never retried. On success, ocrResult is replaced and control
+        // falls through to the shared strip→sanitize→guard chain below
+        // (tokens/duration come from the retry call).
+        logger.info("[ocr] Auto-retrying OCR call", {
+          jobId,
+          page: currentPage,
+          retry: 1,
+          reason: "ocr-error",
+        });
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        let retrySuccess = false;
+        try {
+          const retryResult = await ocrPage(
+            pngBuffer,
+            currentPage,
+            totalPages,
+            effectiveModelName,
+            modelConfig,
+            undefined,
+            true, // useFallbackPrompt — different strategy for retry
+            (job.ocrMode as "text" | "table" | "figure" | "generic" | undefined) ?? undefined,
+            job.customInstructions ?? undefined,
+          );
+
+          let retryCleanMarkdown = retryResult.markdown;
+          if (modelConfig.promptTemplate === "deepseek-ocr") {
+            retryCleanMarkdown = stripGroundingTags(retryResult.markdown);
+          }
+          retryCleanMarkdown = sanitizeChatTokens(retryCleanMarkdown);
+          const retryGuard = applyHallucinationGuard(
+            retryCleanMarkdown,
+            currentPage,
+            resolveGuardMode(job.archiveId),
+          );
+
+          if (!retryGuard.hasEmpty) {
+            ocrResult = retryResult;
+            retrySuccess = true;
+            logger.info("[ocr] OCR error retry succeeded", {
+              jobId,
+              page: currentPage,
+              retry: 1,
+              reason: "ocr-error",
+            });
+          } else {
+            logger.warn("[ocr] OCR error retry returned empty/degenerated output", {
+              jobId,
+              page: currentPage,
+              retry: 1,
+              reason: "ocr-error",
+            });
+          }
+        } catch (retryErr: unknown) {
+          const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          logger.error("[ocr] OCR error retry failed", {
             jobId,
             page: currentPage,
-            error: message,
+            retry: 1,
+            reason: "ocr-error",
+            error: retryMessage,
           });
         }
-        pageResults.push({
-          pageNumber: currentPage,
-          markdown: isModelNotFound
-            ? `[FAILED: OCR model not installed — ${message}]`
-            : `[FAILED: OCR model error — ${message}]`,
-          tokensUsed: 0,
-          durationMs: 0,
-        });
-        failedPages++;
+        if (!retrySuccess) {
+          pageResults.push({
+            pageNumber: currentPage,
+            markdown: `[FAILED: OCR model error — ${message}]`,
+            tokensUsed: 0,
+            durationMs: 0,
+          });
+          failedPages++;
 
-        const progress = Math.round((currentPage / totalPages) * 100);
-        await updateJobProgress(jobId, {
-          processedPages: currentPage,
-          progress,
-          currentPage,
-        });
+          const progress = Math.round((currentPage / totalPages) * 100);
+          await updateJobProgress(jobId, {
+            processedPages: currentPage,
+            progress,
+            currentPage,
+          });
+          continue;
+        }
+      }
+
+      // 260919-kvm: ocrResult is non-null here — the catch block either
+      // replaced it with a successful retry output or pushed a [FAILED:
+      // marker and `continue`d past this point.
+      if (!ocrResult) {
         continue;
       }
 
@@ -883,7 +1082,7 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
       let guardResult = applyHallucinationGuard(
         cleanMarkdown,
         currentPage,
-        !!job.archiveId,
+        resolveGuardMode(job.archiveId),
       );
       if (guardResult.hasUnverified) {
         hasUnverified = true;
@@ -895,6 +1094,8 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
         logger.warn("[ocr] Empty page output detected, retrying", {
           jobId,
           page: currentPage,
+          retry: 0,
+          reason: guardResult.degenerated ? "degeneration" : "empty",
         });
 
         // Brief pause before retry to avoid hammering the model
@@ -938,7 +1139,7 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
             const retryGuard = applyHallucinationGuard(
               retryMarkdown,
               currentPage,
-              !!job.archiveId,
+              resolveGuardMode(job.archiveId),
             );
 
             if (!retryGuard.hasEmpty) {
@@ -954,12 +1155,14 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
                 jobId,
                 page: currentPage,
                 retry,
+                reason: "empty",
               });
             } else {
               logger.warn("[ocr] Empty page retry also returned empty", {
                 jobId,
                 page: currentPage,
                 retry,
+                reason: retryGuard.degenerated ? "degeneration" : "empty",
               });
             }
           } catch (retryErr: unknown) {
@@ -968,13 +1171,20 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
               jobId,
               page: currentPage,
               retry,
+              reason: "empty",
               error: message,
             });
           }
         }
 
         if (!retrySuccess) {
-          pageMarkdown = `[FAILED: OCR model returned empty output for page ${currentPage} after ${MAX_EMPTY_RETRIES + 1} attempt(s)]`;
+          // 260919-kvm: degeneration-specific exhaust marker — when the FINAL
+          // guardResult carried degenerated=true, the page did not merely
+          // come back empty, the model looped. Truthful marker + failedPages
+          // accounting unchanged.
+          pageMarkdown = guardResult.degenerated
+            ? `[FAILED: OCR output for page ${currentPage} discarded — severe text degeneration persisted after retry]`
+            : `[FAILED: OCR model returned empty output for page ${currentPage} after ${MAX_EMPTY_RETRIES + 1} attempt(s)]`;
           failedPages++;
         }
       }
@@ -1090,20 +1300,7 @@ async function runOcrFinalizeStage(ocr: OcrResult): Promise<void> {
   const jobId = job.id;
 
   // ---- Step 6: Concatenate page results ----
-  let fullMarkdown = pageResults
-    .map((r) => `## Page ${r.pageNumber}\n\n${r.markdown}`)
-    .join("\n\n---\n\n");
-
-  if (fullMarkdown.length > MAX_CONCATENATED_LENGTH) {
-    const truncated = truncateAtParagraph(
-      fullMarkdown,
-      MAX_CONCATENATED_LENGTH,
-    );
-    fullMarkdown =
-      truncated +
-      `\n\n[TRUNCATED: Output exceeds ${MAX_CONCATENATED_LENGTH} characters. ` +
-      `Total pages: ${totalPages}. Full per-page files available in raw/]`;
-  }
+  const fullMarkdown = buildConcatenatedMarkdown(pageResults, totalPages);
 
   // ---- Step 7: Compute document quality score ----
   const qualityScore = computeDocumentQualityScore(
@@ -1261,6 +1458,14 @@ export async function runOcrPipeline(jobId: string): Promise<void> {
 
     await runOcrFinalizeStage(ocr);
   } catch (err: unknown) {
+    // quick 260918-p3h (D-3): user cancellation is a NORMAL stop, not a
+    // failure — the row was already flipped to CANCELLED by the cancel
+    // route; return WITHOUT failOcrJob / auto-approve-on-fail side effects.
+    if (err instanceof OcrJobCancelledError) {
+      logger.info("[ocr] Pipeline stopped by user cancellation", { jobId });
+      return;
+    }
+
     const message = err instanceof Error ? err.message : String(err);
     // ---- Catastrophic failure (outer try/catch) ----
     logger.error("[ocr] Pipeline failed", {

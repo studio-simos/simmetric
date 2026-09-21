@@ -42,18 +42,25 @@ import ForcePasswordChange from "./components/ForcePasswordChange";
 // mode is active and the user is unauthenticated — lazy-splitting it
 // would add a chunk fetch before the first-run user sees anything.
 import SetupWizard from "./components/SetupWizard";
+// Phase 189 (WSIS-01, D-01/D-03) — personal-workspace onboarding wizard,
+// rendered through the App empty-state branch (SetupWizard branch idiom).
+import OnboardingWizard from "./components/OnboardingWizard";
 import { Toaster } from "@/components/ui/sonner";
+import { Button } from "@/components/ui/button";
 import DashboardPage from "./components/DashboardPage";
 import KnowledgeBasePage from "./components/KnowledgeBasePage";
 import MarketplacePage from "./components/MarketplacePage";
 import MarketplaceDetail from "./components/MarketplaceDetail";
 import ArchivesPage from "./components/ArchivesPage";
 import ArchiveDetailPage from "./components/ArchiveDetailPage";
+// Phase 190 (SKIL-01, D-19) — dedicated /skills management page.
+import SkillsPage from "./components/SkillsPage";
 import DocumentViewerPage from "./components/DocumentViewerPage";
 import SynthesisDashboard from "./components/SynthesisDashboard";
 import SynthesisRunDetail from "./components/SynthesisRunDetail";
 import UnifiedUploadPage from "./components/UnifiedUploadPage";
 import AppSidebar from "./components/AppSidebar";
+import type { SidebarShareTarget } from "./components/AppSidebar";
 import AppNavOverlay from "./components/AppNavOverlay";
 import UserMenuDialog from "./components/ui/UserMenuDialog";
 import ChatSidebar from "./components/ChatSidebar";
@@ -83,7 +90,7 @@ const EventLogPanel = lazy(() => import("./components/EventLogPanel"));
 const SsoSettingsPanel = lazy(() => import("./components/SsoSettingsPanel"));
 
 function App() {
-  const { setWorkspaceId, currentWorkspaceId, setChatId, currentChatId } = useChatNav();
+  const { setWorkspaceId, currentWorkspaceId, setChatId, currentChatId, setNewChatArchiveId } = useChatNav();
   const { resolvedTheme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
@@ -153,11 +160,20 @@ function App() {
   // rename (useRenameProject) and on create (useCreateProject, Feature 7.3), so
   // the SidebarDropdown reflects changes without a manual refetch.
   const { data: projects = [] } = useProjects(hasToken);
-  const { data: allWorkspaces = [] } = useWorkspaces(hasToken);
+  const { data: allWorkspaces = [], isLoading: workspacesLoading, isError: workspacesError, refetch: refetchWorkspaces } = useWorkspaces(hasToken);
   const sidebarProjects = projects.map((p) => ({ id: p.id, name: p.name }));
   const sidebarWorkspaces = allWorkspaces
     .filter((w) => w.projectId === selectedProjectId)
     .map((w) => ({ id: w.id, name: w.name }));
+  // Phase 189 (WSIS-03, D-20): the sidebar owner share surface resolves
+  // ownership from data the workspace surface already knows
+  // (project.createdBy === current user). Client gate is UX-only — every
+  // grant/revoke call re-gates server-side (owner-or-admin, Plan 02).
+  const shareTarget: SidebarShareTarget | null = (() => {
+    const active = allWorkspaces.find((w) => w.id === currentWorkspaceId);
+    if (!active?.project?.createdBy || active.project.createdBy !== user?.id) return null;
+    return { workspaceId: active.id, workspaceName: active.name };
+  })();
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     const saved = localStorage.getItem("sidebar-open");
     // Default: expanded on desktop (≥768px), collapsed rail on mobile. The
@@ -475,6 +491,55 @@ function App() {
     );
   }
 
+  // Phase 189 (WSIS-01, D-01/D-03) — personal-workspace empty-state gate.
+  // Ordered AFTER mustChangePassword (forced-change outranks onboarding) and
+  // BEFORE the main render: a user with ZERO workspaces sees either the
+  // guided wizard (!hasOnboarded) or the ask-admin message (hasOnboarded).
+  // The wizard is UX-only — the server's 400/409/idempotency guards are the
+  // real boundary; the hasOnboarded scalar arrives via /auth/me (D-03) and
+  // the wizard's success invalidations re-render App past this gate (the
+  // wizard never re-shows, Pitfall 4).
+  //
+  // 189-REVIEW WR-01: the gate distinguishes the three pre-empty states
+  // BEFORE the length check — a transient workspaces-GET failure no longer
+  // strands the user on the false "ask admin" screen (the query hook
+  // preserves the session on 500); loading keeps the initializing Skeleton.
+  if (workspacesError) {
+    return (
+      <TooltipProvider>
+        <div className="min-h-screen flex items-center justify-center bg-background" data-testid="workspaces-load-error">
+          <div className="max-w-md text-center space-y-3 p-6">
+            <h1 className="text-xl font-semibold text-foreground">{t("onboarding.loadError")}</h1>
+            <Button onClick={() => void refetchWorkspaces()} aria-label={t("onboarding.retry")}>
+              {t("onboarding.retry")}
+            </Button>
+          </div>
+        </div>
+        <Toaster />
+      </TooltipProvider>
+    );
+  }
+  if (workspacesLoading) {
+    return (
+      <TooltipProvider>
+        <div className="min-h-screen flex items-center justify-center bg-background">
+          <div className="flex flex-col items-center gap-3">
+            <Skeleton className="h-8 w-48 rounded-md" />
+            <Skeleton className="h-4 w-32 rounded-md" />
+          </div>
+        </div>
+      </TooltipProvider>
+    );
+  }
+  if (allWorkspaces.length === 0) {
+    return (
+      <TooltipProvider>
+        <OnboardingWizard hasOnboarded={user?.hasOnboarded ?? false} workspacesCount={0} />
+        <Toaster />
+      </TooltipProvider>
+    );
+  }
+
   return (
     <TooltipProvider>
       <div
@@ -510,6 +575,7 @@ function App() {
           t={t}
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
+          shareTarget={shareTarget}
         >
           <ChatSidebar
             workspaceId={currentWorkspaceId ?? ""}
@@ -521,6 +587,12 @@ function App() {
             onNewChat={() => {
               navigate("/");
               setChatId(null);
+              // quick 260910-e0n: also clear the ephemeral new-chat archive
+              // pick here — covers the re-click-in-already-new-chat case
+              // where no navChatId transition fires in the panel reconciler
+              // (the ChatContext reset effect only runs when currentChatId
+              // CHANGES).
+              setNewChatArchiveId(null);
             }}
           />
         </AppSidebar>
@@ -598,6 +670,18 @@ function App() {
               }
             />
             <Route path="/documents" element={<DocumentsPage />} />
+            {/* Phase 190 (SKIL-01, D-19) — /skills management page, gated by
+                the "skills" menu section (Plan 01's MENU_SECTIONS addition). */}
+            <Route
+              path="/skills"
+              element={
+                effectiveMenuSections.includes("skills") ? (
+                  <SkillsPage />
+                ) : (
+                  <Navigate to="/" />
+                )
+              }
+            />
             <Route
               path="/workspace/:workspaceId/documents"
               element={<DocumentsPage />}

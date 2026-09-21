@@ -103,6 +103,11 @@ jest.mock("../middleware/rbac", () => {
     return perms.includes("admin:settings");
   };
   return {
+  // Phase 189 (189-02 sweep): routes now import the graded middlewares —
+  // the mock must export them (shadow no-op) or express throws at load.
+  requireWorkspaceWriteAccess: () => (_req: any, _res: any, next: any) => next(),
+  requireWorkspaceRead: () => (_req: any, _res: any, next: any) => next(),
+
     requireAdmin: (req: any, res: any, next: any) => {
       const user = (global as any).__AUTH_USER__ ?? DEFAULT_AUTH_USER;
       // Sync req.user with the current global (authMiddleware already set it,

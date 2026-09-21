@@ -144,7 +144,7 @@ jest.mock("../queries/useProviders", () => ({
 
 import "@testing-library/jest-dom";
 import { useState } from "react";
-import { screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
+import { screen, fireEvent, waitFor, cleanup, within, act } from "@testing-library/react";
 import { renderWithProviders } from "./test-utils";
 import WidgetForm, { type WidgetTab } from "../components/WidgetForm";
 import type { Widget } from "@simmetric-chat/shared";
@@ -783,40 +783,70 @@ describe("WidgetForm (archive selector payload, 260809-uxk T4)", () => {
   });
 });
 
-// ── 151-02 (G-151-1b): per-widget daily MESSAGE limit field ────────────────
-describe("WidgetForm (sessionLimitPerDay field, 151-02 G-151-1b)", () => {
-  it("renders the messages-per-day input with label + hint (edit mode)", () => {
+// ── 151-02 (G-151-1b) + 260916-pwd: widget chat limits + "no limits" toggles ─
+describe("WidgetForm (widget chat limits, 151-02 G-151-1b + 260916-pwd)", () => {
+  const sessionInput = () =>
+    screen.getByLabelText("settings.widget.sessionLimitPerDay") as HTMLInputElement;
+  const rateInput = () =>
+    screen.getByLabelText("settings.widget.rateLimitPerMinute") as HTMLInputElement;
+  // Both limits now share the same "No limit" label — the unlimited switches
+  // are identified by their form field registration order (session first,
+  // rate second). getByRole("switch", { name }) returns both; index into the
+  // list (document order matches the render order).
+  const unlimitedSwitches = () =>
+    screen.getAllByRole("switch", { name: "settings.widget.unlimited" });
+
+  it("renders both limit inputs with labels + hints (edit mode)", () => {
     renderWithProviders(
       <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
     );
-    expect(screen.getByLabelText("settings.widget.sessionLimitPerDay")).toBeInTheDocument();
+    expect(sessionInput()).toBeInTheDocument();
     expect(screen.getByText("settings.widget.sessionLimitPerDayHint")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("settings.widget.sessionLimitPerDayPlaceholder")).toBeInTheDocument();
+    expect(rateInput()).toBeInTheDocument();
+    expect(screen.getByText("settings.widget.rateLimitPerMinuteHint")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("settings.widget.rateLimitPerMinutePlaceholder")).toBeInTheDocument();
+    expect(unlimitedSwitches()).toHaveLength(2);
   });
 
-  it("seeds the field from the widget row when sessionLimitPerDay is set", () => {
+  it("renders both limit fields on CREATE (no widget prop — Limits section is not edit-gated)", () => {
+    renderWithProviders(<WidgetForm tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />);
+    expect(sessionInput()).toBeInTheDocument();
+    expect(rateInput()).toBeInTheDocument();
+    expect(unlimitedSwitches()).toHaveLength(2);
+  });
+
+  it("seeds the sessionLimitPerDay field from the widget row when set (positive int)", () => {
     const limitedWidget = { ...mockWidget, sessionLimitPerDay: 25 };
     renderWithProviders(
       <WidgetForm widget={limitedWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
     );
-    const input = screen.getByLabelText("settings.widget.sessionLimitPerDay") as HTMLInputElement;
-    expect(input.value).toBe("25");
+    expect(sessionInput().value).toBe("25");
+  });
+
+  it("seeds the unlimited checkbox + empty input for a widget with sessionLimitPerDay: 0", () => {
+    const unlimitedWidget = { ...mockWidget, sessionLimitPerDay: 0 };
+    renderWithProviders(
+      <WidgetForm widget={unlimitedWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    expect(unlimitedSwitches()[0]).toHaveAttribute("data-state", "checked");
+    // 0 is falsy — the input must NOT seed "0"; the checkbox carries the state
+    expect(sessionInput().value).toBe("");
+    expect(sessionInput()).toBeDisabled();
   });
 
   it("saves a filled sessionLimitPerDay as a positive int in the payload", async () => {
     renderWithProviders(
       <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
     );
-    fireEvent.change(screen.getByLabelText("settings.widget.sessionLimitPerDay"), {
-      target: { value: "42" },
-    });
+    fireEvent.change(sessionInput(), { target: { value: "42" } });
     fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
     await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
     const payload = mockUpdateWidget.mock.calls[0][0].data;
     expect(payload.sessionLimitPerDay).toBe(42);
   });
 
-  it("sends sessionLimitPerDay: null when left empty (global default — nullable write contract)", async () => {
+  it("sends sessionLimitPerDay: null when left empty and the checkbox is off (global default — nullable write contract)", async () => {
     renderWithProviders(
       <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
     );
@@ -826,17 +856,73 @@ describe("WidgetForm (sessionLimitPerDay field, 151-02 G-151-1b)", () => {
     expect(payload.sessionLimitPerDay).toBeNull();
   });
 
-  it("sends sessionLimitPerDay: null for a non-positive value (0/negative ignored)", async () => {
+  it("typing 0 without the checkbox still sends sessionLimitPerDay: null (min=1 input — 0 is not a valid custom limit)", async () => {
     renderWithProviders(
       <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
     );
-    fireEvent.change(screen.getByLabelText("settings.widget.sessionLimitPerDay"), {
-      target: { value: "0" },
-    });
+    fireEvent.change(sessionInput(), { target: { value: "0" } });
     fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
     await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
     const payload = mockUpdateWidget.mock.calls[0][0].data;
     expect(payload.sessionLimitPerDay).toBeNull();
+  });
+
+  it("checking the sessionLimitPerDay unlimited switch sends 0 (unlimited)", async () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    fireEvent.click(unlimitedSwitches()[0]);
+    // The input disables when the checkbox is on (no-limit UX)
+    expect(sessionInput()).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    const payload = mockUpdateWidget.mock.calls[0][0].data;
+    expect(payload.sessionLimitPerDay).toBe(0);
+  });
+
+  it("saves a filled rateLimitPerMinute as a positive int in the payload", async () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    fireEvent.change(rateInput(), { target: { value: "60" } });
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    const payload = mockUpdateWidget.mock.calls[0][0].data;
+    expect(payload.rateLimitPerMinute).toBe(60);
+  });
+
+  it("sends rateLimitPerMinute: null when left empty and the checkbox is off (global default)", async () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    const payload = mockUpdateWidget.mock.calls[0][0].data;
+    expect(payload.rateLimitPerMinute).toBeNull();
+  });
+
+  it("checking the rateLimitPerMinute unlimited switch sends 0 (unlimited)", async () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    fireEvent.click(unlimitedSwitches()[1]);
+    expect(rateInput()).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    const payload = mockUpdateWidget.mock.calls[0][0].data;
+    expect(payload.rateLimitPerMinute).toBe(0);
+  });
+
+  it("seeds both fields independently from the widget row (custom limit + unlimited)", () => {
+    const mixedWidget = { ...mockWidget, sessionLimitPerDay: 25, rateLimitPerMinute: 0 };
+    renderWithProviders(
+      <WidgetForm widget={mixedWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    expect(sessionInput().value).toBe("25");
+    expect(unlimitedSwitches()[0]).toHaveAttribute("data-state", "unchecked");
+    expect(unlimitedSwitches()[1]).toHaveAttribute("data-state", "checked");
+    expect(rateInput().value).toBe("");
+    expect(rateInput()).toBeDisabled();
   });
 });
 
@@ -1087,5 +1173,290 @@ describe("WidgetForm (response model pin, 260831-hgy)", () => {
       <WidgetForm widget={halfSetWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
     );
     expect(modelSelect().value).toBe("");
+  });
+});
+
+// ─── 260917-mz6: grounding prompt + contact options + lead timing + preview reload ───
+
+describe("WidgetForm (grounding + contact + timing + preview reload, 260917-mz6)", () => {
+  it("seeds systemPrompt + contact fields + timing + timeout from a widget carrying them", () => {
+    const configured: Widget = {
+      ...mockWidget,
+      systemPrompt: "Answer only from the handbook.",
+      contactConfig: {
+        formUrl: "https://example.com/contact",
+        bookingUrl: "https://cal.example.com/owner",
+        email: "owner@example.com",
+        customUrl: "https://example.com/sales",
+        customLabel: "Talk to sales",
+      },
+      leadCaptureTiming: "timeout",
+      leadCaptureTimeoutSeconds: 60,
+    };
+    renderWithProviders(
+      <WidgetForm widget={configured} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    expect(
+      (screen.getByPlaceholderText("settings.widget.systemPromptPlaceholder") as HTMLTextAreaElement).value
+    ).toBe("Answer only from the handbook.");
+    expect((screen.getByLabelText("settings.widget.contactFormUrlLabel") as HTMLInputElement).value).toBe("https://example.com/contact");
+    expect((screen.getByLabelText("settings.widget.contactBookingUrlLabel") as HTMLInputElement).value).toBe("https://cal.example.com/owner");
+    expect((screen.getByLabelText("settings.widget.contactCustomUrlLabel") as HTMLInputElement).value).toBe("https://example.com/sales");
+    expect((screen.getByLabelText("settings.widget.contactCustomLabelLabel") as HTMLInputElement).value).toBe("Talk to sales");
+    expect((screen.getByLabelText("settings.widget.leadTimingLabel") as HTMLSelectElement).value).toBe("timeout");
+    expect((screen.getByLabelText("settings.widget.leadTimeoutSecondsLabel") as HTMLInputElement).value).toBe("60");
+  });
+
+  it("renders the systemPrompt textarea on the settings tab with maxLength 4000", () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    const textarea = screen.getByPlaceholderText("settings.widget.systemPromptPlaceholder") as HTMLTextAreaElement;
+    expect(textarea).toBeInTheDocument();
+    expect(textarea.maxLength).toBe(4000);
+    expect(screen.getByText("settings.widget.chatBehaviorSection")).toBeInTheDocument();
+  });
+
+  it("payload: empty systemPrompt → null (clears to the built-in grounding default)", async () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    fireEvent.change(screen.getByPlaceholderText("settings.widget.namePlaceholder"), {
+      target: { value: "My Widget" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    const payload = mockUpdateWidget.mock.calls[0][0].data;
+    expect(payload.systemPrompt).toBeNull();
+  });
+
+  it("payload: filled systemPrompt sends the trimmed string", async () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    fireEvent.change(screen.getByPlaceholderText("settings.widget.systemPromptPlaceholder"), {
+      target: { value: "  Be concise.  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    const payload = mockUpdateWidget.mock.calls[0][0].data;
+    expect(payload.systemPrompt).toBe("Be concise.");
+  });
+
+  it("payload: all-empty contact fields → contactConfig null; filled → the validated blob", async () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    fireEvent.change(screen.getByPlaceholderText("settings.widget.namePlaceholder"), {
+      target: { value: "My Widget" },
+    });
+    // First save with everything empty → null blob
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    expect(mockUpdateWidget.mock.calls[0][0].data.contactConfig).toBeNull();
+
+    // Fill two contact fields → blob carries exactly those (trimmed)
+    fireEvent.change(screen.getByLabelText("settings.widget.contactEmailLabel"), {
+      target: { value: " owner@example.com " },
+    });
+    fireEvent.change(screen.getByLabelText("settings.widget.contactCustomUrlLabel"), {
+      target: { value: "https://example.com/sales" },
+    });
+    fireEvent.change(screen.getByLabelText("settings.widget.contactCustomLabelLabel"), {
+      target: { value: "Talk to sales" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalledTimes(2));
+    expect(mockUpdateWidget.mock.calls[1][0].data.contactConfig).toEqual({
+      email: "owner@example.com",
+      customUrl: "https://example.com/sales",
+      customLabel: "Talk to sales",
+    });
+  });
+
+  it("payload: timing sent; timeout only when timing=timeout (else null)", async () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    const timingSelect = screen.getByLabelText("settings.widget.leadTimingLabel") as HTMLSelectElement;
+    // Default timing "end" → null timeout (nothing typed)
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    let payload = mockUpdateWidget.mock.calls[0][0].data;
+    expect(payload.leadCaptureTiming).toBe("end");
+    expect(payload.leadCaptureTimeoutSeconds).toBeNull();
+
+    // Switch to timeout → the number input appears; fill it → int parsed and sent
+    fireEvent.change(timingSelect, { target: { value: "timeout" } });
+    const timeoutInput = screen.getByLabelText("settings.widget.leadTimeoutSecondsLabel") as HTMLInputElement;
+    fireEvent.change(timeoutInput, { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalledTimes(2));
+    payload = mockUpdateWidget.mock.calls[1][0].data;
+    expect(payload.leadCaptureTiming).toBe("timeout");
+    expect(payload.leadCaptureTimeoutSeconds).toBe(30);
+  });
+
+  it("seeds contact/timing fields from a fully configured widget and round-trips them", async () => {
+    const configured: Widget = {
+      ...mockWidget,
+      systemPrompt: "Grounded prompt",
+      contactConfig: { formUrl: "https://example.com/contact", email: "owner@example.com" },
+      leadCaptureTiming: "start",
+      leadCaptureTimeoutSeconds: null,
+    };
+    renderWithProviders(
+      <WidgetForm widget={configured} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    expect(
+      (screen.getByPlaceholderText("settings.widget.systemPromptPlaceholder") as HTMLTextAreaElement).value
+    ).toBe("Grounded prompt");
+    expect((screen.getByLabelText("settings.widget.contactFormUrlLabel") as HTMLInputElement).value).toBe("https://example.com/contact");
+    expect((screen.getByLabelText("settings.widget.contactEmailLabel") as HTMLInputElement).value).toBe("owner@example.com");
+    expect((screen.getByLabelText("settings.widget.leadTimingLabel") as HTMLSelectElement).value).toBe("start");
+
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    const payload = mockUpdateWidget.mock.calls[0][0].data;
+    expect(payload.systemPrompt).toBe("Grounded prompt");
+    expect(payload.contactConfig).toEqual({ formUrl: "https://example.com/contact", email: "owner@example.com" });
+    expect(payload.leadCaptureTiming).toBe("start");
+    expect(payload.leadCaptureTimeoutSeconds).toBeNull();
+  });
+
+  it("preview reloadKey bumps after each save (the iframe src gains a changed &r= between two saves)", async () => {
+    // WidgetPreviewPane is NOT mocked in this file — it renders a real iframe
+    // whose debounced (500ms) src we observe. The debounced effect refires on
+    // every reloadKey change, so after the debounce elapses the src carries
+    // &r=<Date.now()> and each subsequent save changes it.
+    jest.useFakeTimers();
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    const iframe = () => screen.getByTitle("Widget preview");
+    expect(iframe().getAttribute("src")).not.toContain("&r=");
+
+    fireEvent.change(screen.getByPlaceholderText("settings.widget.namePlaceholder"), {
+      target: { value: "Save One" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    act(() => { jest.advanceTimersByTime(500); });
+    const srcOne = iframe().getAttribute("src")!;
+    expect(srcOne).toMatch(/&r=\d+/);
+
+    // Fake timers freeze Date.now() — advance system time so the second
+    // save's Date.now() bump yields a strictly larger key.
+    jest.setSystemTime(Date.now() + 60000);
+    fireEvent.change(screen.getByPlaceholderText("settings.widget.namePlaceholder"), {
+      target: { value: "Save Two" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalledTimes(2));
+    act(() => { jest.advanceTimersByTime(500); });
+    const srcTwo = iframe().getAttribute("src")!;
+    const keyOne = srcOne.match(/&r=(\d+)/)![1];
+    const keyTwo = srcTwo.match(/&r=(\d+)/)![1];
+    // Numeric comparison of the two Date.now()-derived keys — the system-time
+    // bump between saves guarantees strict growth.
+    expect(Number(keyTwo)).toBeGreaterThan(Number(keyOne));
+    jest.useRealTimers();
+  });
+});
+
+// ─── 260917-qoh: per-widget privacy URL + per-widget prompt framing ───
+
+describe("WidgetForm (privacy URL + prompt framing, 260917-qoh)", () => {
+  it("renders the privacy URL input in the Lead Capture section (edit mode)", () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    const input = screen.getByLabelText("settings.widget.privacyUrlLabel") as HTMLInputElement;
+    expect(input).toBeInTheDocument();
+    expect(input.type).toBe("url");
+    expect(screen.getByText("settings.widget.privacyUrlHint")).toBeInTheDocument();
+    expect(input.value).toBe("");
+  });
+
+  it("seeds the privacy URL from a widget carrying it", () => {
+    const configured: Widget = {
+      ...mockWidget,
+      privacyUrl: "https://example.com/privacy",
+    };
+    renderWithProviders(
+      <WidgetForm widget={configured} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    expect(
+      (screen.getByLabelText("settings.widget.privacyUrlLabel") as HTMLInputElement).value
+    ).toBe("https://example.com/privacy");
+  });
+
+  it("payload: filled privacyUrl sends the trimmed value", async () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    fireEvent.change(screen.getByLabelText("settings.widget.privacyUrlLabel"), {
+      target: { value: "  https://example.com/privacy  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    const payload = mockUpdateWidget.mock.calls[0][0].data;
+    expect(payload.privacyUrl).toBe("https://example.com/privacy");
+  });
+
+  it("payload: empty privacyUrl → null (clears — the nullable write contract)", async () => {
+    const configured: Widget = {
+      ...mockWidget,
+      privacyUrl: "https://example.com/privacy",
+    };
+    renderWithProviders(
+      <WidgetForm widget={configured} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    fireEvent.change(screen.getByLabelText("settings.widget.privacyUrlLabel"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    const payload = mockUpdateWidget.mock.calls[0][0].data;
+    expect(payload.privacyUrl).toBeNull();
+  });
+
+  it("payload: a javascript: string passes the form (server-side isHttpUrl refine rejects it — no client duplicate gate)", async () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    fireEvent.change(screen.getByLabelText("settings.widget.privacyUrlLabel"), {
+      target: { value: "javascript:alert(1)" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    const payload = mockUpdateWidget.mock.calls[0][0].data;
+    expect(payload.privacyUrl).toBe("javascript:alert(1)");
+  });
+
+  it("the prompt hint renders (per-widget framing — no stale global-constant reference)", () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    // The hint text is the mocked t() key — assert the section + label + hint
+    // render (the label contract is unchanged; the hint VALUE now speaks the
+    // per-widget model server-side).
+    expect(screen.getByText("settings.widget.chatBehaviorSection")).toBeInTheDocument();
+    expect(screen.getByText("settings.widget.systemPromptLabel")).toBeInTheDocument();
+    expect(screen.getByText("settings.widget.systemPromptHint")).toBeInTheDocument();
+  });
+
+  it("payload: systemPrompt null-clear + trimmed fill keep their contract beside privacyUrl", async () => {
+    renderWithProviders(
+      <WidgetForm widget={mockWidget} tab="settings" onTabChange={jest.fn()} onSave={jest.fn()} />
+    );
+    fireEvent.change(screen.getByLabelText("settings.widget.privacyUrlLabel"), {
+      target: { value: "https://example.com/privacy" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "settings.widget.saveChanges" }));
+    await waitFor(() => expect(mockUpdateWidget).toHaveBeenCalled());
+    const payload = mockUpdateWidget.mock.calls[0][0].data;
+    expect(payload.systemPrompt).toBeNull();
+    expect(payload.privacyUrl).toBe("https://example.com/privacy");
   });
 });

@@ -38,6 +38,17 @@ export const envSchema = z.object({
   COLLECTOR_PORT: z.coerce.number().default(3210),
   SERVER_URL: z.string().default("http://localhost:3000"),
   COLLECTOR_URL: z.string().default("http://localhost:3210"),
+  // Server→collector POST /api/ingest wait cap (AbortController around the
+  // multipart dispatch in forwardToCollector + the builtinSkills ingest tool).
+  // quick 260918-p3h (D-1): UNSET means NO cap — ingestion is unbounded by
+  // default (large local-CPU embeddings legitimately exceed any fixed limit;
+  // the cancel endpoints are the relief valve). Operators MAY set the key (ms)
+  // to restore a wait cap; 0 also disables the cap. When a cap IS configured,
+  // the 260918-gxs operator-actionable timeout message and the 260918-k8n
+  // connection-cause diagnostics stay intact. ENV-only infra key: NOT in
+  // ALWAYS_READONLY and NOT registered in systemConfigService — read via
+  // getEnv() only, same posture as REDIS_URL.
+  COLLECTOR_INGEST_TIMEOUT_MS: z.coerce.number().int().min(0).optional(),
   // WID-04: widget service URL + shared secret for push HTTP cache-bust.
   // WIDGET_SERVICE_URL points at the widget Express service (default :3211).
   // WIDGET_API_KEY is the symmetric shared secret matching the widget
@@ -227,6 +238,45 @@ export const envSchema = z.object({
   // Space-delimited scopes; no enum — providers accept arbitrary scopes.
   // Defaults to "openid email profile" at the consumption site when unset.
   OIDC_SCOPE: z.string().optional(),
+  // LDAP provider configuration (Enterprise, Phase 193 D-05). Env overrides
+  // the DB SsoConfig row via resolveLdapConfig (mirrors the OIDC idiom above);
+  // all optional — when unset, the admin SSO settings panel (DB) remains the
+  // source of truth. Plaintext env secret posture: LDAP_BIND_PASSWORD has NO
+  // .min(1) so empty string = unset (same as OIDC_CLIENT_SECRET; T-193-01).
+  LDAP_URL: z.string().url().optional(),
+  LDAP_BIND_DN: z.string().optional(),
+  // Plaintext env secret — no .min(1) so empty string = unset. The DB path
+  // encrypts at rest via ctx.encrypt (AES-256-GCM); the env path does NOT
+  // (env file secrecy is the operator's responsibility). D-05: env plaintext
+  // is the preferred carrier over DB ciphertext.
+  LDAP_BIND_PASSWORD: z.string().optional(),
+  LDAP_SEARCH_BASE: z.string().optional(),
+  // Search filter templates; {{username}}/{{dn}} placeholders substituted at
+  // the consumption site (username escaped via ldapts escapeFilter, D-11).
+  LDAP_SEARCH_FILTER: z.string().optional(),
+  LDAP_GROUP_SEARCH_BASE: z.string().optional(),
+  LDAP_GROUP_SEARCH_FILTER: z.string().optional(),
+  // NOTE: parsed via an explicit transform rather than z.coerce.boolean(),
+  // because Boolean("false") is true — a literal "false" in the env must
+  // actually disable the toggle. Same precedent as OIDC_ENABLED above.
+  LDAP_USE_TLS: z
+    .union([z.boolean(), z.string()])
+    .transform((v) => {
+      if (typeof v === "boolean") return v;
+      return !["false", "0", "no", "off", ""].includes(v.trim().toLowerCase());
+    })
+    .optional(),
+  // Custom CA PEM (certificate-validated TLS per D-08 — never
+  // rejectUnauthorized:false). Max length guard keeps operator-supplied PEM
+  // blobs bounded.
+  LDAP_ACCEPT_CERT: z.string().max(20000).optional(),
+  LDAP_FALLBACK_TO_LOCAL: z
+    .union([z.boolean(), z.string()])
+    .transform((v) => {
+      if (typeof v === "boolean") return v;
+      return !["false", "0", "no", "off", ""].includes(v.trim().toLowerCase());
+    })
+    .optional(),
   // --- Optional integration env vars (validated here so missing/malformed
   // values surface at startup, not at feature-use time). All optional with
   // sensible behavior when unset. See CONCERNS.md "Unvalidated process.env". ---

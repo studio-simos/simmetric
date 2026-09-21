@@ -85,8 +85,12 @@ async function verifyDefaultOrgExists(): Promise<void> {
 // KEEP IN SYNC with PERMISSION_NAMES in @simmetric-chat/shared
 // The seed_rbac() SQL procedure is idempotent (ON CONFLICT DO NOTHING on all
 // INSERTs). Re-running prisma db seed produces no duplicate permissions or
-// role-permission links. The admin role is linked to all 31 PERMISSION_NAMES;
-// the user role is linked to the 11 DEFAULT_USER_ROLE.permissions.
+// role-permission links. The admin role is linked to all 36 PERMISSION_NAMES
+// (Phase 190 grew it to 35 with the skill-permission surface; Phase 192 added
+// the 36th, dlp:unmask — admin-only by DEFAULT_USER_ROLE exclusion); the user
+// role is linked to the 15 DEFAULT_USER_ROLE.permissions (11 base + 4 skill
+// grants — WR-04: skill:delete rides the user role too, owner-or-admin still
+// enforced server-side).
 export async function seedRbac(): Promise<void> {
   // Build the permission values list from PERMISSION_NAMES (runtime-derived,
   // not hardcoded). Each entry is ('<name>', '<description>').
@@ -122,6 +126,20 @@ export async function seedRbac(): Promise<void> {
     { name: "memory:read", description: "View per-user per-workspace memories" },
     { name: "memory:write", description: "Create and modify per-user per-workspace memories" },
     { name: "filters:manage", description: "Manage filter plugins (enable/disable)" },
+    // Phase 190 (SKIL-01 D-07): skill CRUD permission surface — 32nd–35th.
+    // Index-ordered: MUST match PERMISSION_NAMES order (the assert below is
+    // index-ordered) and stay at the END of this array.
+    { name: "skill:create", description: "Create custom prompt skills" },
+    { name: "skill:read", description: "View skills" },
+    { name: "skill:write", description: "Create and modify custom skills" },
+    { name: "skill:delete", description: "Delete custom skills" },
+    // Phase 192 (DLP-04 D-10): document-PII unmask — 36th. Elevated
+    // capability: NOT in DEFAULT_USER_ROLE (admin role spreads
+    // [...PERMISSION_NAMES] and auto-gains it).
+    {
+      name: "dlp:unmask",
+      description: "Unmask PII placeholders in document previews (elevated)",
+    },
   ];
   // Sanity check: the static list MUST match PERMISSION_NAMES from shared.
   if (allPermissions.length !== PERMISSION_NAMES.length) {
@@ -142,11 +160,17 @@ export async function seedRbac(): Promise<void> {
     .map((p) => `('${p.name.replace(/'/g, "''")}', '${p.description.replace(/'/g, "''")}')`)
     .join(", ");
 
-  // The user role permissions (DEFAULT_USER_ROLE.permissions — 11 entries).
+  // The user role permissions (DEFAULT_USER_ROLE.permissions — 11 base entries
+  // + the Phase 190 skill grants = 15; mirrors the shared constant, Pitfall 8).
   const userPerms = [
     "workspace:read", "chat:read", "chat:write", "document:read",
     "document:write", "archive:read", "provider:read", "project:create",
     "workspace:create", "memory:read", "memory:write",
+    // Phase 190 (SKIL-01 D-07): users manage their own personal skills
+    // (create/read/write/delete — WR-04: owner-or-admin is still enforced
+    // server-side by the DELETE route; self-service deletion keeps max_skills
+    // escapable without admin intervention).
+    "skill:create", "skill:read", "skill:write", "skill:delete",
   ];
   const userPermList = userPerms.map((p) => `'${p}'`).join(", ");
 
@@ -864,6 +888,129 @@ async function seedUserUser() {
   console.log('[seed] Created demo user (username: "user", password: "user123")');
 }
 
+/**
+ * Phase 192 (DLP twin discovery — fresh-install fail-open fix): seed the
+ * 10 built-in DLP pattern rows. The flattened init migration is DDL-only and
+ * NEITHER seed.ts nor the boot auto-seed touched this table, so every fresh
+ * install booted with an EMPTY dlp_patterns → the scan's DB read returned []
+ * (an empty set is NOT an error, so the built-in fallback in
+ * dlpDocumentService never fired) → every document scan silently no-opped
+ * and the DLP-06 backfill masked nothing.
+ *
+ * Mirrored inline (seed.ts cannot import src/services per repo layering —
+ * 182-RESEARCH Pattern 3) from dlpFilter.DLP_PATTERNS: regex SOURCE strings +
+ * 'gu' flags (single-flag 'g' rows keep their migration-era flags), the
+ * '[REDACTED]' migration default replacement, and eu_phone seeded DISABLED
+ * (high false-positive risk — admin review required). The boot auto-seed
+ * (seedService.seedBuiltinDlpPatterns) mirrors this same set — keep the two
+ * in sync. Upsert keyed (organizationId, name), EMPTY update arm: re-seeding
+ * never rewrites an admin's isEnabled toggle, and non-builtin rows are never
+ * touched (isBuiltIn forced true on create only).
+ */
+const BUILTIN_DLP_PATTERN_SEEDS: Array<{
+  name: string;
+  displayName: string;
+  pattern: string;
+  patternFlags: string;
+  isEnabled: boolean;
+}> = [
+  {
+    name: "email",
+    displayName: "Email",
+    pattern: "(?<![\\p{L}\\p{N}_])[\\p{L}\\p{N}._%+-]+@[\\p{L}\\p{N}.-]+\\.[\\p{L}]{2,}(?![\\p{L}\\p{N}_])",
+    patternFlags: "gu",
+    isEnabled: true,
+  },
+  {
+    name: "credit_card",
+    displayName: "Credit Card",
+    pattern: "(?<![\\p{L}\\p{N}_])(?:\\p{N}[ -]*?){13,16}(?![\\p{L}\\p{N}_])",
+    patternFlags: "gu",
+    isEnabled: true,
+  },
+  {
+    name: "api_key",
+    displayName: "API Key",
+    pattern: "\\b(sk-[a-zA-Z0-9]{32,})\\b",
+    patternFlags: "gu",
+    isEnabled: true,
+  },
+  {
+    name: "ssn",
+    displayName: "SSN",
+    pattern: "\\b\\d{3}-\\d{2}-\\d{4}\\b",
+    patternFlags: "gu",
+    isEnabled: true,
+  },
+  {
+    name: "aws_key",
+    displayName: "AWS Key",
+    pattern: "\\b(AKIA[0-9A-Z]{16})\\b",
+    patternFlags: "gu",
+    isEnabled: true,
+  },
+  {
+    name: "private_key",
+    displayName: "Private Key",
+    pattern: "-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----[\\s\\S]*?-----END (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----",
+    patternFlags: "gu",
+    isEnabled: true,
+  },
+  {
+    name: "it_vat_iva",
+    displayName: "Partita IVA (IT)",
+    pattern: "\\b(?:P\\.\\s?IVA\\.?|Partita\\s+IVA)[:\\s]*(?:IT)?\\s?([0-9]{11})\\b",
+    patternFlags: "gu",
+    isEnabled: true,
+  },
+  {
+    name: "it_codice_fiscale",
+    displayName: "Codice Fiscale (IT)",
+    pattern: "\\b[A-Z]{6}\\d{2}[A-Z]\\d{2}[A-Z]\\d{3}[A-Z]\\b",
+    patternFlags: "gu",
+    isEnabled: true,
+  },
+  {
+    name: "iban",
+    displayName: "IBAN",
+    pattern: "\\b[A-Z]{2}\\d{2}(?:[A-Z0-9]{11,30}|(?: [A-Z0-9]{4}){2,7}(?: [A-Z0-9]{1,4})?)\\b",
+    patternFlags: "gu",
+    isEnabled: true,
+  },
+  {
+    name: "eu_phone",
+    displayName: "Phone (IT/EU) — high false positives",
+    pattern: "\\b(?:\\+39|39)?[\\s.-]?\\d{3}[\\s.-]?\\d{3,4}[\\s.-]?\\d{4}\\b",
+    patternFlags: "gu",
+    isEnabled: false, // mirrors the 20260829215854_add_dlp_patterns_eu seed state
+  },
+];
+
+export async function seedBuiltinDlpPatterns(): Promise<void> {
+  for (const row of BUILTIN_DLP_PATTERN_SEEDS) {
+    await prisma.dlpPattern.upsert({
+      where: {
+        organizationId_name: {
+          organizationId: DEFAULT_ORG_ID,
+          name: row.name,
+        },
+      },
+      update: {}, // idempotent — an admin's isEnabled toggle is never reset
+      create: {
+        organizationId: DEFAULT_ORG_ID,
+        name: row.name,
+        displayName: row.displayName,
+        pattern: row.pattern,
+        patternFlags: row.patternFlags,
+        replacement: "[REDACTED]",
+        isEnabled: row.isEnabled,
+        isBuiltIn: true,
+      },
+    });
+  }
+  console.log(`[seed] Seeded ${BUILTIN_DLP_PATTERN_SEEDS.length} builtin DLP pattern rows (isBuiltIn, org-pinned)`);
+}
+
 export async function main() {
   console.log("[seed] Starting database seed...");
 
@@ -877,6 +1024,10 @@ export async function main() {
   await seedServiceAccount();
   await seedAdminUser();
   await seedUserUser();
+  // Phase 192 (DLP twin discovery): built-in DLP pattern rows — fresh
+  // installs previously booted with an empty dlp_patterns (every document
+  // scan silently no-opped; the DLP-06 backfill masked nothing).
+  await seedBuiltinDlpPatterns();
 
   console.log("[seed] Seed completed successfully");
 }

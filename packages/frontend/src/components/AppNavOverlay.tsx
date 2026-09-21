@@ -35,6 +35,7 @@ import {
   Settings,
   Lock,
   ChevronRight,
+  Wrench,
 } from "lucide-react";
 import {
   CommandDialog,
@@ -189,6 +190,17 @@ export default function AppNavOverlay({
         keywords: "workspaces management",
         icon: <Layers className="w-4 h-4" />,
         path: "/workspaces",
+      });
+    }
+    // Phase 190 (SKIL-01, D-19) — skills entry in the chatTools group AFTER
+    // workspaces; gated by the "skills" menu section (Plan 01 addition).
+    if (menuSections.includes("skills")) {
+      chatEntries.push({
+        id: "skills",
+        labelKey: "sidebar.skills",
+        keywords: "skills commands prompts templates",
+        icon: <Wrench className="w-4 h-4" />,
+        path: "/skills",
       });
     }
     list.push({ id: "chatTools", labelKey: "sidebar.group.chatTools", entries: chatEntries });

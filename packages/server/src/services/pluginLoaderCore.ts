@@ -252,6 +252,39 @@ export function buildPluginContext(
       const { encrypt } = require("./encryptionService") as { encrypt: (plaintext: string) => string };
       return encrypt(plaintext);
     },
+    // Phase 193 (LDAP-03 — RESEARCH Pitfall 4 option b): core-owned
+    // auth-cache eviction delegated to the plugin. Same lazy-require
+    // delegate idiom as generateToken/decrypt above (the enterprise
+    // package cannot import community services; the loader owns the
+    // seam). Non-blocking: invalidateAuthCache never throws (Redis
+    // failures are logged inside authService), so the forward is a
+    // plain await.
+    async invalidateAuthCache(userId: string): Promise<void> {
+      const { invalidateAuthCache } = require("./authService") as {
+        invalidateAuthCache: (userId: string) => Promise<void>;
+      };
+      await invalidateAuthCache(userId);
+    },
+    // Phase 193 (LDAP-03 — RESEARCH Open Question 1 option b): delegates
+    // to createPersonalWorkspace (Phase 189 substrate). The three args
+    // are forwarded verbatim; a PersonalWorkspaceConflictError thrown by
+    // the service propagates to the enterprise caller as a thrown Error
+    // (the enterprise JIT arm catches and maps it to the uniform
+    // failure arm).
+    provisionPersonalWorkspace(
+      userId: string,
+      workspaceName: string,
+      organizationId: string,
+    ): Promise<unknown> {
+      const { createPersonalWorkspace } = require("./personalWorkspaceService") as {
+        createPersonalWorkspace: (
+          userId: string,
+          workspaceName: string,
+          organizationId: string,
+        ) => Promise<unknown>;
+      };
+      return createPersonalWorkspace(userId, workspaceName, organizationId);
+    },
     registerScheduler(name: string, scheduler: PluginScheduler): void {
       registries.schedulers.set(name, scheduler);
       // Start immediately (RESEARCH Finding 2) — the loader runs at boot,

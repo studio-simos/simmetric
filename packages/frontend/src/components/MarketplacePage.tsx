@@ -12,6 +12,7 @@ import {
   useMarketplaceCatalog,
   useInstallMarketplaceEntry,
   useUninstallMarketplaceEntry,
+  useDeleteMarketplaceEntry,
 } from "../queries/useMarketplace";
 import { showSuccess, showError } from "../lib/toast";
 import MarketplaceCard from "./MarketplaceCard";
@@ -37,6 +38,7 @@ export default function MarketplacePage() {
   const { data: entries = [], isLoading, error } = useMarketplaceCatalog(currentWorkspaceId ?? undefined);
   const installMutation = useInstallMarketplaceEntry();
   const uninstallMutation = useUninstallMarketplaceEntry();
+  const deleteMutation = useDeleteMarketplaceEntry();
 
   // Extract unique categories dynamically from catalog data
   const uniqueCategories =
@@ -96,6 +98,24 @@ export default function MarketplacePage() {
   // Navigate to detail page
   const handleNavigate = (entryId: string) => {
     navigate(`/mcp-marketplace/${entryId}`);
+  };
+
+  // Delete handler (quick 260918-qts, D-1): removes the individual catalog
+  // entry; the server 409s while it is still installed anywhere.
+  const handleDelete = async (entryId: string) => {
+    const entry = entries.find((e) => e.id === entryId);
+    const name = entry?.name || entryId;
+    try {
+      await deleteMutation.mutateAsync({ entryId });
+      showSuccess(t("marketplace.toast.deleteSuccess", { name }));
+    } catch (err: unknown) {
+      const status = (err as { status?: number }).status;
+      if (status === 409) {
+        showError(t("marketplace.toast.deleteInUse", { name }));
+      } else {
+        showError(t("marketplace.toast.deleteFailed", { name }));
+      }
+    }
   };
 
   return (
@@ -217,6 +237,7 @@ export default function MarketplacePage() {
                 onInstall={handleInstall}
                 onUninstall={handleUninstall}
                 onNavigate={handleNavigate}
+                onDelete={handleDelete}
               />
             ))}
           </div>

@@ -101,6 +101,11 @@ jest.mock("../middleware/rbac", () => ({
     next();
   },
   requireWorkspaceAccess: (req: any, res: any, next: any) => next(),
+  // Phase 189 (189-02 sweep): routes now import the graded middlewares —
+  // the mock must export them (shadow no-op) or express throws at load.
+  requireWorkspaceWriteAccess: () => (_req: any, _res: any, next: any) => next(),
+  requireWorkspaceRead: () => (_req: any, _res: any, next: any) => next(),
+
 }));
 
 jest.mock("../middleware/license", () => ({

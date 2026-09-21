@@ -52,6 +52,7 @@ import {
   useRetryBoth,
   useDeleteDraft,
   useRenameDraft,
+  useCancelDraftLeg,
   hasInFlightDraft,
   type UploadDraft,
 } from "../queries/useUploadDrafts";
@@ -127,6 +128,24 @@ describe("hasInFlightDraft (D-09 predicate)", () => {
         { ...TERMINAL_DRAFT, parseStatus: "done", ragStatus: "failed", kbStatus: "FAILED" },
       ])
     ).toBe(false);
+  });
+
+  // quick 260918-p3h (D-3): "cancelled" is a first-class terminal state for
+  // BOTH legs — a cancelled draft is settled (no polling) and retryable.
+  it("returns false when ragStatus is cancelled (terminal, quick 260918-p3h)", () => {
+    expect(
+      hasInFlightDraft([
+        { ...TERMINAL_DRAFT, parseStatus: "done", ragStatus: "cancelled", kbStatus: "COMPLETED" },
+      ])
+    ).toBe(false);
+  });
+
+  it("returns true when ragStatus is cancelled but kbStatus is still PROCESSING", () => {
+    expect(
+      hasInFlightDraft([
+        { ...TERMINAL_DRAFT, parseStatus: "assigned", ragStatus: "cancelled", kbStatus: "PROCESSING" },
+      ])
+    ).toBe(true);
   });
 });
 
@@ -336,5 +355,39 @@ describe("useRenameDraft (mutation)", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: queryKeys.uploadDrafts.list("ws-1"),
     });
+  });
+});
+
+describe("useCancelDraftLeg (mutation, quick 260918-p3h)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("posts to /uploads/:id/cancel with {} when no leg is given and invalidates list", async () => {
+    mockApiPost.mockResolvedValueOnce({ id: "d1", cancelled: ["rag", "kb"] });
+    const { wrapper, queryClient } = createWrapperWithClient();
+    const invalidateSpy = jest.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useCancelDraftLeg("ws-1"), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ id: "d1" });
+    });
+
+    expect(mockApiPost).toHaveBeenCalledWith("/uploads/d1/cancel", {});
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: queryKeys.uploadDrafts.list("ws-1"),
+    });
+  });
+
+  it("posts to /uploads/:id/cancel with {leg:'rag'} when a leg is given", async () => {
+    mockApiPost.mockResolvedValueOnce({ id: "d1", cancelled: ["rag"] });
+    const wrapper = createWrapper();
+    const { result } = renderHook(() => useCancelDraftLeg("ws-1"), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ id: "d1", leg: "rag" });
+    });
+
+    expect(mockApiPost).toHaveBeenCalledWith("/uploads/d1/cancel", { leg: "rag" });
   });
 });

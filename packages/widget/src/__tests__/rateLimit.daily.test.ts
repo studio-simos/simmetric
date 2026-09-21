@@ -143,7 +143,22 @@ describe("widgetDailyMessageLimiter max function (151-02, G-151-1b)", () => {
     expect(mockRedisInstance.get).toHaveBeenCalledWith("widget:config:wid-abc");
   });
 
-  it("ignores null/zero/negative sessionLimitPerDay → global default (50 dev)", async () => {
+  it("treats cached 0 as unlimited → WIDGET_UNLIMITED_MAX (never 0 — max=0 blocks all)", async () => {
+    const mod = freshRateLimit();
+    const maxFn = capturedRateLimitOptions!.max as (
+      req: unknown,
+      res: unknown,
+    ) => Promise<number>;
+
+    // 0 = unlimited ("no limits") → the documented express-rate-limit bypass:
+    // a never-reached max (Int32), NOT 0 (v7+ blocks ALL requests on max=0).
+    mockRedisInstance.get.mockResolvedValue(
+      JSON.stringify({ id: "wid-abc", sessionLimitPerDay: 0 }),
+    );
+    expect(await maxFn(maxReq("/api/chat/wid-abc/stream"), {})).toBe(mod.WIDGET_UNLIMITED_MAX);
+  });
+
+  it("ignores null/negative sessionLimitPerDay → global default (50 dev)", async () => {
     freshRateLimit();
     const maxFn = capturedRateLimitOptions!.max as (
       req: unknown,
@@ -153,12 +168,6 @@ describe("widgetDailyMessageLimiter max function (151-02, G-151-1b)", () => {
     // null → fall back to default
     mockRedisInstance.get.mockResolvedValue(
       JSON.stringify({ id: "wid-abc", sessionLimitPerDay: null }),
-    );
-    expect(await maxFn(maxReq("/api/chat/wid-abc/stream"), {})).toBe(50);
-
-    // zero → fall back to default
-    mockRedisInstance.get.mockResolvedValue(
-      JSON.stringify({ id: "wid-abc", sessionLimitPerDay: 0 }),
     );
     expect(await maxFn(maxReq("/api/chat/wid-abc/stream"), {})).toBe(50);
 

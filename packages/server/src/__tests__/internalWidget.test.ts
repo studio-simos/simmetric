@@ -838,6 +838,7 @@ describe("POST /api/internal/widget/lead — CR-01 identity-per-endpoint (no hea
       .send({
         widgetId: "widget-001",
         email: "lead@example.com",
+        privacyConsented: true,
         transcript: [{ role: "user", content: "hi" }],
       });
 
@@ -860,6 +861,7 @@ describe("POST /api/internal/widget/lead — CR-01 identity-per-endpoint (no hea
       .send({
         widgetId: "widget-001",
         email: "lead@example.com",
+        privacyConsented: true,
         transcript: [{ role: "user", content: "hi" }],
       });
 
@@ -944,5 +946,160 @@ describe("Internal Widget API — Community tier (widget_enabled=false, 151-02 T
 
     expect(res.status).toBe(401);
     expect(res.body.error).toMatch(/missing api key/i);
+  });
+});
+// ─── 260917-mz6: contact options + lead timing on the config GET ─────
+
+describe("GET /api/internal/widget/:id/config — 260917-mz6 contact + timing fields", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("returns the three runtime fields (contactConfig passthrough, timing default 'end' when column at default, null timeout)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue(mockWidget);
+
+    const res = await request(app)
+      .get("/api/internal/widget/widget-001/config")
+      .set("X-Api-Key", "sk-test-key");
+
+    expect(res.status).toBe(200);
+    // Null passthrough — the Widget row never set contactConfig.
+    expect(res.body.contactConfig).toBeNull();
+    // The column default ("end") reads back as "end" (pre-feature behavior).
+    expect(res.body.leadCaptureTiming).toBe("end");
+    expect(res.body.leadCaptureTimeoutSeconds).toBeNull();
+  });
+
+  it("passes through configured contactConfig + timing + timeout from the DB row", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
+      ...mockWidget,
+      contactConfig: { formUrl: "https://example.com/contact", email: "owner@example.com" },
+      leadCaptureTiming: "timeout",
+      leadCaptureTimeoutSeconds: 60,
+    });
+
+    const res = await request(app)
+      .get("/api/internal/widget/widget-001/config")
+      .set("X-Api-Key", "sk-test-key");
+
+    expect(res.status).toBe(200);
+    expect(res.body.contactConfig).toEqual({ formUrl: "https://example.com/contact", email: "owner@example.com" });
+    expect(res.body.leadCaptureTiming).toBe("timeout");
+    expect(res.body.leadCaptureTimeoutSeconds).toBe(60);
+  });
+
+  it("never echoes systemPrompt into the config response (T-Q02 — server-side only)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
+      ...mockWidget,
+      systemPrompt: "SECRET PROMPT",
+    });
+
+    const res = await request(app)
+      .get("/api/internal/widget/widget-001/config")
+      .set("X-Api-Key", "sk-test-key");
+
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty("systemPrompt");
+  });
+});
+
+// ─── 260917-qoh: privacyUrl + lead privacy consent ──────────────────────
+
+describe("GET /api/internal/widget/:id/config — 260917-qoh privacyUrl", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("passes a null privacyUrl through as null (not configured)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({ ...mockWidget, privacyUrl: null });
+
+    const res = await request(app)
+      .get("/api/internal/widget/widget-001/config")
+      .set("X-Api-Key", "sk-test-key");
+
+    expect(res.status).toBe(200);
+    expect(res.body.privacyUrl).toBeNull();
+  });
+
+  it("passes a configured privacyUrl through from the DB row (never client-derived)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({
+      ...mockWidget,
+      privacyUrl: "https://example.com/privacy",
+    });
+
+    const res = await request(app)
+      .get("/api/internal/widget/widget-001/config")
+      .set("X-Api-Key", "sk-test-key");
+
+    expect(res.status).toBe(200);
+    expect(res.body.privacyUrl).toBe("https://example.com/privacy");
+  });
+});
+
+describe("POST /api/internal/widget/lead — 260917-qoh privacy consent", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("persists the lead with privacyConsented true and a privacyConsentAt timestamp when the flag is true", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({ ...mockWidget, leadCaptureEnabled: true });
+    (prisma.widgetLead.create as jest.Mock).mockResolvedValue({
+      id: "lead-2",
+      email: "consenting@example.com",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+    });
+
+    const res = await request(app)
+      .post("/api/internal/widget/lead")
+      .set("X-Api-Key", "sk-test-key")
+      .send({
+        widgetId: "widget-001",
+        email: "consenting@example.com",
+        privacyConsented: true,
+        transcript: [{ role: "user", content: "hi" }],
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.widgetLead.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        widgetId: "widget-001",
+        privacyConsented: true,
+        privacyConsentAt: expect.any(Date),
+      }),
+    });
+  });
+
+  it("fails closed with 400 when privacyConsented is missing", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({ ...mockWidget, leadCaptureEnabled: true });
+
+    const res = await request(app)
+      .post("/api/internal/widget/lead")
+      .set("X-Api-Key", "sk-test-key")
+      .send({
+        widgetId: "widget-001",
+        email: "no-consent@example.com",
+        transcript: [{ role: "user", content: "hi" }],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid request body/i);
+    expect(prisma.widgetLead.create).not.toHaveBeenCalled();
+  });
+
+  it("fails closed with 400 when privacyConsented is false (a tampered value cannot create a lead)", async () => {
+    (prisma.widget.findFirst as jest.Mock).mockResolvedValue({ ...mockWidget, leadCaptureEnabled: true });
+
+    const res = await request(app)
+      .post("/api/internal/widget/lead")
+      .set("X-Api-Key", "sk-test-key")
+      .send({
+        widgetId: "widget-001",
+        email: "tampered@example.com",
+        privacyConsented: false,
+        transcript: [{ role: "user", content: "hi" }],
+      });
+
+    expect(res.status).toBe(400);
+    expect(prisma.widgetLead.create).not.toHaveBeenCalled();
   });
 });

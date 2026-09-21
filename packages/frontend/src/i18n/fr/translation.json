@@ -109,7 +109,8 @@
     "dateView": {
       "dndDisabled": "Glisser-déposer désactivé en vue par date"
     },
-    "uploads": "Téléchargements"
+    "uploads": "Téléchargements",
+    "skills": "Skills"
   },
   "login": {
     "signIn": "Se connecter",
@@ -139,7 +140,10 @@
       "signOut": "Se déconnecter"
     },
     "ssoOr": "or sign in with SSO",
-    "ssoSignIn": "Login with SSO"
+    "ssoSignIn": "Login with SSO",
+    "ldap": {
+      "hint": "Connectez-vous avec vos identifiants d'annuaire d'entreprise."
+    }
   },
   "chat": {
     "placeholder": "Tapez un message...",
@@ -184,6 +188,15 @@
       "error": "Impossible de mettre à jour l'archive liée. Veuillez réessayer.",
       "badge": "Archive"
     },
+    "attach": {
+      "menuItem": "Connaissances",
+      "back": "Retour",
+      "pickerTitle": "Joindre les connaissances d'une archive",
+      "empty": "Aucune archive disponible à joindre.",
+      "maxReached": "Vous pouvez joindre jusqu'à {{max}} archives.",
+      "remove": "Retirer l'archive jointe",
+      "pageCount": "{{count}} pages"
+    },
     "selectWorkspace": "Sélectionnez un espace de travail pour commencer à discuter",
     "attachedToNext": "joint au prochain message",
     "removeAttachment": "Supprimer la pièce jointe",
@@ -221,6 +234,14 @@
     },
     "modelCommand": {
       "notFound": "Modèle introuvable"
+    },
+    "skillsPalette": {
+      "empty": "Aucune skill correspondante",
+      "hint": "↑↓ pour naviguer, Entrée pour insérer, Échap pour fermer",
+      "manageLink": "Gérer les skills",
+      "paramError": "Impossible de lire les paramètres de /{{slug}}. Essayez /{{slug}} clé=valeur.",
+      "customGroup": "Skills",
+      "builtinGroup": "Intégrées (outils LLM — pas des commandes slash)"
     },
     "capabilities": {
       "localOnly": "Local uniquement",
@@ -283,7 +304,7 @@
     "sidebarTitle": "Liste des discussions",
     "sidebarDescription": "Liste de vos discussions dans cet espace de travail",
     "renameChatTitle": "Renommer la conversation",
-    "compareModelsTitle": "Comparer les modèles",
+    "compareModelsTitle": "Comparer",
     "noSourcesAvailable": "Aucune source disponible",
     "sendLabel": "Envoyer le message",
     "emptyState": {
@@ -325,7 +346,7 @@
     "input": {
       "label": "Champ de message",
       "hint": "Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne",
-      "attach": "Joindre un document",
+      "attach": "Joindre",
       "moreActions": "Plus d'actions",
       "model": "Sélectionner un modèle",
       "placeholder": {
@@ -350,9 +371,10 @@
     "attachedDocument": "Document joint",
     "aiDisclaimer": "Les réponses sont générées par intelligence artificielle",
     "dlp": {
-      "showTexts": "Afficher les textes DLP",
-      "hideTexts": "Masquer les textes DLP"
-    }
+      "showTexts": "Afficher DLP",
+      "hideTexts": "Masquer DLP"
+    },
+    "modelUnavailable": "Le modèle « {{model}} » n'est pas disponible. Veuillez choisir un autre modèle."
   },
   "eventLog": {
     "title": "Journal des événements",
@@ -518,6 +540,19 @@
       "success": "{{count}} pages supprimées.",
       "processing": "Assegnazione in corso...",
       "partialError": "Supprimées {{ok}}, échouées {{failed}} : {{message}}"
+    },
+    "schemaPrompt": {
+      "save": "Enregistrer la configuration",
+      "saving": "Enregistrement de la configuration…",
+      "label": "Directives éditoriales (Schema Prompt)",
+      "helper": "Instructions en langage naturel indiquant au LLM comment entretenir ce wiki — comme un fichier CLAUDE.md pour un dépôt.",
+      "placeholder": "Aucun schema prompt défini — le LLM suit uniquement les champs structurés. Utilisez le modèle pour partir d'un exemple précompilé.",
+      "useTemplate": "Utiliser le modèle",
+      "tabEdit": "Modifier",
+      "tabPreview": "Aperçu",
+      "charCount": "{{count}} / 10000",
+      "overLimitError": "Le schema prompt est limité à 10 000 caractères. Raccourcissez-le sous la limite pour enregistrer.",
+      "advisoryNote": "Les directives sont indicatives — les règles strictes ont toujours la priorité."
     }
   },
   "widgets": {
@@ -528,7 +563,31 @@
       "localization": "Localisation",
       "questions": "Questions",
       "credits": "Crédits",
-      "leads": "Leads"
+      "leads": "Leads",
+      "list": "Widgets"
+    },
+    "archive": {
+      "tabLabel": "Archive des espaces de travail",
+      "statTotalWidgets": "Widgets au total",
+      "statTotalWorkspaces": "Espaces de travail liés",
+      "statTotalProjects": "Projets",
+      "statOrphans": "Widgets orphelins",
+      "filterProject": "Filtrer par projet",
+      "filterAllProjects": "Tous les projets",
+      "filterWidget": "Filtrer par widget",
+      "filterAllWidgets": "Tous les widgets",
+      "viewGrouped": "Groupé",
+      "viewFlat": "À plat",
+      "activeBadge": "Actif",
+      "inactiveBadge": "Inactif",
+      "emptyState": "Aucun lien widget-espace de travail ne correspond aux filtres actuels.",
+      "exportCsv": "Exporter en CSV",
+      "exportError": "Échec de l'export CSV",
+      "colProject": "Projet",
+      "colWidget": "Widget",
+      "colStatus": "Statut",
+      "colWorkspace": "Espace de travail",
+      "attribution": "Simmetric Chat par"
     },
     "localization": {
       "fallbackLocaleLabel": "Langue par défaut",
@@ -1121,7 +1180,11 @@
       "limitsSection": "Limites",
       "sessionLimitPerDay": "Messages par jour",
       "sessionLimitPerDayPlaceholder": "ex. 50",
-      "sessionLimitPerDayHint": "Nombre maximal de messages que chaque visiteur peut envoyer par jour. Laissez vide pour la valeur par défaut (5 par jour).",
+      "sessionLimitPerDayHint": "Nombre maximal de messages que chaque visiteur peut envoyer par jour. Laissez vide pour la valeur par défaut (5 par jour). Cochez « Aucune limite » pour supprimer le plafond.",
+      "rateLimitPerMinute": "Requêtes par minute",
+      "rateLimitPerMinutePlaceholder": "ex. 60",
+      "rateLimitPerMinuteHint": "Nombre maximal de requêtes de chat par widget et par minute. Laissez vide pour la valeur par défaut globale (30 par minute). Cochez « Aucune limite » pour supprimer le plafond.",
+      "unlimited": "Aucune limite",
       "exitIntentCooldownPlaceholder": "par exemple, 30",
       "leadCaptureSection": "Capture de prospects",
       "leadCaptureToggle": "Activer la capture de leads",
@@ -1142,7 +1205,32 @@
       "columnDate": "Date",
       "downloadCsv": "Télécharger CSV",
       "viewTranscript": "Afficher la transcription",
-      "hideTranscript": "Masquer la transcription"
+      "hideTranscript": "Masquer la transcription",
+      "chatBehaviorSection": "Comportement du chat",
+      "systemPromptLabel": "Prompt système",
+      "systemPromptHint": "Chaque widget a son propre prompt. Laissez vide pour conserver le repli intégré qui ancre chaque réponse à la base de connaissances de ce widget. Un prompt personnalisé le remplace.",
+      "systemPromptPlaceholder": "Consignes d'ancrage personnalisées pour l'assistant de ce widget…",
+      "leadTimingLabel": "Demander l'e-mail",
+      "leadTimingStart": "À l'ouverture du chat",
+      "leadTimingEnd": "Quand la limite quotidienne est atteinte",
+      "leadTimingTimeout": "Après un délai",
+      "leadTimeoutSecondsLabel": "Délai avant la demande (secondes)",
+      "leadTimeoutSecondsHint": "Durée d'attente après le premier message du visiteur avant d'afficher la carte e-mail (5–86400).",
+      "contactOptionsSection": "Options de contact à la limite quotidienne",
+      "contactFormUrlLabel": "URL du formulaire de contact",
+      "contactFormUrlPlaceholder": "https://exemple.fr/contact",
+      "contactBookingUrlLabel": "URL de réservation",
+      "contactBookingUrlPlaceholder": "https://cal.exemple.fr/owner",
+      "contactEmailLabel": "Adresse e-mail",
+      "contactEmailPlaceholder": "owner@exemple.fr",
+      "contactCustomUrlLabel": "URL du lien personnalisé",
+      "contactCustomUrlPlaceholder": "https://exemple.fr/ventes",
+      "contactCustomLabelLabel": "Libellé du lien personnalisé",
+      "contactCustomLabelPlaceholder": "Parler au service commercial",
+      "privacyUrlLabel": "URL de la politique de confidentialité",
+      "privacyUrlPlaceholder": "https://example.com/privacy",
+      "privacyUrlHint": "Affiché aux visiteurs comme un lien à côté de la case de consentement pour le partage d'e-mail. S'ouvre dans un nouvel onglet. Laissez vide pour afficher la case sans lien.",
+      "leadsPrivacyConsent": "Consentement de confidentialité"
     },
     "ocr": {
       "title": "Préférences OCR",
@@ -1409,7 +1497,8 @@
       "agentWatchdog": "Surveillance de l'agent",
       "reranker": "Reranker RAG",
       "vapid": "Web Push (VAPID)",
-      "dlpPatterns": "Motifs DLP"
+      "dlpPatterns": "Motifs DLP",
+      "workspaceAccess": "Accès aux espaces de travail"
     },
     "appearance": {
       "themeTitle": "Thème",
@@ -1576,7 +1665,100 @@
       "blocked": "Les notifications sont bloquées par le navigateur. Modifiez les paramètres du site pour les réactiver.",
       "permissionHint": "En cliquant sur \"Activer les notifications\", le navigateur demandera l'autorisation."
     },
-    "back": "Retour"
+    "back": "Retour",
+    "workspaceAccess": {
+      "title": "Accès aux espaces de travail",
+      "grantTitle": "Accès à {{name}}",
+      "userSearch": "Rechercher des utilisateurs...",
+      "role": "Rôle",
+      "roleOwner": "Propriétaire",
+      "roleEditor": "Éditeur",
+      "roleViewer": "Observateur",
+      "grant": "Accorder",
+      "grantBulk": "Octroi groupé",
+      "revoke": "Révoquer",
+      "grantedList": "Droits d'accès actuels",
+      "grantedAt": "Accordé le",
+      "grantedBy": "Accordé par",
+      "noAccess": "Aucun droit d'accès pour cet espace de travail.",
+      "bulkPartial": "Octroi terminé avec des échecs pour : {{failed}}",
+      "success": "Accès mis à jour",
+      "revokeSuccess": "Accès révoqué",
+      "error": "Échec de la mise à jour de l'accès",
+      "loadError": "Impossible de charger l'accès aux espaces de travail. Vérifiez la connexion et réessayez.",
+      "retry": "Réessayer"
+    },
+    "sso": {
+      "ldap": {
+        "testPending": "Test en cours…",
+        "testFailed": "Le test de connexion a échoué. Vérifiez l'URL du serveur, l'accessibilité réseau depuis le serveur et la confiance du certificat, puis réessayez.",
+        "saveFailed": "Impossible d'enregistrer la configuration LDAP. Vérifiez les champs surlignés et réessayez.",
+        "mapEmptyTitle": "Aucun mappage de groupe",
+        "mapEmptyBody": "Les utilisateurs LDAP reçoivent le rôle par défaut à la connexion. Ajoutez un mappage pour accorder des rôles de la plateforme selon l'appartenance au groupe.",
+        "mapAdminWarning": "Ce groupe est mappé à un rôle d'administrateur. Chaque membre obtiendra l'accès administrateur à sa prochaine connexion LDAP.",
+        "removeMapping": "Supprimer le mappage",
+        "exclusiveHint": "L'activation de LDAP désactive le fournisseur SAML/OIDC actuellement configuré — un seul fournisseur actif par installation.",
+        "diag": {
+          "reachable": "Serveur joignable",
+          "bindOk": "Liaison du service réussie",
+          "userFound": "Utilisateur de test trouvé",
+          "groupsFound": "Recherche de groupes configurée"
+        },
+        "url": "URL du serveur LDAP",
+        "bindDn": "Bind DN (compte de service)",
+        "bindPassword": "Mot de passe de liaison",
+        "bindPasswordViaEnv": "configuré via variable d'environnement",
+        "bindPasswordReadOnly": "LDAP_BIND_PASSWORD est définie via une variable d'environnement et ne peut pas être modifiée depuis l'interface. Pour la modifier, mettez à jour le fichier .env du serveur.",
+        "searchBase": "Base de recherche",
+        "searchFilter": "Filtre de recherche d'utilisateurs",
+        "groupSearchBase": "Base de recherche de groupes",
+        "groupSearchFilter": "Filtre de recherche de groupes",
+        "useTls": "Utiliser StartTLS",
+        "tlsHint": "StartTLS met à niveau une connexion ldap:// en clair vers TLS. Désactivez-le uniquement pour les URLs ldaps://, déjà chiffrées.",
+        "acceptCert": "Certificat CA personnalisé (PEM, optionnel)",
+        "fallbackToLocal": "Revenir à la connexion locale quand LDAP est injoignable",
+        "fallbackHint": "Si activé, quand LDAP est injoignable l'utilisateur peut se connecter avec son compte local au lieu de voir une erreur.",
+        "mapTitle": "Mappage groupe → rôle",
+        "mapDescription": "Les membres d'un groupe LDAP mappé reçoivent le rôle de la plateforme à leur prochaine connexion. Les lignes sont appliquées à l'enregistrement.",
+        "addMapping": "Ajouter un mappage",
+        "groupDn": "DN du groupe",
+        "duplicateMapping": "Cette paire groupe et rôle est déjà en attente."
+      }
+    },
+    "dlpDocs": {
+      "title": "Analyse DLP des documents",
+      "description": "Lancez l'évaluation de la qualité de détection sur le corpus d'exemples de PII italien, puis rescannez les documents existants afin qu'aucun vecteur non masqué ne reste consultable.",
+      "eval": {
+        "run": "Lancer l'évaluation",
+        "running": "Évaluation en cours…",
+        "empty": {
+          "heading": "Aucune évaluation pour l'instant",
+          "body": "Lancez l'évaluation sur le corpus d'exemples de PII italien pour vérifier la qualité de détection avant d'activer l'analyse des documents."
+        },
+        "passed": "Seuil atteint — {{fpRate}} faux positifs sur {{total}} vérifications. Activation possible.",
+        "failed": "Seuil non atteint — le taux de faux positifs {{fpRate}} dépasse le seuil. Revoyez les motifs avant d'activer.",
+        "lastRun": "Dernière exécution {{date}}",
+        "documentedOnly": "documenté, non bloquant",
+        "error": "Échec de l'évaluation — corrigez le problème et relancez-la.",
+        "retry": "Réessayer",
+        "perClassTitle": "Résultats par classe",
+        "detected": "Détectés : {{count}}",
+        "expected": "Attendus : {{count}}",
+        "falsePositives": "Faux positifs : {{count}}"
+      },
+      "backfill": {
+        "run": "Analyser les documents existants",
+        "running": "Analyse des documents existants…",
+        "confirmTitle": "Analyser les documents existants ?",
+        "confirmBody": "{{count}} documents seront rescannés et leur texte indexé remplacé par du texte masqué. Les originaux restent chiffrés. L'opération s'exécute en arrière-plan et peut être relancée sans risque.",
+        "confirmRun": "Analyser {{count}} documents",
+        "cancel": "Pas maintenant",
+        "result": "{{scanned}} analysés · {{masked}} masqués · {{failed}} en échec",
+        "empty": "Aucun document existant ne nécessite de nouvelle analyse.",
+        "error": "Le rescan s'est terminé avec {{failed}} échecs. Relancez-le pour ne réessayer que les documents en attente.",
+        "runError": "Impossible de démarrer la nouvelle analyse."
+      }
+    }
   },
   "upgrade": {
     "title": "Fonctionnalité d'entreprise",
@@ -1699,7 +1881,35 @@
       "deleteError": "Échec de la suppression des espaces de travail sélectionnés.",
       "selectAll": "Tout sélectionner"
     },
-    "selectRow": "Sélectionner l'espace de travail {{name}}"
+    "selectRow": "Sélectionner l'espace de travail {{name}}",
+    "access": {
+      "button": "Accès",
+      "title": "Accès à {{name}}",
+      "description": "Les utilisateurs autorisés peuvent ouvrir cet espace de travail et téléverser des documents même s'ils ne possèdent pas le projet.",
+      "selectUser": "Sélectionner un utilisateur...",
+      "grantButton": "Accorder",
+      "granted": "Accès accordé",
+      "grantError": "Échec de l'octroi de l'accès",
+      "revoked": "Accès révoqué",
+      "revokeError": "Échec de la révocation de l'accès",
+      "revoke": "Révoquer l'accès",
+      "empty": "Aucune autorisation d'accès supplémentaire pour cet espace de travail.",
+      "listLabel": "Autorisations d'accès actuelles",
+      "roleOwner": "Propriétaire",
+      "roleEditor": "Éditeur",
+      "roleViewer": "Observateur",
+      "role": "Rôle",
+      "usersLoadError": "Impossible de charger les utilisateurs.",
+      "retryUsers": "Recharger les utilisateurs"
+    },
+    "dlp": {
+      "scanToggle": "Analyse DLP des documents",
+      "scanDescription": "Analyse les documents à la recherche de données personnelles après l'import et les masque avant que les modèles d'IA ne les lisent.",
+      "gateBlocked": "Lancez l'évaluation DLP dans Paramètres → Avancé avant d'activer.",
+      "enabled": "Analyse DLP des documents activée",
+      "disabled": "Analyse DLP des documents désactivée",
+      "saveError": "Impossible d'enregistrer le paramètre d'analyse DLP."
+    }
   },
   "workspaceCreate": {
     "title": "Créer un espace de travail",
@@ -1789,7 +1999,8 @@
     "errorDetails": "Détails de l'erreur",
     "reloadPage": "Recharger la page",
     "unexpectedError": "Quelque chose s'est mal passé",
-    "back": "Retour"
+    "back": "Retour",
+    "uninstall": "Désinstaller"
   },
   "export": {
     "buttonLabel": "Exporter",
@@ -1945,6 +2156,21 @@
       "dialogTitle": "Copier {{count}} documents vers l'archive",
       "success": "Copie de {{count}} documents vers {{archiveName}}.",
       "forbidden": "Accès refusé à un ou plusieurs documents sélectionnés."
+    },
+    "cancel": "Annuler",
+    "cancelling": "Annulation…",
+    "cancelFailed": "Impossible d'annuler : {{error}}",
+    "cancelled": "Ingestion annulée",
+    "dlp": {
+      "scanPending": "Analyse DLP en attente",
+      "scanning": "Analyse DLP en cours…",
+      "clean": "Analysé (DLP)",
+      "entities": "DLP · {{count}}",
+      "failed": "Échec de l'analyse DLP",
+      "maskedNotice": "Les données personnelles de ce document sont masquées — des espaces réservés comme [PERSON_1] remplacent les valeurs sensibles.",
+      "show": "Afficher les données non masquées",
+      "hide": "Masquer les données sensibles",
+      "unmaskError": "Impossible de charger le texte non masqué."
     }
   },
   "workspaces": {
@@ -1973,7 +2199,71 @@
     "document_temp_process": {
       "displayName": "Traitement des documents temporaires",
       "description": "Traitez un fichier téléchargé pendant le chat. The file will be embedded temporarily and analyzed, then you can decide whether to save it permanently to the workspace."
-    }
+    },
+    "page": {
+      "heading": "Skills",
+      "subtitle": "Créez des modèles de prompt réutilisables et invoquez-les dans le chat avec /slug.",
+      "create": "Créer une skill",
+      "limit": "{{used}} sur {{limit}} skills personnalisées utilisées",
+      "limitUnlimited": "Skills personnalisées illimitées",
+      "limitReached": "Vous avez atteint la limite de votre plan de {{limit}} skills personnalisées. Passez à Enterprise pour des skills illimitées."
+    },
+    "form": {
+      "save": "Enregistrer la skill",
+      "saving": "Enregistrement...",
+      "slugInvalid": "Utilisez uniquement des lettres minuscules, des chiffres et des tirets (ex. translate-text).",
+      "slugReserved": "Ce slug est réservé par une commande intégrée. Choisissez-en un autre.",
+      "slugDuplicate": "Une skill avec ce slug existe déjà.",
+      "jsonError": "JSON invalide — corrigez le schéma pour enregistrer.",
+      "test": "Tester la skill",
+      "testPreview": "Aperçu du prompt compilé",
+      "testNeedsSave": "Enregistrez la skill pour activer les tests.",
+      "modePrompt": "Prompt",
+      "modeWebhook": "Webhook",
+      "modeWebhookSoon": "Les skills webhook arrivent bientôt",
+      "scopePersonal": "Personnel",
+      "scopeWorkspace": "Workspace",
+      "scopeGlobal": "Global (admin)",
+      "scopeGlobalAdminOnly": "Seuls les administrateurs peuvent créer des skills globales",
+      "workspace": "Workspace",
+      "selectWorkspace": "Sélectionner un workspace...",
+      "name": "Nom",
+      "template": "Modèle",
+      "defaultParams": "Paramètres par défaut",
+      "paramKey": "Clé",
+      "paramValue": "Valeur",
+      "addParam": "Ajouter un paramètre",
+      "removeParam": "Retirer",
+      "inputSchema": "Schéma d'entrée",
+      "inputSchemaAuto": "Génération automatique",
+      "inputSchemaManual": "JSON manuel",
+      "enabled": "Activée",
+      "createTitle": "Créer une skill",
+      "editTitle": "Modifier la skill",
+      "mode": "Mode",
+      "scope": "Portée"
+    },
+    "error": {
+      "limit402": "Vous avez atteint la limite de skills personnalisées de votre plan.",
+      "save": "Échec de l'enregistrement de la skill",
+      "delete": "Échec de la suppression de la skill"
+    },
+    "success": {
+      "created": "Skill créée",
+      "updated": "Skill mise à jour",
+      "deleted": "Skill supprimée"
+    },
+    "empty": {
+      "heading": "Aucune skill personnalisée pour le moment",
+      "body": "Créez une skill basée sur un modèle de prompt, puis invoquez-la dans le chat avec /slug."
+    },
+    "delete": {
+      "title": "Supprimer la skill /{{slug}} ?",
+      "body": "Les messages qui l'invoquent ne se résoudront plus immédiatement dans le chat. Cette action est irréversible."
+    },
+    "builtinSection": "Skills intégrées",
+    "builtinBadge": "Intégrée",
+    "customSection": "Skills personnalisées"
   },
   "roles": {
     "admin": {
@@ -2048,7 +2338,10 @@
       "installFailed": "Échec de l'installation de {{name}}. Veuillez réessayer.",
       "uninstallSuccess": "{{name}} désinstallé",
       "uninstallFailed": "Échec de la désinstallation de {{name}}. Veuillez réessayer.",
-      "alreadyInstalled": "{{name}} est déjà installé dans cet espace de travail"
+      "alreadyInstalled": "{{name}} est déjà installé dans cet espace de travail",
+      "deleteSuccess": "{{name}} supprimé du marketplace",
+      "deleteFailed": "Échec de la suppression de {{name}}. Veuillez réessayer.",
+      "deleteInUse": "{{name}} est encore installé dans un ou plusieurs espaces de travail — désinstallez-le d'abord de ces espaces."
     },
     "empty": {
       "noResults": "Aucun serveur trouvé",
@@ -2056,6 +2349,11 @@
       "notFound": "Entrée de catalogue introuvable",
       "loading": "Chargement du marché...",
       "error": "Échec du chargement du marché. Vérifiez votre connexion et réessayez."
+    },
+    "delete": {
+      "title": "Supprimer {{name}} ?",
+      "body": "Cette action supprime définitivement le serveur du catalogue du marketplace. Il ne peut pas être supprimé tant qu'il est installé dans un espace de travail.",
+      "confirm": "Supprimer"
     }
   },
   "mcp": {
@@ -2078,7 +2376,8 @@
       "tooltipVerifiedCommunity": "Serveur vérifié par la communauté. Travail examiné et confirmé par la communauté.",
       "tooltipActiveMaintenance": "Le dernier commit a eu lieu au cours des 6 derniers mois.",
       "tooltipStaleMaintenance": "Le dernier commit remonte à 6 à 12 mois. Le serveur peut ne pas être activement maintenu."
-    }
+    },
+    "uninstallConfirm": "Ceci déconnectera et supprimera le serveur MCP de cet espace de travail. Cette action ne peut pas être annulée."
   },
   "mcpPinner": {
     "title": "Connexions MCP",
@@ -2190,6 +2489,12 @@
     "customInstructionsLabel": "Instructions personnalisées",
     "customInstructionsPlaceholder": "Ajouter des instructions spécifiques pour le modèle OCR...",
     "customInstructionsHint": "Ces instructions sont ajoutées au prompt système",
+    "failedPagesBadge": "{{count}} page(s) en échec OCR",
+    "pageFailed": "Page en échec OCR",
+    "retryFailedPages": "Réessayer les pages en échec",
+    "repairing": "Nouvel OCR des pages en échec…",
+    "repairSuccess": "{{repaired}} page(s) réparée(s)",
+    "repairStillFailed": "Pages toujours en échec après nouvelle tentative",
     "characterCount": "{{count}} / 500",
     "previewLabel": "Aperçu du prompt",
     "previewEmpty": "Sélectionnez un modèle pour voir l'aperçu du prompt",
@@ -2700,6 +3005,12 @@
       "partialError": "Réessai en masse échoué : {{message}}",
       "archiveRequired": "Sélectionnez d'abord une archive",
       "processing": "Réessai en cours..."
+    },
+    "ingest": {
+      "cancel": "Annuler",
+      "cancelling": "Annulation…",
+      "cancelFailed": "Impossible d'annuler l'ingestion : {{error}}",
+      "cancelled": "Tâche annulée"
     }
   },
   "providerPreset": {
@@ -2820,5 +3131,20 @@
       "saveError": "Impossible d'enregistrer le motif.",
       "deleteError": "Impossible de supprimer le motif."
     }
+  },
+  "onboarding": {
+    "welcome": "Bienvenue ! Créez votre premier espace de travail",
+    "welcomeBody": "Votre espace de travail personnel conserve vos conversations et documents séparés. Donnez-lui un nom pour commencer.",
+    "workspaceNameLabel": "Nom de l'espace de travail",
+    "workspaceNamePlaceholder": "ex. Mon espace de travail",
+    "create": "Créer l'espace de travail",
+    "creating": "Création...",
+    "createSuccess": "Espace de travail créé",
+    "createError": "Échec de la création de l'espace de travail",
+    "duplicateName": "Un espace de travail portant ce nom existe déjà dans ce projet",
+    "noAccessMessage": "Vous n'avez pas encore accès à un espace de travail.",
+    "askAdmin": "Demandez à un administrateur de vous accorder l'accès à un espace de travail.",
+    "loadError": "Impossible de charger vos espaces de travail. Vérifiez la connexion et réessayez.",
+    "retry": "Réessayer"
   }
 }

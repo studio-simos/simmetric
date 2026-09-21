@@ -4,6 +4,7 @@
 // See LICENSE and NOTICE at the repository root for full terms.
 
 import { t } from "../i18n";
+import ProductMark from "./ProductMark";
 
 interface ChatHeaderProps {
   name: string;
@@ -19,10 +20,19 @@ export default function ChatHeader({ name, botName, logoUrl, onClose }: ChatHead
       style={{ backgroundColor: "var(--widget-primary)" }}
     >
       <div className="flex items-center">
-        {logoUrl && (
+        {logoUrl ? (
           <img
             src={logoUrl}
             alt={t("chatHeader.logoAlt")}
+            className="w-7 h-7 rounded-full object-contain mr-2"
+          />
+        ) : (
+          /* 188-03 (WGTA-02, D-09): admin logoUrl absent → product fallback
+             mark (self-contained Preact Monogram copy). w-7 h-7 rounded-full
+             equivalent geometry; icon-set visual pass — restyle-only, D-10. */
+          <ProductMark
+            size={28}
+            color="var(--widget-primary)"
             className="w-7 h-7 rounded-full object-contain mr-2"
           />
         )}

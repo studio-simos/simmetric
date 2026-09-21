@@ -41,7 +41,8 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { Copy, Eye, Upload, Trash2 } from "lucide-react";
+import { Copy, Eye, Upload, Trash2, X } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -63,10 +64,21 @@ interface Document {
   type: string;
   chunkCount: number;
   embeddingModel: string;
-  status: "pending" | "processing" | "completed" | "failed";
+  status: "pending" | "processing" | "completed" | "failed" | "cancelled";
   statusMessage: string | null;
+  // quick 260918-p3h (D-2): collector-fed ingestion progress 0-100.
+  progress: number;
   fileSize: number;
   createdAt: string;
+  // Phase 192 (D-12/DLP-03, UI-SPEC surface 3): additive DLP scan fields —
+  // optional because API rows simply may not carry them pre-scan (legacy
+  // documents). Chips derive from THESE fields, never from Document.status
+  // (the status enum stays untouched). dlpEntityCount is SERVED per row by
+  // GET /api/documents (server-side _count.dlpEntities mapping, 192-10 Gap 3
+  // closure); dlpScanState rides the row.
+  dlpScanState?: string | null;
+  dlpScannedAt?: string | null;
+  dlpEntityCount?: number | null;
 }
 
 function formatFileSize(bytes: number): string {
@@ -82,11 +94,80 @@ function statusBadge(status: Document["status"]) {
     processing: "default",
     completed: "default",
     failed: "destructive",
+    // quick 260918-p3h: cancelled renders as a neutral outline badge
+    // (raw status text as-is, consistent with the existing badge).
+    cancelled: "outline",
   };
   return (
     <Badge variant={variantMap[status]} className="text-xs">
       {status}
     </Badge>
+  );
+}
+
+/**
+ * Phase 192 (UI-SPEC surface 3): display-only DLP scan-status chip derived
+ * from the ADDITIVE scan fields — never from Document.status (the status
+ * enum stays untouched). Variants: queued/scanning → secondary
+ * (documents.dlp.scanPending / scanning), clean → outline
+ * (documents.dlp.clean), entities count → secondary
+ * (documents.dlp.entities, i18n pluralization via count), failed →
+ * destructive (documents.dlp.failed). Returns null for unscanned legacy
+ * docs (no dlpScanState) — the zero arm (no chip at all).
+ */
+function dlpChip(doc: Document, t: (key: string, opts?: Record<string, unknown>) => string) {
+  const state = doc.dlpScanState;
+  if (!state) return null; // zero arm — unscanned legacy documents
+  if (state === "queued" || state === "scanning") {
+    return (
+      <Badge variant="secondary" className="text-xs" data-testid="dlp-chip">
+        {state === "queued" ? t("documents.dlp.scanPending") : t("documents.dlp.scanning")}
+      </Badge>
+    );
+  }
+  if (state === "failed") {
+    return (
+      <Badge variant="destructive" className="text-xs" data-testid="dlp-chip">
+        {t("documents.dlp.failed")}
+      </Badge>
+    );
+  }
+  // scanned/clean states: an entity count chip when entities were found,
+  // otherwise the plain clean outline chip.
+  if (typeof doc.dlpEntityCount === "number" && doc.dlpEntityCount > 0) {
+    return (
+      <Badge variant="secondary" className="text-xs" data-testid="dlp-chip">
+        {t("documents.dlp.entities", { count: doc.dlpEntityCount })}
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="text-xs" data-testid="dlp-chip">
+      {t("documents.dlp.clean")}
+    </Badge>
+  );
+}
+
+/**
+ * Chip + Tooltip wrapper (UI-SPEC rule 3: display-only, no click action;
+ * detail via Tooltip — statusMessage-like operational text arrives via the
+ * tooltip content). Radix Tooltip requires a TooltipProvider ancestor;
+ * App.tsx mounts one around the app shell.
+ */
+function DlpChipWithTooltip({ chip, detail }: { chip: React.ReactNode; detail?: string | null }) {
+  if (!chip) return null;
+  if (!detail) {
+    return <span data-testid="dlp-chip-slot">{chip}</span>;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span data-testid="dlp-chip-slot" className="inline-flex cursor-default">
+          {chip}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">{detail}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -258,6 +339,22 @@ export default function DocumentsPage() {
     }
   };
 
+  // quick 260918-p3h (D-3): cancel a running RAG ingestion per document.
+  // The 4s poll picks up the cancelled badge + neutral settled state.
+  const [cancellingDocId, setCancellingDocId] = useState<string | null>(null);
+  const handleCancelDocument = async (docId: string) => {
+    setCancellingDocId(docId);
+    try {
+      await apiPost(`/documents/${docId}/cancel`, {});
+      showSuccess(t("documents.cancelled", { defaultValue: "Ingestion cancelled" }));
+      await fetchDocuments();
+    } catch (err: unknown) {
+      showError(t("documents.cancelFailed", { error: getErrorMessage(err) }));
+    } finally {
+      setCancellingDocId(null);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col">
       <div className="px-6 py-4 border-b border-border flex items-center justify-between">
@@ -413,7 +510,22 @@ export default function DocumentsPage() {
                         <TableCell className="px-4 py-3 text-sm text-muted-foreground">{doc.chunkCount}</TableCell>
                         <TableCell className="px-4 py-3">
                           <div className="flex flex-col items-start gap-1">
-                            {statusBadge(doc.status)}
+                            <div className="flex items-center gap-1.5">
+                              {statusBadge(doc.status)}
+                              {/* Phase 192 (UI-SPEC surface 3): display-only DLP
+                                  scan chip BESIDE statusBadge — never replacing
+                                  it; detail via Tooltip only, no click action. */}
+                              <DlpChipWithTooltip
+                                chip={dlpChip(doc, t)}
+                                detail={doc.dlpScannedAt
+                                  ? new Date(doc.dlpScannedAt).toLocaleDateString()
+                                  : null}
+                              />
+                            </div>
+                            {/* quick 260918-p3h (D-2): live % while processing. */}
+                            {doc.status === "processing" && typeof doc.progress === "number" && doc.progress > 0 && (
+                              <span className="text-xs text-muted-foreground">{doc.progress}%</span>
+                            )}
                             {doc.status === "failed" && doc.statusMessage && (
                               <p className="text-xs text-destructive max-w-xs truncate" title={doc.statusMessage}>
                                 {doc.statusMessage}
@@ -422,6 +534,21 @@ export default function DocumentsPage() {
                           </div>
                         </TableCell>
                         <TableCell className="px-4 py-3 text-right">
+                          {/* quick 260918-p3h (D-3): cancel while pending/processing. */}
+                          {(doc.status === "pending" || doc.status === "processing") && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={cancellingDocId === doc.id}
+                              onClick={() => handleCancelDocument(doc.id)}
+                              className="min-h-[44px] text-xs text-destructive hover:text-destructive mr-1"
+                            >
+                              <X className="mr-1 h-3 w-3" />
+                              {cancellingDocId === doc.id
+                                ? t("documents.cancelling")
+                                : t("documents.cancel")}
+                            </Button>
+                          )}
                           <Button
                             variant="default"
                             size="sm"

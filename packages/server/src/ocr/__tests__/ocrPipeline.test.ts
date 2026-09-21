@@ -65,6 +65,10 @@ jest.mock("../../services/ocrJobService", () => ({
   completeOcrJob: (...args: any[]) => mockCompleteOcrJob(...args),
   failOcrJob: (...args: any[]) => mockFailOcrJob(...args),
   parseOcrJobResult: (result: unknown) => mockParseOcrJobResult(result),
+  // quick 260918-p3h (D-3): the page loop's cooperative cancellation check —
+  // default to a running (non-CANCELLED) status so the legacy suites proceed
+  // byte-identically through the page loop.
+  getOcrJobStatus: jest.fn().mockResolvedValue("PROCESSING"),
 }));
 
 // Mock pdfRenderer
@@ -274,18 +278,24 @@ describe("ocrPipeline — processOcrJob", () => {
   });
 
   // --- Test 2: OCR failure on page 2 does not block page 3 ---
+  // 260919-kvm: a transient model error now gets ONE bounded auto-retry with
+  // the fallback prompt. The retry succeeds here (default mock), so page 2
+  // completes normally — ocrPage is called 4 times (p1 + p2 fail + p2 retry + p3).
   it("continues processing after OCR failure on page 2", async () => {
     const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.mjs");
     pdfjsLib.getDocument.mockReturnValue({
       promise: Promise.resolve({ numPages: 3 }),
     });
 
-    // Page 1: success, Page 2: fail, Page 3: success
+    // Page 1: success, Page 2: fail then retry succeeds, Page 3: success
     mockOcrPage
       .mockImplementationOnce((_buf, pageNum, _tp) =>
         Promise.resolve(mockSuccessfulPage(pageNum, 3))
       )
       .mockRejectedValueOnce(new Error("Ollama connection refused"))
+      .mockImplementationOnce((_buf, pageNum, _tp) =>
+        Promise.resolve(mockSuccessfulPage(pageNum, 3))
+      )
       .mockImplementationOnce((_buf, pageNum, _tp) =>
         Promise.resolve(mockSuccessfulPage(pageNum, 3))
       );
@@ -294,12 +304,124 @@ describe("ocrPipeline — processOcrJob", () => {
 
     // Should still process all 3 pages (render called 3 times)
     expect(mockRenderPageToPng).toHaveBeenCalledTimes(3);
-    // ocrPage called 3 times even though page 2 fails
-    expect(mockOcrPage).toHaveBeenCalledTimes(3);
+    // ocrPage: p1 + p2(fail) + p2-retry + p3 = 4 calls
+    expect(mockOcrPage).toHaveBeenCalledTimes(4);
 
     // Page 2 failure should NOT prevent completion
     expect(mockCompleteOcrJob).toHaveBeenCalledTimes(1);
     expect(mockFailOcrJob).not.toHaveBeenCalled();
+
+    // 260919-kvm: the retried page is now VALID — no [FAILED: marker
+    const fullResult = mockCompleteOcrJob.mock.calls[0][2] as {
+      pageResults: Array<{ markdown: string }>;
+    };
+    expect(fullResult.pageResults[1]!.markdown).not.toContain("[FAILED:");
+  });
+
+  // --- Test 2b (260919-kvm): retry ALSO fails → [FAILED: marker path unchanged ---
+  it("marks page as [FAILED: OCR model error] when the auto-retry also throws", async () => {
+    const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.mjs");
+    pdfjsLib.getDocument.mockReturnValue({
+      promise: Promise.resolve({ numPages: 1 }),
+    });
+
+    mockOcrPage
+      .mockRejectedValueOnce(new Error("Ollama connection refused"))
+      .mockRejectedValueOnce(new Error("Ollama connection refused"));
+
+    await processOcrJob("job-001");
+
+    // Original + 1 bounded retry = 2 calls, no more
+    expect(mockOcrPage).toHaveBeenCalledTimes(2);
+    expect(mockCompleteOcrJob).toHaveBeenCalledTimes(1);
+    expect(mockFailOcrJob).not.toHaveBeenCalled();
+
+    const summary = mockCompleteOcrJob.mock.calls[0][1] as Record<string, unknown>;
+    expect(summary.failedPages).toBe(1);
+    const fullResult = mockCompleteOcrJob.mock.calls[0][2] as {
+      pageResults: Array<{ markdown: string }>;
+    };
+    expect(fullResult.pageResults[0]!.markdown).toContain(
+      "[FAILED: OCR model error — Ollama connection refused]",
+    );
+  });
+
+  // --- Test 2c (260919-kvm): model-not-installed is deterministic — NO retry ---
+  it("does NOT retry when the OCR error is model-not-found", async () => {
+    const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.mjs");
+    pdfjsLib.getDocument.mockReturnValue({
+      promise: Promise.resolve({ numPages: 1 }),
+    });
+
+    mockOcrPage.mockRejectedValue(
+      new Error("model 'glm-ocr:latest' not found, try pulling it first"),
+    );
+
+    await processOcrJob("job-001");
+
+    // Single call — no retry for deterministic model-not-installed errors
+    expect(mockOcrPage).toHaveBeenCalledTimes(1);
+    expect(mockCompleteOcrJob).toHaveBeenCalledTimes(1);
+
+    const fullResult = mockCompleteOcrJob.mock.calls[0][2] as {
+      pageResults: Array<{ markdown: string }>;
+    };
+    expect(fullResult.pageResults[0]!.markdown).toContain(
+      "[FAILED: OCR model not installed",
+    );
+  });
+
+  // --- Test 2d (260919-kvm): render error gets ONE bounded render retry ---
+  it("retries a failed page render once before committing the [FAILED: render marker", async () => {
+    const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.mjs");
+    pdfjsLib.getDocument.mockReturnValue({
+      promise: Promise.resolve({ numPages: 1 }),
+    });
+
+    mockRenderPageToPng
+      .mockRejectedValueOnce(new Error("pdf render exploded"))
+      .mockResolvedValueOnce(Buffer.from("retried-png"));
+    mockOcrPage.mockImplementation((_buf, pageNum, _tp) =>
+      Promise.resolve(mockSuccessfulPage(pageNum, 1))
+    );
+
+    await processOcrJob("job-001");
+
+    // Original render + 1 bounded retry = 2 render calls
+    expect(mockRenderPageToPng).toHaveBeenCalledTimes(2);
+    // Page proceeded through OCR after the successful retry
+    expect(mockOcrPage).toHaveBeenCalledTimes(1);
+    expect(mockCompleteOcrJob).toHaveBeenCalledTimes(1);
+    expect(mockFailOcrJob).not.toHaveBeenCalled();
+
+    const summary = mockCompleteOcrJob.mock.calls[0][1] as Record<string, unknown>;
+    expect(summary.failedPages ?? 0).toBe(0);
+  });
+
+  // --- Test 2e (260919-kvm): render retry also fails → marker unchanged ---
+  it("marks page as [FAILED: Could not render page] when the render retry also fails", async () => {
+    const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.mjs");
+    pdfjsLib.getDocument.mockReturnValue({
+      promise: Promise.resolve({ numPages: 1 }),
+    });
+
+    mockRenderPageToPng.mockRejectedValue(new Error("pdf render exploded"));
+
+    await processOcrJob("job-001");
+
+    // Original + 1 bounded retry = 2 render calls, OCR never reached
+    expect(mockRenderPageToPng).toHaveBeenCalledTimes(2);
+    expect(mockOcrPage).not.toHaveBeenCalled();
+    expect(mockCompleteOcrJob).toHaveBeenCalledTimes(1);
+
+    const summary = mockCompleteOcrJob.mock.calls[0][1] as Record<string, unknown>;
+    expect(summary.failedPages).toBe(1);
+    const fullResult = mockCompleteOcrJob.mock.calls[0][2] as {
+      pageResults: Array<{ markdown: string }>;
+    };
+    expect(fullResult.pageResults[0]!.markdown).toBe(
+      "[FAILED: Could not render page — PDF rendering error]",
+    );
   });
 
   // --- Test 3: keep_alive management — model stays loaded during loop ---
@@ -484,17 +606,19 @@ describe("ocrPipeline — processOcrJob", () => {
   // "[ocr] Job completed" logs are self-describing about page health.
   // =========================================================================
   describe("260829-lkq failedPages truthfulness", () => {
-    it("reports failedPages in completeOcrJob summary when OCR fails on page 2 of 3", async () => {
+    it("reports failedPages in completeOcrJob summary when OCR fails on page 2 of 3 (retry exhausted)", async () => {
       const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.mjs");
       pdfjsLib.getDocument.mockReturnValue({
         promise: Promise.resolve({ numPages: 3 }),
       });
 
-      // Page 2 OCR fails (page-level failure → [FAILED: marker page)
+      // Page 2 OCR fails AND its single auto-retry fails (page-level failure
+      // → [FAILED: marker page). Pages 1 and 3 succeed.
       mockOcrPage
         .mockImplementationOnce((_buf, pageNum, _tp) =>
           Promise.resolve(mockSuccessfulPage(pageNum, 3))
         )
+        .mockRejectedValueOnce(new Error("Ollama vision OCR error: stream died"))
         .mockRejectedValueOnce(new Error("Ollama vision OCR error: stream died"))
         .mockImplementationOnce((_buf, pageNum, _tp) =>
           Promise.resolve(mockSuccessfulPage(pageNum, 3))
@@ -533,6 +657,45 @@ describe("ocrPipeline — processOcrJob", () => {
       expect(logger.warn).not.toHaveBeenCalledWith(
         expect.stringContaining("failed page"),
         expect.any(Object),
+      );
+    });
+
+    // 260919-kvm: degeneration-exhaust — when the FINAL guardResult carried
+    // degenerated=true, the exhaust marker is the degeneration-specific one.
+    it("uses the degeneration-specific [FAILED: marker when the retry output degenerated", async () => {
+      const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.mjs");
+      pdfjsLib.getDocument.mockReturnValue({
+        promise: Promise.resolve({ numPages: 1 }),
+      });
+
+      // Original guard: degenerated (severe 4-gram repetition) → hasEmpty
+      // retry guard: degenerated again → exhaust path
+      const degeneratedGuard = {
+        markdown: "",
+        hasUnverified: false,
+        unverifiedCount: 0,
+        hasHandwriting: false,
+        hasEmpty: true,
+        degenerated: true,
+        issues: [],
+      };
+      mockApplyHallucinationGuard
+        .mockReturnValueOnce({ ...degeneratedGuard })
+        .mockReturnValueOnce({ ...degeneratedGuard });
+
+      await processOcrJob("job-001");
+
+      // Original + 1 empty-retry = 2 ocrPage calls
+      expect(mockOcrPage).toHaveBeenCalledTimes(2);
+      expect(mockCompleteOcrJob).toHaveBeenCalledTimes(1);
+
+      const summary = mockCompleteOcrJob.mock.calls[0][1] as Record<string, unknown>;
+      expect(summary.failedPages).toBe(1);
+      const fullResult = mockCompleteOcrJob.mock.calls[0][2] as {
+        pageResults: Array<{ markdown: string }>;
+      };
+      expect(fullResult.pageResults[0]!.markdown).toBe(
+        "[FAILED: OCR output for page 1 discarded — severe text degeneration persisted after retry]",
       );
     });
   });
@@ -685,16 +848,20 @@ describe("ocrPipeline — processOcrJob", () => {
   });
 
   // =========================================================================
-  // 260826-gsr — sanitizeChatTokens + skipDegeneration wiring
+  // 260826-gsr + 260918-oa9 — sanitizeChatTokens + degeneration-mode wiring
   // - sanitizeChatTokens runs on EVERY OCR page (image, PDF page, retry)
   //   regardless of prompt template, after stripGroundingTags and before
   //   applyHallucinationGuard.
-  // - applyHallucinationGuard receives skipDegeneration: !!job.archiveId at
-  //   all three OCR-result sites. KB/archive jobs (archiveId set) opt out of
-  //   the degeneration checks; RAG jobs (archiveId null) keep the guard.
+  // - applyHallucinationGuard receives resolveGuardMode(job.archiveId) as
+  //   its third argument at all three OCR-result sites: archive jobs
+  //   (archiveId set) → "discard-only" (keeps the < 0.3 hard-discard arm so
+  //   degeneration loops never reach raw_sources → LanceDB → RAG, drops only
+  //   the < 0.5 soft warning arm so repetitive legislative text is not
+  //   warning-spammed); RAG jobs (archiveId falsy) → "full" (both arms,
+  //   byte-identical to the old default behavior).
   // =========================================================================
-  describe("260826-gsr sanitizeChatTokens + skipDegeneration wiring", () => {
-    it("KB job (archiveId set): applyHallucinationGuard called with skipDegeneration=true", async () => {
+  describe("260826-gsr sanitizeChatTokens + degeneration-mode wiring", () => {
+    it('KB job (archiveId set): applyHallucinationGuard called with mode "discard-only"', async () => {
       const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.mjs");
       pdfjsLib.getDocument.mockReturnValue({
         promise: Promise.resolve({ numPages: 2 }),
@@ -704,30 +871,31 @@ describe("ocrPipeline — processOcrJob", () => {
 
       await processOcrJob("job-001");
 
-      // Each applyHallucinationGuard call's third arg must be true (KB job)
+      // Each applyHallucinationGuard call's third arg must be the archive
+      // mode "discard-only" (hard arm kept, soft warning arm waived)
       expect(mockApplyHallucinationGuard).toHaveBeenCalledTimes(2);
       for (const call of mockApplyHallucinationGuard.mock.calls) {
-        expect(call[2]).toBe(true); // skipDegeneration
+        expect(call[2]).toBe("discard-only"); // resolveGuardMode(archiveId)
       }
     });
 
-    it("RAG job (archiveId falsy): applyHallucinationGuard called with skipDegeneration=false", async () => {
+    it('RAG job (archiveId falsy): applyHallucinationGuard called with mode "full"', async () => {
       const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.mjs");
       pdfjsLib.getDocument.mockReturnValue({
         promise: Promise.resolve({ numPages: 2 }),
       });
       // In production every OCR job reaching ocrStages has a non-empty
       // archiveId (createOcrJob requires it). The falsy branch
-      // (skipDegeneration=false) is exercised here with an empty string,
-      // which is falsy under !! but valid for path.resolve — using null
-      // would crash path.resolve(ARCHIVES_BASE, null, "source").
+      // (mode "full") is exercised here with an empty string,
+      // which is falsy for resolveGuardMode but valid for path.resolve —
+      // using null would crash path.resolve(ARCHIVES_BASE, null, "source").
       mockGetOcrJob.mockResolvedValue(makeMockJob({ archiveId: "" }));
 
       await processOcrJob("job-001");
 
       expect(mockApplyHallucinationGuard).toHaveBeenCalledTimes(2);
       for (const call of mockApplyHallucinationGuard.mock.calls) {
-        expect(call[2]).toBe(false); // skipDegeneration
+        expect(call[2]).toBe("full"); // resolveGuardMode("")
       }
     });
 
@@ -763,10 +931,10 @@ describe("ocrPipeline — processOcrJob", () => {
       await processOcrJob("job-001");
 
       expect(mockSanitizeChatTokens).toHaveBeenCalledTimes(1);
-      // And the guard gets skipDegeneration=true (archiveId is the default
-      // "archive-001")
+      // And the guard gets the archive mode "discard-only" (archiveId is the
+      // default "archive-001")
       expect(mockApplyHallucinationGuard).toHaveBeenCalledTimes(1);
-      expect(mockApplyHallucinationGuard.mock.calls[0][2]).toBe(true);
+      expect(mockApplyHallucinationGuard.mock.calls[0][2]).toBe("discard-only");
     });
 
     it("sanitizeChatTokens is idempotent in the pipeline (mock identity passthrough preserves content)", async () => {

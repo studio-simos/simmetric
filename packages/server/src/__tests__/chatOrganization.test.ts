@@ -36,7 +36,14 @@ jest.mock("../services/licenseService", () => ({
 
 jest.mock("../agent/builtinSkills", () => {});
 jest.mock("../services/templateService", () => ({ seedTemplates: jest.fn() }));
-jest.mock("../services/systemConfigService", () => ({ seedConfigDefaults: jest.fn() }));
+// Phase 189 (189-02 sweep): the graded write middleware reads
+// WORKSPACE_ROLE_ENFORCEMENT via getSetting — default "false" (shadow) so
+// the middleware resolves + logs + falls through (binary gate unchanged).
+jest.mock("../services/systemConfigService", () => ({
+  seedConfigDefaults: jest.fn(),
+  getSetting: jest.fn(async (key: string) =>
+    key === "WORKSPACE_ROLE_ENFORCEMENT" ? { value: "false" } : { value: "" }),
+}));
 jest.mock("../services/ftsService", () => ({ initPostgreSQLFTS: jest.fn() }));
 jest.mock("../agent/mcpServer", () => ({ mountMCPServer: jest.fn() }));
 

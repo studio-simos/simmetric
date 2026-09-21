@@ -354,14 +354,38 @@ describe("chat-template token stripping", () => {
     const result = stripGroundingTags(input);
     expect(result).toBe(input);
   });
+
+  // -----------------------------------------------------------------------
+  // 7. Generic pattern contract (260919-lx5) — novel tokens
+  // -----------------------------------------------------------------------
+  it("removes NOVEL chat-template tokens too", () => {
+    const input = [
+      zwToken("whatever"),
+      "Real content line",
+      "<|novel_leak|>",
+    ].join("\n");
+    const result = stripGroundingTags(input);
+    expect(result).toBe("Real content line");
+    expect(result).not.toContain("<|");
+  });
+
+  it("removes a bare role-keyword line when a NOVEL token leak is present", () => {
+    // HAS_LEAK_MARKER_RE must recognize ANY <|word|> form so role-line
+    // removal keeps firing for novel tokens (260919-lx5 constraint).
+    const input = zwToken("whatever") + "user\nReal content line";
+    const result = stripGroundingTags(input);
+    expect(result).toBe("Real content line");
+  });
 });
 
 // ---------------------------------------------------------------------------
-// sanitizeChatTokens (260826-gsr) — universal always-on chat-template
-// token stripper. SEPARATE from stripGroundingTags: strips ONLY chat-template
-// control tokens (im_*, md_*, doc_*, im_impression, truncated forms) and
-// does NOT touch grounding tags (<|ref|>, <|det|>). Applied on every OCR
-// page regardless of prompt template (ocrStages wiring).
+// sanitizeChatTokens (260826-gsr; generalized 260919-lx5) — universal
+// always-on chat-template token stripper, PATTERN-BASED: ANY single no-space
+// word enclosed in the <|...|> envelope (plain, zero-width-space, uppercase,
+// or truncated form) is treated as leaked structure and removed.
+// SEPARATE from stripGroundingTags: does NOT touch grounding tags (<|ref|>,
+// <|det|>). Applied on every OCR page regardless of prompt template
+// (ocrStages wiring).
 // ---------------------------------------------------------------------------
 
 describe("sanitizeChatTokens", () => {
@@ -472,7 +496,7 @@ describe("sanitizeChatTokens", () => {
       "Some **bold** text.",
       "",
       "```ts",
-      'const x = "<|not_a_token|>";',
+      'const greeting = "hello world";',
       "```",
     ].join("\n");
     expect(sanitizeChatTokens(input)).toBe(input);
@@ -510,6 +534,69 @@ describe("sanitizeChatTokens", () => {
     expect(result).toContain("Real content");
     expect(result).not.toContain("<|im_start|>");
     expect(result).not.toContain("<|md_end|>");
+  });
+
+  // --- generic pattern contract (260919-lx5) ---
+  it("strips NOVEL chat-template tokens not in the old allowlist", () => {
+    const input = ["<|whatever|>", "<|foo_bar_baz|>", "Content line", "<|MyToken123|>"].join("\n");
+    const result = sanitizeChatTokens(input);
+    expect(result).toBe("Content line");
+    expect(result).not.toContain("<|");
+  });
+
+  it("strips novel tokens in the zero-width-space form", () => {
+    const input = [zwToken("whatever"), "Content line", zwToken("foo_bar")].join("\n");
+    const result = sanitizeChatTokens(input);
+    expect(result).toBe("Content line");
+  });
+
+  it("strips UPPERCASE variants", () => {
+    const input = ["<|IM_START|>", "Content line", "<|MD_END|>"].join("\n");
+    const result = sanitizeChatTokens(input);
+    expect(result).toBe("Content line");
+  });
+
+  it("strips the truncated form of a novel token (no closing |>)", () => {
+    expect(sanitizeChatTokens("<|whatever|some text that follows without a closing bracket")).toBe(
+      "some text that follows without a closing bracket",
+    );
+    // ZWSP truncated variant of a novel token
+    expect(sanitizeChatTokens("<" + ZWSP + "|whatever|trailing text")).toBe("trailing text");
+  });
+
+  it("does NOT strip <|ref|>/<|det|> but DOES strip near-misses like <|refx|>", () => {
+    // Near-miss: <|refx|> is not the exact grounding name `ref` — removed.
+    const nearMiss = sanitizeChatTokens("<|refx|>\nKeep me");
+    expect(nearMiss).toBe("Keep me");
+
+    // Combined: grounding grammar survives while novel tokens are stripped.
+    const combined =
+      '<|ref|>title<|/ref|><|det|>[[0,0,1,1]]<|/det|>\n' + "Real content\n" + "<|whatever|>";
+    const result = sanitizeChatTokens(combined);
+    expect(result).toContain("<|ref|>title<|/ref|>");
+    expect(result).toContain("<|det|>[[0,0,1,1]]<|/det|>");
+    expect(result).toContain("Real content");
+    expect(result).not.toContain("<|whatever|>");
+  });
+
+  it("removes chat-template tokens even inside fenced code blocks (no code-block awareness)", () => {
+    // Intended behavior change per quick task 260919-lx5: a no-space word in
+    // the <| |> envelope is never legitimate content, so it is removed
+    // wherever it appears — this module has NO code-block awareness, and
+    // adding it is out of scope (documented in groundingCleanup.ts JSDoc).
+    const input = ["```ts", 'const x = "<|leaked|>";', "```"].join("\n");
+    expect(sanitizeChatTokens(input)).toBe(['```ts', 'const x = "";', "```"].join("\n"));
+  });
+
+  it("is idempotent on input with NOVEL tokens (complete, zero-width, truncated)", () => {
+    const input = [
+      "<|whatever|>",
+      "Real content line",
+      zwToken("novel_leak"),
+      "<|whatever|",
+    ].join("\n");
+    const once = sanitizeChatTokens(input);
+    expect(sanitizeChatTokens(once)).toBe(once);
   });
 
   // --- realistic mixed leak (matches the KB/archive defect) ---

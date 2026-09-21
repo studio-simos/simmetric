@@ -28,6 +28,8 @@ export interface ChatSummary {
   isPinned?: boolean;
   /** Linked archive id (Phase 80 D-01 single source of truth). null = no link. */
   archiveId?: string | null;
+  /** Phase 191 (KNOW-02 D-05): chat-attached archive ids (additive — Prisma returns all scalars). Empty = no attachments. */
+  attachedArchiveIds?: string[] | null;
 }
 
 export interface ChatFolder {

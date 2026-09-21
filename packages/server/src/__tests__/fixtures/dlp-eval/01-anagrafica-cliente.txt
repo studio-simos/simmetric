@@ -1,0 +1,7 @@
+Foglio anagrafica cliente.
+
+Nome: Marco Rossi
+Codice Fiscale: RSSMRA85M01A001X
+Residenza: Via Roma 12, 20121 Milano (MI)
+
+Contatto referente: ufficio.contratti@example.it

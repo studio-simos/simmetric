@@ -11,7 +11,7 @@ import "./helpers/setupEnv";
 // environment without rendering the Preact hook (threat model T-65-SC forbids
 // new test deps; jest.config.js is testEnvironment node, no jsdom — same
 // pattern as useWidgetChat.dedup.test.ts).
-import { parseWidgetConfigBlock, DEFAULT_CONFIG, shouldShowCredits } from "../widget/hooks/useWidgetConfig";
+import { parseWidgetConfigBlock, DEFAULT_CONFIG, shouldShowCredits, shouldShowLinks, shouldShowContactOptions } from "../widget/hooks/useWidgetConfig";
 
 describe("parseWidgetConfigBlock (D-01 JSON block reader)", () => {
   it("maps a valid block JSON into WidgetConfig — position mapping, locale, resolved texts", () => {
@@ -183,5 +183,151 @@ describe("shouldShowCredits — 4-combination visibility matrix (130-01, CRD-02)
 
   it("(true, { enabled: false }) → false — white-label license + admin disabled: hidden", () => {
     expect(shouldShowCredits(true, { enabled: false, label: "X", url: "https://x.example" })).toBe(false);
+  });
+});
+
+// 188-03 (WGTA-03, D-12): the attribution-links predicate mirrors the
+// shouldShowCredits byte-idiom but is single-flag — NO per-widget opt-out, NO
+// new Widget field (Phase 130 white_label precedent). Community (whiteLabel
+// false) shows the two product attribution links; enterprise white-label
+// removes them. Exported from the hook file for the same node-env
+// testability rationale as shouldShowCredits.
+describe("shouldShowLinks — 2-combination visibility matrix (188-03, D-12)", () => {
+  it("(false) → true — Community shows the attribution links", () => {
+    expect(shouldShowLinks(false)).toBe(true);
+  });
+
+  it("(true) → false — enterprise white-label removes them", () => {
+    expect(shouldShowLinks(true)).toBe(false);
+  });
+});
+
+// ─── 260917-mz6: contact options + lead timing mapping ──────────────
+
+describe("parseWidgetConfigBlock — 260917-mz6 contact/timing fields", () => {
+  it("round-trips a valid blob + timing + timeout", () => {
+    const config = parseWidgetConfigBlock(JSON.stringify({
+      widgetId: "w1",
+      contactConfig: { formUrl: "https://example.com/contact", email: "owner@example.com" },
+      leadCaptureTiming: "timeout",
+      leadCaptureTimeoutSeconds: 45,
+    }));
+
+    expect(config).not.toBeNull();
+    expect(config!.contactConfig).toEqual({ formUrl: "https://example.com/contact", email: "owner@example.com" });
+    expect(config!.leadCaptureTiming).toBe("timeout");
+    expect(config!.leadCaptureTimeoutSeconds).toBe(45);
+  });
+
+  it("maps an invalid timing to 'end' (enum guard)", () => {
+    const config = parseWidgetConfigBlock(JSON.stringify({
+      widgetId: "w1",
+      leadCaptureTiming: "midway",
+    }));
+    expect(config!.leadCaptureTiming).toBe("end");
+  });
+
+  it("maps a non-numeric timeout to null (parseInt-with-NaN-guard idiom)", () => {
+    const config = parseWidgetConfigBlock(JSON.stringify({
+      widgetId: "w1",
+      leadCaptureTimeoutSeconds: "abc",
+    }));
+    expect(config!.leadCaptureTimeoutSeconds).toBeNull();
+  });
+
+  it("maps missing fields to neutral values (null / 'end' / null)", () => {
+    const config = parseWidgetConfigBlock(JSON.stringify({ widgetId: "w1" }));
+    expect(config!.contactConfig).toBeNull();
+    expect(config!.leadCaptureTiming).toBe("end");
+    expect(config!.leadCaptureTimeoutSeconds).toBeNull();
+  });
+
+  it("maps a non-object contactConfig to null (defensive typeof guard)", () => {
+    const config = parseWidgetConfigBlock(JSON.stringify({
+      widgetId: "w1",
+      contactConfig: "https://evil.example",
+    }));
+    expect(config!.contactConfig).toBeNull();
+  });
+
+  it("per-field typeof guards: non-string blob fields are dropped, not defaulted", () => {
+    const config = parseWidgetConfigBlock(JSON.stringify({
+      widgetId: "w1",
+      contactConfig: { email: "owner@example.com", formUrl: 42 },
+    }));
+    expect(config!.contactConfig).toEqual({ email: "owner@example.com" });
+  });
+
+  it("DEFAULT_CONFIG carries the neutral fields (contactConfig null, timing 'end', timeout null)", () => {
+    expect(DEFAULT_CONFIG.contactConfig).toBeNull();
+    expect(DEFAULT_CONFIG.leadCaptureTiming).toBe("end");
+    expect(DEFAULT_CONFIG.leadCaptureTimeoutSeconds).toBeNull();
+  });
+});
+
+// 260917-mz6: the limit-reached contact-card predicate.
+describe("shouldShowContactOptions", () => {
+  const blob = { formUrl: "https://example.com/contact" } as const;
+  const fullBlob = { formUrl: "https://a.example", bookingUrl: "https://b.example", email: "o@e.example", customUrl: "https://c.example", customLabel: "X" } as const;
+
+  it("false when the limit is NOT reached", () => {
+    expect(shouldShowContactOptions(false, blob, true, false)).toBe(false);
+  });
+
+  it("true at the limit with a configured contactConfig", () => {
+    expect(shouldShowContactOptions(true, blob, false, false)).toBe(true);
+    expect(shouldShowContactOptions(true, fullBlob, false, false)).toBe(true);
+  });
+
+  it("true at the limit via the lead arm (lead capture enabled, not submitted)", () => {
+    expect(shouldShowContactOptions(true, null, true, false)).toBe(true);
+  });
+
+  it("false at the limit when lead already submitted and no contactConfig", () => {
+    expect(shouldShowContactOptions(true, null, true, true)).toBe(false);
+  });
+
+  it("false at the limit with nothing configured at all", () => {
+    expect(shouldShowContactOptions(true, null, false, false)).toBe(false);
+  });
+
+  it("false with an all-empty blob and no lead arm", () => {
+    expect(shouldShowContactOptions(true, { formUrl: "", email: "" }, false, false)).toBe(false);
+  });
+
+  it("customLabel alone counts as a configured option", () => {
+    expect(shouldShowContactOptions(true, { customLabel: "Talk to us" }, false, false)).toBe(true);
+  });
+});
+
+// ─── 260917-qoh: privacyUrl mapping ─────────────────────────────────────
+
+describe("parseWidgetConfigBlock — privacyUrl (260917-qoh)", () => {
+  it("a present string round-trips into the config", () => {
+    const config = parseWidgetConfigBlock(JSON.stringify({ privacyUrl: "https://example.com/privacy" }));
+    expect(config).not.toBeNull();
+    expect(config!.privacyUrl).toBe("https://example.com/privacy");
+  });
+
+  it("an absent field maps to null (no DEFAULT_CONFIG injection)", () => {
+    const config = parseWidgetConfigBlock(JSON.stringify({ widgetId: "w1" }));
+    expect(config).not.toBeNull();
+    expect(config!.privacyUrl).toBeNull();
+  });
+
+  it("an explicit null maps to null", () => {
+    const config = parseWidgetConfigBlock(JSON.stringify({ privacyUrl: null }));
+    expect(config).not.toBeNull();
+    expect(config!.privacyUrl).toBeNull();
+  });
+
+  it("a non-string value maps to null (typeof guard)", () => {
+    const config = parseWidgetConfigBlock(JSON.stringify({ privacyUrl: 42 }));
+    expect(config).not.toBeNull();
+    expect(config!.privacyUrl).toBeNull();
+  });
+
+  it("DEFAULT_CONFIG carries the neutral field (null)", () => {
+    expect(DEFAULT_CONFIG.privacyUrl).toBeNull();
   });
 });

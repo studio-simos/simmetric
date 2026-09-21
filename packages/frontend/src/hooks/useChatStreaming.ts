@@ -85,6 +85,13 @@ export interface UseChatStreamingArgs {
   currentPlanRef: React.MutableRefObject<AgentPlan | null>;
   isFallbackInProgressRef: React.MutableRefObject<boolean>;
   persistedModelRef: React.MutableRefObject<{ providerId?: string; model?: string } | null>;
+  // 191-03 (WR-01 review fix): parent-owned mirror of the composer's
+  // chat-attached archive selection (ChatPanel keeps it in sync). Read at
+  // retryMessage call time (mirroring persistedModelRef) so regenerate /
+  // edit-regenerate / model-fallback turns stay archive-grounded like the
+  // originals and keep sending the CURRENT selection (server mirror stays
+  // in sync). Optional — absent → retry bodies stay byte-identical.
+  attachedArchivesRef?: React.MutableRefObject<string[]>;
 }
 
 export function useChatStreaming(args: UseChatStreamingArgs) {
@@ -148,6 +155,14 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
           ...(attachedDocId && { attachedDocumentId: attachedDocId }),
           ...(effectiveOverride?.providerId && { providerId: effectiveOverride.providerId }),
           ...(effectiveOverride?.model && { model: effectiveOverride.model }),
+          // 191-03 (WR-01 review fix): regenerate/fallback turns carry the
+          // composer's CURRENT selection — the mirror is only meaningful for
+          // callers that manage attachments, and an absent field leaves the
+          // server mirror untouched while the turn stays ungrounded. Spread
+          // ONLY when non-empty (the established ...(x && { x }) pattern);
+          // read at call time from the parent-owned ref (never a stale
+          // closure).
+          ...(args.attachedArchivesRef?.current?.length && { attachedArchiveIds: args.attachedArchivesRef.current }),
         }),
         signal: controller.signal,
 
@@ -213,7 +228,11 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
             case "done": {
               try {
                 const data = JSON.parse(event.data);
-                const finalContent = args.streamingContentRef.current;
+                // Phase 192 (D-09/Pitfall 9): additive-optional content — the
+                // server sends re-composed terminal text for permitted DLP
+                // users; absent (legacy server or non-DLP chat) → the ref
+                // fallback stays byte-identical.
+                const finalContent = data.content ?? args.streamingContentRef.current;
                 const assistantMessage: ChatMessage = {
                   id: data.messageId || `assistant-${Date.now()}`,
                   role: "assistant",
@@ -258,6 +277,22 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
                 if (typeof errorText === "string" && errorText.includes("[CLOUD_MODEL_AUTH_FAILED]")) {
                   errorText = t("chat.cloudModelAuthFailed", "Ollama cloud model authentication failed. Please check your API key in Settings > Providers.");
                 }
+                // 260919 model-missing UX: the user-selected model cannot be
+                // resolved server-side. NO auto-fallback to a substitute (the
+                // user chose this model — they must pick the next one). The
+                // message names the dead model and opens the model palette;
+                // the stale persistedModel is cleared so the RC-2 fallback
+                // guard below is false (no silent substitute, no 30s-watcher
+                // firing on the dead selection).
+                if (typeof errorText === "string" && errorText.includes("[MODEL_NOT_AVAILABLE]")) {
+                  const requested = errorText.match(/Model "([^"]+)" is not available/)?.[1];
+                  errorText = t("chat.modelUnavailable", {
+                    model: requested || "",
+                    defaultValue: 'Model "{{model}}" is not available. Please choose a different model.',
+                  });
+                  args.setPersistedModel(null);
+                  window.dispatchEvent(new CustomEvent("open-palette"));
+                }
                 args.setError(errorText);
               } catch {
                 args.setError("Streaming failed");
@@ -278,6 +313,8 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
               // re-sends the last user message. Guards: only when a model is
               // explicitly selected, and isFallbackInProgressRef prevents
               // loops (a fallback retry that also errors won't re-trigger).
+              // 260919: [MODEL_NOT_AVAILABLE] cleared persistedModel above, so
+              // this guard is false — the user picks the next model manually.
               if (args.persistedModelRef.current?.providerId && !args.isFallbackInProgressRef.current) {
                 args.handleFallbackRef.current(args.persistedModelRef.current as { providerId: string; model: string });
               }
@@ -337,7 +374,27 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
     }
   };
 
-  const sendMessage = async (content: string, attachedDocId?: string, attachedDocName?: string, modelOverride?: { providerId?: string; model?: string }, archiveId?: string | null) => {
+  const sendMessage = async (
+    content: string,
+    attachedDocId?: string,
+    attachedDocName?: string,
+    modelOverride?: { providerId?: string; model?: string },
+    archiveId?: string | null,
+    // Phase 190 (SKIL-02, D-11): trailing additive-optional skillCall — the
+    // structured { slug, params } of an explicit /slug invocation. The client
+    // NEVER builds a compiled prompt (the server re-resolves + compiles);
+    // the field rides chatRequestSchema.skillCall (Plan 01). Absent for
+    // every pre-existing caller — the wire body is byte-identical then.
+    skillCall?: { slug: string; params: Record<string, string> },
+    // Phase 191 (KNOW-01 D-02): trailing additive-optional attachedArchiveIds —
+    // the per-message archive-attachment selection (composer chips). Spread
+    // into the body ONLY when non-empty (the established ...(x && { x })
+    // pattern) so absent/empty keeps the wire byte-identical. Positional
+    // order preserved AFTER skillCall — Phase 190 callers never shift. The
+    // caller's array is never cleared or mutated here: the transport is
+    // per-message, while the composer owns session persistence (D-06).
+    attachedArchiveIds?: string[],
+  ) => {
     if (!args.workspaceId) return;
 
     // Abort any existing stream
@@ -402,6 +459,12 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
           // from the start (no post-hoc PATCH). Only spread when truthy;
           // null/undefined/absent keeps the body byte-identical to today.
           ...(archiveId && { archiveId }),
+          // Phase 190 (D-11): additive-optional skillCall — spread ONLY when
+          // present so every pre-existing send keeps the exact wire shape.
+          ...(skillCall && { skillCall }),
+          // Phase 191 (D-02): additive-optional attachedArchiveIds — spread
+          // ONLY when non-empty so absent/empty keeps the wire byte-identical.
+          ...(attachedArchiveIds && attachedArchiveIds.length > 0 && { attachedArchiveIds }),
         }),
         signal: controller.signal,
 
@@ -468,8 +531,12 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
             case "done": {
               try {
                 const data = JSON.parse(event.data);
-                // Finalize the assistant message using the ref for accurate content
-                const finalContent = args.streamingContentRef.current;
+                // Phase 192 (D-09/Pitfall 9): additive-optional content — the
+                // server sends re-composed terminal text for permitted DLP
+                // users; absent (legacy server or non-DLP chat) → the ref
+                // fallback stays byte-identical. The dedup/race guard below
+                // is untouched (plan 192-03 Task 2 scope: finalContent only).
+                const finalContent = data.content ?? args.streamingContentRef.current;
                 const assistantMessage: ChatMessage = {
                   id: data.messageId || `assistant-${Date.now()}`,
                   role: "assistant",
@@ -537,6 +604,22 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
                 if (typeof errorText === "string" && errorText.includes("[CLOUD_MODEL_AUTH_FAILED]")) {
                   errorText = t("chat.cloudModelAuthFailed", "Ollama cloud model authentication failed. Please check your API key in Settings > Providers.");
                 }
+                // 260919 model-missing UX: the user-selected model cannot be
+                // resolved server-side. NO auto-fallback to a substitute (the
+                // user chose this model — they must pick the next one). The
+                // message names the dead model and opens the model palette;
+                // the stale persistedModel is cleared so the RC-2 fallback
+                // guard below is false (no silent substitute, no 30s-watcher
+                // firing on the dead selection).
+                if (typeof errorText === "string" && errorText.includes("[MODEL_NOT_AVAILABLE]")) {
+                  const requested = errorText.match(/Model "([^"]+)" is not available/)?.[1];
+                  errorText = t("chat.modelUnavailable", {
+                    model: requested || "",
+                    defaultValue: 'Model "{{model}}" is not available. Please choose a different model.',
+                  });
+                  args.setPersistedModel(null);
+                  window.dispatchEvent(new CustomEvent("open-palette"));
+                }
                 args.setError(errorText);
               } catch {
                 args.setError("Streaming failed");
@@ -557,6 +640,8 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
               // re-sends the last user message. Guards: only when a model is
               // explicitly selected, and isFallbackInProgressRef prevents
               // loops (a fallback retry that also errors won't re-trigger).
+              // 260919: [MODEL_NOT_AVAILABLE] cleared persistedModel above, so
+              // this guard is false — the user picks the next model manually.
               if (args.persistedModelRef.current?.providerId && !args.isFallbackInProgressRef.current) {
                 args.handleFallbackRef.current(args.persistedModelRef.current as { providerId: string; model: string });
               }

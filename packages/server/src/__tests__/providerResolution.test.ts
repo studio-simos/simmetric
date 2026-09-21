@@ -19,7 +19,7 @@ jest.mock("../utils/prisma", () => {
 });
 
 import prisma from "../utils/prisma";
-import { resolveProviderConfig } from "../services/providerService";
+import { resolveProviderConfig, resolveProviderConfigStrict } from "../services/providerService";
 
 const OLLAMA_PROVIDER = {
   id: "prov-ollama-001",
@@ -144,16 +144,89 @@ describe("resolveProviderConfig", () => {
     });
 
     it("returns null when the requested model exists in no provider", async () => {
-      // When an explicit model name is requested, every tier of the chain
-      // (explicit provider → default provider → any enabled provider) requires
-      // that exact model to exist. If it does nowhere, the function returns
-      // null and the caller falls back to environment-variable configuration.
-      (prisma.provider.findUnique as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
-      (prisma.provider.findFirst as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+      // 260917-mz6 UPDATE: with the graceful-degradation arms in place, a
+      // named model that exists NOWHERE still returns null only when the
+      // providers it lands on carry zero available models. The test below
+      // pins that zero-available-provider case (the "no model anywhere"
+      // outcome); the degrade cases live in the new describes.
+      // Providers whose models are all disabled/unavailable → degradation
+      // finds nothing → null.
+      const noAvailableProvider = {
+        ...OPENAI_PROVIDER,
+        models: OPENAI_PROVIDER.models.map((m) => ({ ...m, isAvailable: false })),
+      };
+      (prisma.provider.findUnique as jest.Mock).mockResolvedValue(mockProvider(noAvailableProvider));
+      (prisma.provider.findFirst as jest.Mock).mockResolvedValue(mockProvider(noAvailableProvider));
 
       const result = await resolveProviderConfig(OPENAI_PROVIDER.id, "nonexistent-model");
 
       expect(result).toBeNull();
+    });
+
+    // 260917-mz6 (widget error fix): a named-but-missing model must degrade
+    // to the provider's first available model instead of hard-failing —
+    // unpinned widget chats land on Chat.model's schema default
+    // ("qwen2.5:3b"), which may have no ProviderModel row on any provider.
+    it("degrades a missing model to the provider's first available model (explicit providerId arm)", async () => {
+      (prisma.provider.findUnique as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+      (prisma.provider.findFirst as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+
+      const result = await resolveProviderConfig(OPENAI_PROVIDER.id, "missing-model");
+
+      expect(result).not.toBeNull();
+      expect(result!.model).toBe("gpt-4o"); // first available model on the provider
+      expect(result!.type).toBe("openai");
+    });
+
+    it("degrades a missing model on the default-provider arm to its first available model", async () => {
+      // No explicit provider; the default provider lacks the requested model
+      // but has available models → degrade instead of null.
+      (prisma.provider.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.provider.findFirst as jest.Mock)
+        .mockResolvedValueOnce(mockProvider(OPENAI_PROVIDER)) // default provider query
+        .mockResolvedValueOnce(mockProvider(OPENAI_PROVIDER)); // any enabled (unused)
+
+      const result = await resolveProviderConfig(undefined, "missing-model");
+
+      expect(result).not.toBeNull();
+      expect(result!.model).toBe("gpt-4o");
+      expect(result!.type).toBe("openai");
+    });
+
+    it("degradation logs an info line naming the requested + degraded models (observable, never silent)", async () => {
+      const { logger } = await import("../utils/logger");
+      const infoSpy = jest.spyOn(logger, "info").mockImplementation(() => logger);
+      (prisma.provider.findUnique as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+      (prisma.provider.findFirst as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+
+      const result = await resolveProviderConfig(OPENAI_PROVIDER.id, "missing-model");
+
+      expect(result).not.toBeNull();
+      const degradedCall = infoSpy.mock.calls.find((c) =>
+        String(c[0]).includes("degrading to available model"),
+      );
+      expect(degradedCall).toBeDefined();
+      expect(String(degradedCall![0])).toContain("missing-model");
+      expect(String(degradedCall![0])).toContain("gpt-4o");
+      expect(String(degradedCall![0])).toContain("OpenAI");
+      infoSpy.mockRestore();
+    });
+
+    it("byte-identical selection when the named model IS found (no degrade, no log)", async () => {
+      const { logger } = await import("../utils/logger");
+      const infoSpy = jest.spyOn(logger, "info").mockImplementation(() => logger);
+      (prisma.provider.findUnique as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+      (prisma.provider.findFirst as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+
+      const result = await resolveProviderConfig(OPENAI_PROVIDER.id, "gpt-4o");
+
+      expect(result).not.toBeNull();
+      expect(result!.model).toBe("gpt-4o"); // exact model, not the first available
+      const degradedCall = infoSpy.mock.calls.find((c) =>
+        String(c[0]).includes("degrading to available model"),
+      );
+      expect(degradedCall).toBeUndefined();
+      infoSpy.mockRestore();
     });
   });
 
@@ -242,6 +315,74 @@ describe("resolveProviderConfig", () => {
       const result = await resolveProviderConfig("nonexistent-id");
 
       expect(result).toBeNull();
+    });
+  });
+
+  // 260919 model-missing UX: strict resolution for user-facing chat paths —
+  // a user-selected model that cannot be resolved reports NOT-FOUND instead
+  // of silently substituting a different model (the OCR-degrade regression).
+  describe("resolveProviderConfigStrict", () => {
+    it("degrades to the first NON-OCR, NON-embedding model (skips isOcr/isEmbedding)", async () => {
+      const ocrFirstProvider = {
+        ...OLLAMA_PROVIDER,
+        models: [
+          { name: "deepseek-ocr:latest", isEnabled: true, isAvailable: true, isOcr: true, temperature: null, maxTokens: null },
+          { name: "gemma4:latest", isEnabled: true, isAvailable: true, temperature: null, maxTokens: null },
+        ],
+      };
+      (prisma.provider.findUnique as jest.Mock).mockResolvedValue(mockProvider(ocrFirstProvider));
+      (prisma.provider.findFirst as jest.Mock).mockResolvedValue(mockProvider(ocrFirstProvider));
+
+      const result = await resolveProviderConfig(OLLAMA_PROVIDER.id, "missing-model");
+
+      expect(result).not.toBeNull();
+      expect(result!.model).toBe("gemma4:latest");
+      expect(result!.degradedFrom).toBe("missing-model");
+    });
+
+    it("strict: found model passes through verbatim (no degradedFrom)", async () => {
+      (prisma.provider.findUnique as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+      (prisma.provider.findFirst as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+
+      const { config, requestedModel } = await resolveProviderConfigStrict(OPENAI_PROVIDER.id, "gpt-4o");
+
+      expect(requestedModel).toBeUndefined();
+      expect(config).not.toBeNull();
+      expect(config!.model).toBe("gpt-4o");
+      expect(config!.degradedFrom).toBeUndefined();
+    });
+
+    it("strict: missing named model reports not-found instead of serving the degraded substitute", async () => {
+      (prisma.provider.findUnique as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+      (prisma.provider.findFirst as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+
+      const { config, requestedModel } = await resolveProviderConfigStrict(OPENAI_PROVIDER.id, "dead-model");
+
+      expect(config).toBeNull();
+      expect(requestedModel).toBe("dead-model");
+    });
+
+    it("strict: no explicit model delegates to the lenient resolver (workspace/default arm)", async () => {
+      (prisma.provider.findUnique as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+      (prisma.provider.findFirst as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+
+      const { config, requestedModel } = await resolveProviderConfigStrict(OPENAI_PROVIDER.id, undefined);
+
+      expect(requestedModel).toBeUndefined();
+      expect(config).not.toBeNull();
+      expect(config!.model).toBe("gpt-4o");
+    });
+
+    it("strict: missing model everywhere reports not-found (not-found is distinct from null-provider)", async () => {
+      (prisma.provider.findUnique as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+      (prisma.provider.findFirst as jest.Mock).mockResolvedValue(mockProvider(OPENAI_PROVIDER));
+
+      const lenient = await resolveProviderConfig(OPENAI_PROVIDER.id, "dead-model");
+      expect(lenient).not.toBeNull(); // lenient serves the substitute
+      expect(lenient!.degradedFrom).toBe("dead-model");
+
+      const strict = await resolveProviderConfigStrict(OPENAI_PROVIDER.id, "dead-model");
+      expect(strict.config).toBeNull(); // strict refuses the substitute
     });
   });
 });

@@ -107,7 +107,12 @@ export interface UseChatReturn {
   chatName: string | null;
   error: string | null;
   persistedModel: { providerId?: string; model?: string } | null;
-  sendMessage: (content: string, attachedDocId?: string, attachedDocName?: string, modelOverride?: { providerId?: string; model?: string }, archiveId?: string | null) => Promise<void>;
+  // Phase 190 (SKIL-02, D-11): trailing additive-optional skillCall on the
+  // facade type — passthrough to useChatStreaming.sendMessage (type-only;
+  // the delegation at :241 forwards the same value).
+  // Phase 191 (D-02): trailing additive-optional attachedArchiveIds after
+  // skillCall — positional order preserved (same passthrough).
+  sendMessage: (content: string, attachedDocId?: string, attachedDocName?: string, modelOverride?: { providerId?: string; model?: string }, archiveId?: string | null, skillCall?: { slug: string; params: Record<string, string> }, attachedArchiveIds?: string[]) => Promise<void>;
   loadChat: (chatId: string) => Promise<void>;
   clearChat: () => void;
   abortStream: () => void;
@@ -119,7 +124,18 @@ export interface UseChatReturn {
   editLastMessageAndRegenerate: (newContent: string) => Promise<void>;
 }
 
-export function useChat(workspaceId: string | null): UseChatReturn {
+export function useChat(
+  workspaceId: string | null,
+  // Phase 191 (KNOW-02 D-05): additive-optional overrides — the parent
+  // (ChatPanel) threads the archive-restore callback so loadChat can re-seed
+  // the composer chips from the Chat record. Omitted → the hook is
+  // byte-identical to the pre-191 shape.
+  // 191-03 (WR-01 review fix): `attachedArchives` mirrors the composer's
+  // CURRENT selection into a ref that retryMessage reads at call time, so
+  // regenerate / edit-regenerate / model-fallback turns stay archive-grounded
+  // and keep the server mirror in sync (absent → byte-identical retry bodies).
+  overrides?: { setRestoredArchiveIds?: (ids: string[]) => void; attachedArchives?: string[] },
+): UseChatReturn {
   // --- Parent-owned state (cross-cutting, threaded to sub-hooks as explicit args) ---
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -162,6 +178,14 @@ export function useChat(workspaceId: string | null): UseChatReturn {
   useEffect(() => { persistedModelRef.current = persistedModel; }, [persistedModel]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
+  // 191-03 (WR-01 review fix): parent-owned mirror of the chat-attached
+  // archive selection for retryMessage (regenerate / edit-regenerate /
+  // model-fallback). The hook cannot own composer state (the composer lives
+  // in ChatPanel), so the parent threads its mirror via overrides — same
+  // seam as setRestoredArchiveIds. Absent → retry bodies stay byte-identical.
+  const attachedArchivesRef = useRef<string[]>([]);
+  useEffect(() => { attachedArchivesRef.current = overrides?.attachedArchives ?? []; }, [overrides?.attachedArchives]);
+
   // --- Sub-hooks (D-09: chatId threaded as explicit per-call arg) ---
   // Order: model → streaming → persistence. Model owns persistedModel state
   // setters; streaming reads persistedModel + handleFallbackRef; persistence
@@ -201,6 +225,9 @@ export function useChat(workspaceId: string | null): UseChatReturn {
     currentPlanRef,
     isFallbackInProgressRef,
     persistedModelRef,
+    // 191-03 (WR-01 review fix): retryMessage reads the selection at call
+    // time so regenerate/fallback turns stay grounded (absent → no-op).
+    attachedArchivesRef,
   });
 
   const persistence = useChatPersistence({
@@ -221,6 +248,9 @@ export function useChat(workspaceId: string | null): UseChatReturn {
     debounceRef,
     persistedModelRef,
     messagesRef,
+    // Phase 191 (D-05): restore seam — optional callback threaded from the
+    // parent (absent → the seam is a no-op, byte-identical legacy path).
+    ...(overrides?.setRestoredArchiveIds ? { setRestoredArchiveIds: overrides.setRestoredArchiveIds } : {}),
   });
 
   // --- Sync cross-hook refs (breaks the handleFallback ↔ retryMessage cycle) ---

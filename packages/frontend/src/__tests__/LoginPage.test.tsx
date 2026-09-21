@@ -9,7 +9,7 @@
 import type { ReactNode } from "react";
 import type { MockComponentProps } from "../__tests__/mockComponentTypes";
 import "@testing-library/jest-dom";
-import { screen, fireEvent } from "@testing-library/react";
+import { screen, fireEvent, waitFor } from "@testing-library/react";
 import { renderWithProviders } from "./testUtils";
 import LoginPage from "../components/LoginPage";
 
@@ -38,6 +38,8 @@ jest.mock("react-i18next", () => ({
         "login.language": "Language",
         "login.ssoSignIn": "Login with SSO",
         "login.ssoSignInWith": "Continue with {{provider}}",
+        "login.ssoOr": "or sign in with SSO",
+        "login.ldap.hint": "Sign in with your corporate directory credentials.",
         "login.forceChange.title": "Set a new password",
         "login.forceChange.description": "You must set a new password before continuing.",
         "login.forceChange.newPassword": "New password",
@@ -70,6 +72,8 @@ jest.mock("react-i18next", () => ({
 const mockLoginMutateAsync = jest.fn();
 const mockSetInitialPasswordMutateAsync = jest.fn();
 const mockLogoutMutate = jest.fn();
+// Phase 193 (D-18) — the LDAP login mutation mock.
+const mockLdapLoginMutateAsync = jest.fn();
 
 jest.mock("../queries/useAuth", () => ({
   useLogin: () => ({
@@ -87,9 +91,10 @@ jest.mock("../queries/useAuth", () => ({
 }));
 
 // Mock toast
+const mockShowError = jest.fn();
 jest.mock("../lib/toast", () => ({
   showSuccess: jest.fn(),
-  showError: jest.fn(),
+  showError: (...args: unknown[]) => mockShowError(...args),
 }));
 
 // Mock navigation helper (jsdom 26 freezes window.location — see
@@ -230,6 +235,12 @@ const mockSsoStatus = jest.fn();
 jest.mock("../queries/useSso", () => ({
   useSsoConfig: () => ({ data: undefined }),
   useSsoStatus: () => ({ data: mockSsoStatus() }),
+  // Phase 193 (D-18) — LDAP login mutation is mocked at module level;
+  // the ldap-arm tests below assert through mockLdapLoginMutateAsync.
+  useLdapLogin: () => ({
+    mutateAsync: mockLdapLoginMutateAsync,
+    isPending: false,
+  }),
 }));
 
 // useFeature is mocked at module level; the SSO tests below override the
@@ -355,6 +366,82 @@ describe("LoginPage", () => {
 
     renderWithProviders(<LoginPage />);
     expect(screen.queryByRole("button", { name: "Login with SSO" })).not.toBeInTheDocument();
+  });
+
+  // ─── LDAP login arm (Phase 193, D-18) ─────────────────────────
+
+  it("renders the LDAP hint line and NO redirect button for provider ldap", () => {
+    mockFeatureEnabled.mockReturnValue(true);
+    mockSsoStatus.mockReturnValue({ enabled: true, provider: "ldap", oidcProvider: null });
+
+    renderWithProviders(<LoginPage />);
+    // The hint renders under CardDescription.
+    expect(screen.getByText("Sign in with your corporate directory credentials.")).toBeInTheDocument();
+    // NO redirect block (POST-only endpoint) and NO ssoOr divider.
+    expect(screen.queryByRole("button", { name: "Login with SSO" })).not.toBeInTheDocument();
+    expect(screen.queryByText("or sign in with SSO")).not.toBeInTheDocument();
+    // The existing username/password form is still present.
+    expect(screen.getByLabelText("Username")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Enter password")).toBeInTheDocument();
+  });
+
+  it("submits the existing form to the LDAP mutation (POST /auth/ldap/login) for provider ldap", async () => {
+    mockFeatureEnabled.mockReturnValue(true);
+    mockSsoStatus.mockReturnValue({ enabled: true, provider: "ldap", oidcProvider: null });
+    mockLdapLoginMutateAsync.mockResolvedValueOnce({
+      user: { id: "u9", username: "ldapuser" },
+      token: "ldap-tok",
+    });
+
+    renderWithProviders(<LoginPage />);
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "ldapuser" } });
+    fireEvent.change(screen.getByPlaceholderText("Enter password"), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() => {
+      expect(mockLdapLoginMutateAsync).toHaveBeenCalledWith({ username: "ldapuser", password: "secret" });
+    });
+    // The local useLogin mutation must NOT be dispatched in the ldap arm.
+    expect(mockLoginMutateAsync).not.toHaveBeenCalled();
+    // NO browser redirect ever fires in the ldap arm (D-18).
+    expect(mockNavigateTo).not.toHaveBeenCalled();
+  });
+
+  it("renders the uniform auth-failed message (no stage detail) on LDAP error", async () => {
+    mockFeatureEnabled.mockReturnValue(true);
+    mockSsoStatus.mockReturnValue({ enabled: true, provider: "ldap", oidcProvider: null });
+    mockLdapLoginMutateAsync.mockRejectedValueOnce(new Error("bind failure stage detail"));
+
+    renderWithProviders(<LoginPage />);
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "ldapuser" } });
+    fireEvent.change(screen.getByPlaceholderText("Enter password"), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() => {
+      // D-15 — ONE uniform message for every failure arm; the thrown stage
+      // detail must not leak into the surface.
+      expect(mockShowError).toHaveBeenCalledWith("Authentication failed");
+    });
+    expect(mockShowError).not.toHaveBeenCalledWith(expect.stringContaining("bind"));
+  });
+
+  it("still renders the redirect block for provider oidc (narrowing is non-breaking)", () => {
+    mockFeatureEnabled.mockReturnValue(true);
+    mockSsoStatus.mockReturnValue({ enabled: true, provider: "oidc", oidcProvider: null });
+
+    renderWithProviders(<LoginPage />);
+    expect(screen.getByRole("button", { name: "Login with SSO" })).toBeInTheDocument();
+    expect(screen.getByText("or sign in with SSO")).toBeInTheDocument();
+    // The LDAP hint does NOT render outside the ldap arm.
+    expect(screen.queryByText("Sign in with your corporate directory credentials.")).not.toBeInTheDocument();
+  });
+
+  it("still renders the redirect block for provider saml (narrowing is non-breaking)", () => {
+    mockFeatureEnabled.mockReturnValue(true);
+    mockSsoStatus.mockReturnValue({ enabled: true, provider: "saml", oidcProvider: null });
+
+    renderWithProviders(<LoginPage />);
+    expect(screen.getByRole("button", { name: "Login with SSO" })).toBeInTheDocument();
   });
 });
 

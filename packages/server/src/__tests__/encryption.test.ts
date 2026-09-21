@@ -171,6 +171,56 @@ describe("EncryptionService — multi-key decrypt chain (OPS-01)", () => {
     expect(() => decrypt(blob)).toThrow(/Unable to decrypt \(no key in chain matched\)/);
   });
 
+  it("no-match error carries guided recovery guidance (vars + runbook + tried count)", () => {
+    // Single-key chain: encrypt with explicit key A, then unset ENCRYPTION_KEY —
+    // the dev/test chain collapses to the scrypt fallback alone ([scrypt]) so
+    // the key-A blob matches nothing.
+    process.env.ENCRYPTION_KEY = KEY_A;
+    delete process.env.LEGACY_PREVIOUS_ENCRYPTION_KEYS;
+    resetEncryptionKeyCache();
+    const blob = encrypt("guided-guidance-secret");
+
+    delete process.env.ENCRYPTION_KEY;
+    delete process.env.LEGACY_PREVIOUS_ENCRYPTION_KEYS;
+    resetEncryptionKeyCache();
+
+    // The guided message keeps the legacy prefix verbatim, names both recovery
+    // env vars, the runbook, and the tried-key count (single-key chain), and
+    // keeps the raw Node GCM error last for low-level diagnosis. No key
+    // material may leak into the message (T-QT-01) — the base64 body of KEY_A
+    // must never appear.
+    let message: string | null = null;
+    try {
+      decrypt(blob);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).not.toBeNull();
+    expect(message).toMatch(/Unable to decrypt \(no key in chain matched\)/);
+    expect(message).toContain("LEGACY_PREVIOUS_ENCRYPTION_KEYS");
+    expect(message).toContain("ENCRYPTION_KEY_ROTATION.md");
+    expect(message).toMatch(/Tried 1 key\(s\)/);
+    expect(message).toContain("Unsupported state or unable to authenticate data");
+    const keyABase64 = Buffer.alloc(32, 0xaa).toString("base64");
+    expect(message).not.toContain(keyABase64);
+  });
+
+  it("no-match guidance reports the multi-key chain length", () => {
+    // Chain = [current(C), previous(B), scrypt tail] → 3 keys tried on the
+    // no-match throw; the key-A blob is in NONE of them (the scrypt tail is
+    // appended whenever ENCRYPTION_KEY is explicitly set — D-01).
+    process.env.ENCRYPTION_KEY = KEY_A;
+    delete process.env.LEGACY_PREVIOUS_ENCRYPTION_KEYS;
+    resetEncryptionKeyCache();
+    const blob = encrypt("guided-multi-key-secret");
+
+    process.env.ENCRYPTION_KEY = KEY_C;
+    process.env.LEGACY_PREVIOUS_ENCRYPTION_KEYS = KEY_B;
+    resetEncryptionKeyCache();
+
+    expect(() => decrypt(blob)).toThrow(/Tried 3 key\(s\)/);
+  });
+
   it("decrypts legacy scrypt blob (pre-override JWT_SECRET-derived ciphertext)", () => {
     // No ENCRYPTION_KEY → legacy scrypt(JWT_SECRET) path (setupEnv sets JWT_SECRET).
     delete process.env.ENCRYPTION_KEY;

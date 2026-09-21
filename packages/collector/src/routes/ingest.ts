@@ -22,14 +22,18 @@ import { IngestResponseSchema, ReembedRequestSchema, WikiPagesIngestSchema, Inge
 /**
  * Notify the server of document processing status.
  * Best-effort — failures are logged but don't block the response.
+ * quick 260918-p3h (D-2): optional `progress` 5th parameter — the collector
+ * reports boundary %s (25 parse / 40 chunk / per-embed-slice / 95 stored) on
+ * its "processing" notifies; terminal notifies omit it.
  */
-async function notifyServerStatus(documentId: string, status: string, chunkCount?: number, statusMessage?: string) {
+async function notifyServerStatus(documentId: string, status: string, chunkCount?: number, statusMessage?: string, progress?: number) {
   const env = getEnv();
   try {
     await axios.put(`${env.SERVER_URL}/api/documents/${documentId}/status`, {
       status,
       ...(chunkCount !== undefined && { chunkCount }),
       ...(statusMessage && { statusMessage }),
+      ...(progress !== undefined && { progress }),
     }, {
       timeout: 5000,
       headers: {
@@ -38,6 +42,40 @@ async function notifyServerStatus(documentId: string, status: string, chunkCount
     });
   } catch (err: any) {
     logger.warn(`[ingest] Failed to notify server of status ${status} for ${documentId}: ${err.message}`);
+  }
+}
+
+/**
+ * quick 260918-p3h (D-3): cancellation poll against the server's
+ * secret-authed GET /api/documents/:documentId/status. FAIL-OPEN: any error
+ * (network, non-2xx, timeout) returns false — a poll failure must NEVER
+ * fail the ingest; the server-side race guards own correctness.
+ */
+async function isDocumentCancelled(documentId: string): Promise<boolean> {
+  const env = getEnv();
+  try {
+    const response = await axios.get(`${env.SERVER_URL}/api/documents/${documentId}/status`, {
+      timeout: 5000,
+      headers: {
+        "X-Collector-Secret": env.COLLECTOR_SECRET,
+      },
+    });
+    return response.data?.status === "cancelled";
+  } catch (err: any) {
+    logger.info(`[ingest] Cancellation poll failed for ${documentId} (fail-open): ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * quick 260918-p3h (D-3): cooperative cancellation signal — thrown at the
+ * checked unit-of-work boundaries; the handler's catch converts it into a
+ * 200 { status: "cancelled" } response (NO failed notify).
+ */
+class IngestCancelledError extends Error {
+  constructor(message = "Ingest cancelled by user") {
+    super(message);
+    this.name = "IngestCancelledError";
   }
 }
 
@@ -257,9 +295,23 @@ router.post("/ingest", requireCollectorSecret, upload.single("file"), async (req
       originalName: req.file.originalname,
     });
 
+    // quick 260918-p3h (D-3): cancellation check BEFORE parse — the earliest
+    // boundary. Throw → catch → 200 {status:"cancelled"}.
+    if (await isDocumentCancelled(documentId)) {
+      throw new IngestCancelledError(`Ingest cancelled before parse for ${documentId}`);
+    }
+
     // Step 1: Parse the document
     const parsed = await parseFile(req.file.path, req.file.originalname, ocrModel, ocrMode);
     logger.info(`[ingest] Parsed document: ${parsed.metadata.pages || "N/A"} pages, ${parsed.text.length} chars`);
+
+    // quick 260918-p3h (D-2): boundary progress — 25% after parse.
+    await notifyServerStatus(documentId, "processing", undefined, undefined, 25);
+
+    // quick 260918-p3h (D-3): cancellation check AFTER parse.
+    if (await isDocumentCancelled(documentId)) {
+      throw new IngestCancelledError(`Ingest cancelled after parse for ${documentId}`);
+    }
 
     // Step 2: Chunk the text
     const chunks = await chunkText(parsed.text, documentId, {
@@ -268,10 +320,50 @@ router.post("/ingest", requireCollectorSecret, upload.single("file"), async (req
     });
     logger.info(`[ingest] Created ${chunks.length} chunks`);
 
-    // Step 3: Generate embeddings
+    // quick 260918-p3h (D-2): boundary progress — 40% after chunking.
+    await notifyServerStatus(documentId, "processing", undefined, undefined, 40);
+
+    // quick 260918-p3h (D-3): cancellation check after chunking, before the
+    // embed loop.
+    if (await isDocumentCancelled(documentId)) {
+      throw new IngestCancelledError(`Ingest cancelled after chunk for ${documentId}`);
+    }
+
+    // Step 3: Generate embeddings — SLICED loop (quick 260918-p3h, D-2/D-3):
+    // slice size 64; per-slice cancellation check (throws
+    // IngestCancelledError when the user cancelled) + per-slice progress
+    // notify (40 + done/total * 50 → 40..90). embeddings[i] must line up
+    // with chunks[i] for the VectorDocument mapping — accumulate in order,
+    // NO reordering.
     const embeddingProvider = await getEmbeddingProvider(embeddingModel);
     const texts = chunks.map((c) => c.text);
-    const embeddings = await embeddingProvider.embed(texts);
+    const EMBED_SLICE_SIZE = 64;
+    const embeddings: Awaited<ReturnType<typeof embeddingProvider.embed>> = [];
+    if (texts.length === 0) {
+      // Zero-chunk documents (image-only PDFs, empty files) — keep the old
+      // single-call shape so the provider contract is exercised identically.
+      const all = await embeddingProvider.embed(texts);
+      embeddings.push(...all);
+    } else {
+      let done = 0;
+      for (let i = 0; i < texts.length; i += EMBED_SLICE_SIZE) {
+        // Cancel check FIRST on every slice boundary.
+        if (await isDocumentCancelled(documentId)) {
+          throw new IngestCancelledError(`Ingest cancelled during embed slice ${i / EMBED_SLICE_SIZE} for ${documentId}`);
+        }
+        const slice = texts.slice(i, i + EMBED_SLICE_SIZE);
+        const sliceEmbeddings = await embeddingProvider.embed(slice);
+        embeddings.push(...sliceEmbeddings);
+        done += slice.length;
+        await notifyServerStatus(
+          documentId,
+          "processing",
+          undefined,
+          undefined,
+          40 + Math.round((done / texts.length) * 50),
+        );
+      }
+    }
     logger.info(`[ingest] Generated ${embeddings.length} embeddings with model ${embeddingProvider.getModelName()}`);
 
     // Step 4: Store in vector DB with citation metadata.
@@ -311,6 +403,23 @@ router.post("/ingest", requireCollectorSecret, upload.single("file"), async (req
 
     await vectorStore.addDocuments(tableName, documents);
     logger.info(`[ingest] Stored ${documents.length} vectors in table "${tableName}"`);
+
+    // quick 260918-p3h (D-2): boundary progress — 95% after storage (before
+    // the completion notify).
+    await notifyServerStatus(documentId, "processing", undefined, undefined, 95);
+
+    // quick 260918-p3h (D-3): final check AFTER add — a cancellation here
+    // triggers a best-effort purge of the just-written vectors through the
+    // SAME deletion path the DELETE /api/ingest/:documentId route uses.
+    if (await isDocumentCancelled(documentId)) {
+      try {
+        await vectorStore.deleteByDocumentId(tableName, documentId);
+        logger.warn(`[ingest] Post-add cancellation — purged ${documents.length} vectors for ${documentId}`);
+      } catch (purgeErr: any) {
+        logger.warn(`[ingest] Post-add purge failed for ${documentId}: ${purgeErr.message}`);
+      }
+      throw new IngestCancelledError(`Ingest cancelled after store for ${documentId}`);
+    }
 
     // Step 5: Clean up uploaded file
     try {
@@ -361,6 +470,22 @@ router.post("/ingest", requireCollectorSecret, upload.single("file"), async (req
 
     res.json(responsePayload);
   } catch (err: any) {
+    // quick 260918-p3h (D-3): user cancellation — do NOT notify "failed"
+    // (that would overwrite the user's cancelled status server-side). Still
+    // clean up the uploaded file, log at info, and respond 200 with status
+    // "cancelled" — the awaiting server reads result.status === "cancelled"
+    // and skips the completed write (Task 1 guard).
+    if (err instanceof IngestCancelledError) {
+      logger.info(`[ingest] Ingest cancelled by user for ${failedDocumentId ?? "unknown"}`, {
+        documentId: failedDocumentId,
+        detail: err.message,
+      });
+      if (req.file?.path) {
+        try { fs.unlinkSync(req.file.path); } catch { /* ignore cleanup errors */ }
+      }
+      return res.json({ documentId: failedDocumentId, status: "cancelled" });
+    }
+
     logger.error("[ingest] Processing failed", { error: err.message, stack: err.stack });
 
     // Notify server of failure (best-effort — failedDocumentId may be

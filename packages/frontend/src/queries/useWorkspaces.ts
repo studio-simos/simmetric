@@ -26,6 +26,9 @@ export interface WorkspaceWithMeta {
   };
   _count?: { chats: number; documents: number };
   allowMemberUploads?: boolean;
+  // Phase 192 (D-05): per-workspace document-scan toggle (Workspace column,
+  // plan 01) — optional: pre-migration rows / optimistic rows may omit it.
+  dlpDocumentScanEnabled?: boolean;
   icon?: string | null;
   embeddingModel?: string;
   templateId?: string | null;
@@ -104,6 +107,9 @@ export interface UpdateWorkspaceInput {
   name?: string;
   instructions?: string | null;
   allowMemberUploads?: boolean;
+  // Phase 192 (D-05): per-workspace document-scan toggle — update-only
+  // (create stays default-false server-side, plan 01 column default).
+  dlpDocumentScanEnabled?: boolean;
   icon?: string | null;
   systemPrompt?: string;
   skills?: string[];
@@ -194,6 +200,84 @@ export function usePermanentDeleteWorkspaces() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.all });
       queryClient.invalidateQueries({ queryKey: [...queryKeys.workspaces.all, "deleted"] });
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Access grants (D-07 follow-up: UI-managed WorkspaceAccess)         */
+/*  Phase 189 (D-20, WSIS-03): hooks EXTENDED IN PLACE — the           */
+/*  pre-existing (16141df2) hooks gain the Plan-02-upgraded list shape */
+/*  (role + grantedBy), the grant body widens to {userId, role}, and   */
+/*  useBulkGrantWorkspaceAccess is added. NO separate useWorkspace-    */
+/*  Access.ts file: WorkspaceAccessDialog + both WorkspacesPage test   */
+/*  files import these FROM useWorkspaces — in-place extension cannot  */
+/*  break imports, and duplicating the definitions is forbidden.       */
+/* ------------------------------------------------------------------ */
+
+export interface WorkspaceAccessGrant {
+  userId: string;
+  workspaceId: string;
+  // Plan 02-upgraded D-15 wire shape (role persisted + provenance).
+  role: string;
+  grantedAt: string;
+  grantedBy: string | null;
+  user?: { id: string; username: string; email: string; firstName: string | null; lastName: string | null };
+}
+
+export function useWorkspaceAccess(workspaceId: string | null, enabled = true) {
+  return useQuery<WorkspaceAccessGrant[], Error>({
+    queryKey: queryKeys.workspaces.workspaceAccess.list(workspaceId ?? ""),
+    queryFn: () => apiGet<WorkspaceAccessGrant[]>(`/workspaces/${workspaceId}/access`),
+    enabled: enabled && !!workspaceId,
+    staleTime: 30 * 1000,
+  });
+}
+
+export function useGrantWorkspaceAccess(workspaceId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, { userId: string; role: string }>({
+    mutationFn: ({ userId, role }) => apiPost(`/workspaces/${workspaceId}/access`, { userId, role }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.workspaces.workspaceAccess.list(workspaceId),
+      });
+    },
+  });
+}
+
+export function useRevokeWorkspaceAccess(workspaceId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, string>({
+    mutationFn: (userId) => apiDelete(`/workspaces/${workspaceId}/access/${userId}`).then(() => undefined),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.workspaces.workspaceAccess.list(workspaceId),
+      });
+    },
+  });
+}
+
+// Phase 189 (D-17 client half): the atomic bulk endpoint returns
+// { granted: N, failed: [{ userId, error }] } — the caller surfaces
+// failed[] in the toast on partial failure.
+export interface BulkGrantWorkspaceAccessResult {
+  granted: number;
+  failed: { userId: string; error: string }[];
+}
+
+export function useBulkGrantWorkspaceAccess(workspaceId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<BulkGrantWorkspaceAccessResult, Error, { userIds: string[]; role: string }>({
+    mutationFn: ({ userIds, role }) =>
+      apiPost<BulkGrantWorkspaceAccessResult>(`/workspaces/${workspaceId}/access/bulk`, { userIds, role }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.workspaces.workspaceAccess.list(workspaceId),
+      });
     },
   });
 }

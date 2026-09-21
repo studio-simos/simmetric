@@ -35,8 +35,8 @@ import {
 } from "../constants/license";
 
 describe("FEATURE_FLAGS regression guard (Phase 140)", () => {
-  it("contains exactly 11 entries after commodity flag removal + widget_credits_editing", () => {
-    expect(FEATURE_FLAGS).toHaveLength(11);
+  it("contains exactly 12 entries after commodity flag removal + widget_credits_editing + max_skills (Phase 190)", () => {
+    expect(FEATURE_FLAGS).toHaveLength(12);
   });
 
   it("does NOT contain any of the 10 removed flags", () => {

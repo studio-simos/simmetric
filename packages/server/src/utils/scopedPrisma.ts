@@ -77,6 +77,11 @@ export const TENANT_READ_MODELS = new Set<string>([
   "WorkspaceAgentConfig",
   "WorkspaceTemplate",
   "WorkspaceTokenUsage",
+  // Phase 190 (SKIL-01 A1): AgentSkill joins the AND-merge — custom skills are
+  // org-created at the route (organizationId set explicitly on create) and
+  // seeded builtin rows carry the default org, so no DlpPattern-class exemption
+  // entry is needed. Cross-org custom reads fail closed via the AND-merge.
+  "AgentSkill",
 ]);
 
 /** Read + org-pinnable write ops (updateMany/deleteMany carry where). */

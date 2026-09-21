@@ -61,10 +61,21 @@ const LOADER_JS = `
 
   var targetId = script.getAttribute("data-target");
   var container = targetId ? document.getElementById(targetId) : null;
-  if (!container) return;
+  if (!container) {
+    // 260917-mz6: embed misconfigurations must be visible in the host page
+    // console — a missing container previously returned silently and the
+    // widget simply never appeared ("not visible on the client" bug class).
+    console.warn("[SimmetricChatWidget] Embed target container not found: #" + (targetId || "(data-target attribute missing on the script tag)") + ". Check the data-target attribute and the container id.");
+    return;
+  }
 
   var widgetId = container.getAttribute("data-widget-id");
-  if (!widgetId) return;
+  if (!widgetId) {
+    // 260917-mz6: same diagnostics discipline — a container without
+    // data-widget-id can never boot the widget; name the culprit attribute.
+    console.warn("[SimmetricChatWidget] Embed container is missing the data-widget-id attribute. Add data-widget-id='<your widget id>' to the container element.");
+    return;
+  }
 
   // G-128-1 (Pitfall 3): NO hardcoded defaults — an absent data-primary-color /
   // data-position must leave the variables null so the route treats the missing
@@ -560,19 +571,23 @@ const LOADER_JS = `
           fab.style.backgroundColor = msg.primaryColor;
         }
       } else if (msg.type === 'simmetric:creditsOpen') {
-        // 130-01 (D-02, CRD-03): the credits link opens in a new tab via the
-        // postMessage bridge — the sandboxed iframe (allow-scripts allow-forms,
-        // no allow-popups) cannot window.open itself. This branch lives INSIDE
-        // the WR-01-guarded listener (never a second unguarded listener —
-        // Pitfall 2). The URL is re-validated across the iframe->host trust
-        // boundary with the SAME http/https prefix allowlist as
-        // widgetStateBridge + the widgetCreditsSchema refine (defense-in-depth,
-        // T-130-02): a javascript:/data:/ftp: payload is a no-op. window.open
-        // with 'noopener' — the opened page cannot reach back into the host.
-        var u = msg.url;
-        if (typeof u === 'string' && (u.indexOf('http://') === 0 || u.indexOf('https://') === 0)) {
-          window.open(u, '_blank', 'noopener');
-        }
+    // 130-01 (D-02, CRD-03): the credits link opens in a new tab via the
+    // postMessage bridge — the sandboxed iframe (allow-scripts allow-forms,
+    // no allow-popups) cannot window.open itself. This branch lives INSIDE
+    // the WR-01-guarded listener (never a second unguarded listener —
+    // Pitfall 2). The URL is re-validated across the iframe->host trust
+    // boundary with the SAME http/https prefix allowlist as
+    // widgetStateBridge + the widgetCreditsSchema refine (defense-in-depth,
+    // T-130-02): a javascript:/data:/ftp: payload is a no-op. window.open
+    // with 'noopener' — the opened page cannot reach back into the host.
+    // 260917-mz6: the allowlist widens from http/https to http/https + mailto:
+    // so the CONTACT OPTIONS card's owner-email entry can open the visitor's
+    // mail client FROM THE HOST PAGE (the sandboxed iframe cannot navigate).
+    // mailto cannot execute script; javascript:/data:/ftp: stay rejected.
+    var u = msg.url;
+    if (typeof u === 'string' && (u.indexOf('http://') === 0 || u.indexOf('https://') === 0 || u.indexOf('mailto:') === 0)) {
+      window.open(u, '_blank', 'noopener');
+    }
       }
     });
   })();
@@ -708,6 +723,18 @@ router.get("/:widgetId", async (req: Request<{ widgetId: string }>, res: Respons
     // loader does NOT re-derive it from any client input).
     credits: config.credits ?? null,
     whiteLabel: config.whiteLabel === true,
+    // 260917-mz6: contact options + lead timing — raw pass-through with
+    // defensive fallbacks (block-convention precedent). The client owns
+    // defaulting/validation (parseWidgetConfigBlock).
+    contactConfig: config.contactConfig ?? null,
+    leadCaptureTiming: config.leadCaptureTiming || "end",
+    leadCaptureTimeoutSeconds: config.leadCaptureTimeoutSeconds != null ? config.leadCaptureTimeoutSeconds : null,
+    // 260917-qoh: per-widget privacy URL — raw pass-through with the same
+    // defensive fallback convention (the block already carries
+    // contactConfig/leadCaptureTiming this way). The consent link opens
+    // host-side via the existing creditsOpen bridge (http/https allowlist —
+    // the client owns defaulting).
+    privacyUrl: config.privacyUrl || null,
   };
 
   // Pitfall 1 (T-127-01): escape every `<` as \u003c so an admin string containing
@@ -720,6 +747,7 @@ router.get("/:widgetId", async (req: Request<{ widgetId: string }>, res: Respons
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${WIDGET_TITLES[resolvedLocale] ?? WIDGET_TITLES.en}</title>
+  <link rel="icon" type="image/svg+xml" href="/widget/favicon.svg" />
   <style>
     /* 131-04 (real-embed visual defects): the reset must NOT zero the
        Tailwind v4 padding utilities. An un-layered universal selector rule

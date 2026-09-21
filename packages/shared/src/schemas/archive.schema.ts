@@ -112,6 +112,16 @@ export const archiveConfigSchema = z.object({
   maintenanceSchedule: z.string().optional(),
   purpose: z.string().optional(),
   scope: z.string().optional(),
+  // D-01 (Phase 187): CLAUDE.md-like per-archive editorial guidance. Additive
+  // optional string inside the ArchiveConfig.config JSON blob — zero migration
+  // (the model already stores config Json). Max 10000 chars ≈ ~2500 tokens.
+  // Injected as ADVISORY data into the LLM prompt (hard rules always win — D-04).
+  schemaPrompt: z.string().max(10000, "Schema prompt must be at most 10000 characters").optional(),
+  // D-02 (Phase 187): explicit documentation flag for raw_sources/ immutability.
+  // Enforcement stays at code level (validateWritablePath); `false` is IGNORED
+  // in v1 (documentation, never a gate toggle). `.default(true)` materializes
+  // the key in parse OUTPUT only — safeParse({}) stays success:true.
+  rawSourcesImmutable: z.boolean().default(true),
 });
 export type ArchiveConfigInput = z.infer<typeof archiveConfigSchema>;
 

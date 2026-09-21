@@ -10,7 +10,7 @@ import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
 import { requireFeature, requireFeatureLimit } from "../middleware/license";
 import { isFeatureEnabled, getLicenseInfo } from "../services/licenseService";
-import { createWidgetSchema, updateWidgetSchema, widgetAnalyticsQuerySchema, DEFAULT_ORG_ID } from "@simmetric-chat/shared";
+import { createWidgetSchema, updateWidgetSchema, widgetAnalyticsQuerySchema, widgetWorkspaceArchiveFilterSchema, DEFAULT_ORG_ID } from "@simmetric-chat/shared";
 import { Parser } from "@json2csv/plainjs";
 import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
@@ -19,6 +19,11 @@ import {
   getWidgetTopicDistribution,
   getWidgetAnalyticsSummary,
 } from "../services/widgetAnalyticsService";
+import {
+  getWorkspaceArchive,
+  getFlatArchive,
+  getArchiveStats,
+} from "../services/widgetWorkspaceArchiveService";
 import { fireWidgetCacheBust } from "../services/widgetCacheBustService";
 
 const router = Router();
@@ -158,6 +163,117 @@ router.get("/analytics/summary", async (req: Request, res: Response) => {
   }
 });
 
+// ===== Widget Workspace Archive Endpoints (WGTA-01) =====
+// Must be registered before /:id parameterized routes to avoid "workspace-archive" being matched as an :id.
+// Read-only projection (D-03): no writes, no cache reads, no license gate —
+// requireAdmin on the router chain above is the whole gate (D-03/SC-2).
+
+/**
+ * @openapi
+ * /widgets/workspace-archive:
+ *   get:
+ *     tags: [Widgets]
+ *     summary: Get the workspace archive grouped by project (admin only)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - name: projectId
+ *         in: query
+ *         schema: { type: string, format: uuid }
+ *       - name: workspaceId
+ *         in: query
+ *         schema: { type: string, format: uuid }
+ *       - name: widgetId
+ *         in: query
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200: { description: Archive groups (project → widgets → workspaces) }
+ *       400: { description: Invalid query parameters }
+ *       401: { description: Authentication required }
+ *       403: { description: Admin access required }
+ */
+// GET /api/widgets/workspace-archive -- grouped by project (WGTA-01, D-01)
+router.get("/workspace-archive", async (req: Request, res: Response) => {
+  try {
+    const parsed = widgetWorkspaceArchiveFilterSchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid query parameters", details: parsed.error.flatten().fieldErrors });
+      return;
+    }
+
+    const groups = await getWorkspaceArchive(parsed.data);
+    res.json(groups);
+  } catch (err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+    logger.error("[widgets] Error fetching workspace archive", { error: message });
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * @openapi
+ * /widgets/workspace-archive/flat:
+ *   get:
+ *     tags: [Widgets]
+ *     summary: Get the flat workspace archive (one row per widgetId × workspaceId, admin only)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - name: projectId
+ *         in: query
+ *         schema: { type: string, format: uuid }
+ *       - name: workspaceId
+ *         in: query
+ *         schema: { type: string, format: uuid }
+ *       - name: widgetId
+ *         in: query
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200: { description: Flat archive rows }
+ *       400: { description: Invalid query parameters }
+ *       401: { description: Authentication required }
+ *       403: { description: Admin access required }
+ */
+// GET /api/widgets/workspace-archive/flat -- one row per widgetId × workspaceId (spec §5.1)
+router.get("/workspace-archive/flat", async (req: Request, res: Response) => {
+  try {
+    const parsed = widgetWorkspaceArchiveFilterSchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid query parameters", details: parsed.error.flatten().fieldErrors });
+      return;
+    }
+
+    const rows = await getFlatArchive(parsed.data);
+    res.json(rows);
+  } catch (err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+    logger.error("[widgets] Error fetching flat workspace archive", { error: message });
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * @openapi
+ * /widgets/workspace-archive/stats:
+ *   get:
+ *     tags: [Widgets]
+ *     summary: Get archive stats (totals + effective orphans, admin only)
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: totalWidgets, totalWorkspacesLinked, totalProjects, orphans }
+ *       401: { description: Authentication required }
+ *       403: { description: Admin access required }
+ */
+// GET /api/widgets/workspace-archive/stats -- totals + effective orphans (D-02)
+router.get("/workspace-archive/stats", async (_req: Request, res: Response) => {
+  try {
+    const stats = await getArchiveStats();
+    res.json(stats);
+  } catch (err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+    logger.error("[widgets] Error fetching workspace archive stats", { error: message });
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // ===== Widget CRUD Endpoints =====
 
 /**
@@ -237,6 +353,9 @@ router.post("/", requireFeature("widget_enabled"), requireFeatureLimit("max_widg
         localizedTexts: toJsonWriteValue(parsed.data.localizedTexts),
         suggestedQuestions: toJsonWriteValue(parsed.data.suggestedQuestions),
         credits: toJsonWriteValue(parsed.data.credits),
+        // 260917-mz6: contactConfig is a Json? column — null needs the same
+        // DbNull translation as the other tri-state blobs.
+        contactConfig: toJsonWriteValue(parsed.data.contactConfig),
         createdBy: req.userId!,
         // CR-03 (185-05, D-04): explicit org stamp — the WidgetWorkspace
         // createMany at the whitelist route derives from widget.organizationId
@@ -378,6 +497,9 @@ router.put("/:id", async (req: Request, res: Response) => {
         localizedTexts: toJsonWriteValue(parsed.data.localizedTexts),
         suggestedQuestions: toJsonWriteValue(parsed.data.suggestedQuestions),
         credits: toJsonWriteValue(parsed.data.credits),
+        // 260917-mz6: contactConfig is a Json? column — null needs the same
+        // DbNull translation as the other tri-state blobs.
+        contactConfig: toJsonWriteValue(parsed.data.contactConfig),
       },
       include: {
         workspaces: { select: { workspaceId: true } },
@@ -576,6 +698,9 @@ router.get("/:id/leads", async (req: Request, res: Response) => {
           email: true,
           createdAt: true,
           sessionId: true,
+          // 260917-qoh: the archived privacy-consent decision — surfaced in
+          // the admin leads tab (the CSV export switches on it separately).
+          privacyConsented: true,
         },
       }),
       prisma.widgetLead.count({ where: { widgetId } }),
@@ -640,6 +765,10 @@ router.get("/:id/leads/export", async (req: Request, res: Response) => {
           };
         case "date":
           return { label: "Date", value: (row: Record<string, unknown>) => (row.createdAt as Date).toISOString() };
+        // 260917-qoh: archived privacy consent — "yes"/"no" from the row
+        // value (mirrors the transcript case's function-value shape).
+        case "privacyConsent":
+          return { label: "Privacy Consent", value: (row: Record<string, unknown>) => (row.privacyConsented ? "yes" : "no") };
         default:
           return { label: col, value: col };
       }

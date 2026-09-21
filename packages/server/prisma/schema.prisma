@@ -123,6 +123,9 @@ model User {
   customInstructions String? @db.Text
   textSize      String?
   mustChangePassword Boolean    @default(false)
+  // Phase 189 (WSIS-01 D-03): onboarding state — distinguishes the two empty
+  // states (guided first-workspace wizard vs "no access, ask admin").
+  hasOnboarded Boolean         @default(false)
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
@@ -157,6 +160,10 @@ model User {
   // Phase 113 (SSO): external identity provider links for this user (SAML/OIDC).
   // onDelete: Cascade via IdentityProvider.userId FK — user deletion removes their IdP links.
   identityProviders IdentityProvider[]
+  // Phase 190 (SKIL-01 D-02): skills owned by this user (personal scope) +
+  // skills this user created (owner track for the D-07 owner/admin gate).
+  skills        AgentSkill[]   @relation("AgentSkillUser")
+  createdSkills AgentSkill[]   @relation("AgentSkillCreator")
 
   @@map("users")
 }
@@ -173,6 +180,10 @@ model Role {
   users       UserRole[]
   permissions RolePermission[]
   menuSections RoleMenuSection[]
+  // Phase 193 (LDAP-02, D-04): back-relation to the enterprise-fragment
+  // LdapGroupRoleMap model (cross-fragment relation resolves at generate
+  // time per the Phase 141 verdict — prismaSchemaFolder merge).
+  ldapGroupRoleMaps LdapGroupRoleMap[]
 
   @@map("roles")
 }
@@ -190,6 +201,11 @@ model Permission {
 model UserRole {
   userId     String
   roleId     String
+  // Phase 189 (WSIS-02 D-24, pulled forward from LDAP Phase 193 §3.3):
+  // provenance of the assignment — "manual" | "ldap" | "sso" (enum-as-string,
+  // Chat.titleSource idiom). LDAP sync (Phase 193) deletes only assignedVia
+  // 'ldap' rows; backfilled legacy rows are 'manual'.
+  assignedVia String @default("manual")
   assignedAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -244,6 +260,13 @@ model ProjectAccess {
 model WorkspaceAccess {
   userId      String
   workspaceId String
+  // Phase 189 (WSIS-02 D-07/D-24): persisted graded role — "owner" | "editor"
+  // | "viewer" (enum-as-string, Chat.titleSource idiom). Legacy rows backfill
+  // to "editor" (D-12, NOT the spec's viewer suggestion).
+  role String @default("viewer")
+  // Phase 189 (WSIS-02 D-07/D-24): grantor provenance — NULL marks legacy rows
+  // (audit-distinguishable from admin-granted rows, D-12).
+  grantedBy String?
   // Phase 182 (SAAS-01b): access grant pins its org (column only — composite
   // PK untouched)
   organizationId String @default("00000000-0000-0000-0000-000000000000")
@@ -275,6 +298,11 @@ model Project {
     description String? @db.Text
   createdBy   String
   deletedAt   DateTime?
+  // Phase 189 (WSIS-01 D-02): explicit personal-workspace flag — the single
+  // source of truth for the max_workspaces exemption. The spec §5.7
+  // name-convention sketch (name === "Personal") was REJECTED per D-02
+  // (a rename would flip license accounting).
+  isPersonal  Boolean   @default(false)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -302,6 +330,12 @@ model Workspace {
     instructions   String? @db.Text
   embeddingModel String   @default("Xenova/all-MiniLM-L6-v2")
   allowMemberUploads Boolean @default(true)
+  // Phase 192 (D-05): per-workspace document-scan toggle. Implemented as a
+  // Workspace column per research A3/Pitfall-8 recommendation — the
+  // SystemConfig cascade is org-granular and cannot scope per-workspace; the
+  // column delivers the same admin-UI surface with honest workspace scoping.
+  // Default off (DLP-05 eval gate must pass before enablement).
+  dlpDocumentScanEnabled Boolean @default(false)
   icon           String?
   templateId     String?
   deletedAt      DateTime?
@@ -323,6 +357,9 @@ model Workspace {
   // Phase 97 (MEM-01 D-01 — Pitfall 3 per-workspace): memories scoped to this workspace.
   // onDelete: Cascade via Memory.workspaceId FK — workspace deletion cascades memories.
   memories Memory[]
+  // Phase 190 (SKIL-01 D-02): workspace-scoped skills.
+  // onDelete: Cascade via AgentSkill.workspaceId FK — workspace deletion cascades them.
+  skills AgentSkill[]
 
   // D-01 (quick 260809-wte): unique per-project name, partial index WHERE "deletedAt" IS NULL (soft-deleted rows free the name).
   @@unique([projectId, name])
@@ -348,6 +385,14 @@ model Chat {
   providerId   String?
   folderId     String?
   archiveId    String?
+  // Phase 191 (KNOW-02 D-05): chat-attached wiki-archive knowledge — additive
+  // scalar list (Prisma 7 scalar list on PostgreSQL, no join table). Prisma 7
+  // scalar lists are inherently non-null ("Optional lists are not supported") —
+  // an empty list is the "attach nothing" state. Existing chats attach nothing
+  // until the user does (no backfill — D-05 agent's discretion); the org-scoped
+  // validated subset is mirrored by archiveAttachmentService.syncChatAttachment
+  // at each send.
+  attachedArchiveIds String[]
   deletedAt    DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -442,8 +487,13 @@ model Document {
   cacheKey       String    @unique
   chunkCount     Int       @default(0)
   embeddingModel String    @default("Xenova/all-MiniLM-L6-v2")
-  status         String    @default("pending")  // "pending" | "processing" | "completed" | "failed"
+  status         String    @default("pending")  // "pending" | "processing" | "completed" | "failed" | "cancelled"
     statusMessage  String? @db.Text   // Error message if failed
+  /// quick 260918-p3h (D-2): collector-fed ingest progress 0-100, surfaced
+  /// through GET /api/documents + the pending-docs polling payloads.
+  progress       Int       @default(0)
+  /// quick 260918-p3h (D-3): set when the user cancels a running ingest.
+  cancelledAt    DateTime?
   fileSize       Int       @default(0)
   deletedAt      DateTime?
   /// D-08 — null = pending cleanup, set on 2xx from collector
@@ -455,6 +505,16 @@ model Document {
   /// IN-02 — tombstone set once vectorCleanupAttempts reaches the cap. The
   /// retry job skips tombstoned docs, surfacing stuck purges to ops.
   vectorCleanupFailedAt DateTime?
+  /// Phase 192 (D-12/D-04): DLP backfill idempotency marker. Null = the DLP
+  /// scan has never completed for this document (backfill-eligible); set on
+  /// scan completion (clean scans included — zero entity rows is a valid
+  /// outcome, the timestamp is the marker). Also gates re-scan eligibility.
+  dlpScannedAt DateTime?
+  /// Phase 192 (D-12): document scan state machine —
+  /// "queued" | "scanning" | "scanned" | "clean" | "failed". Null until the
+  /// first scan is enqueued ("clean" = completed with zero entities; the
+  /// marker column above is the idempotency truth, this string is UX state).
+  dlpScanState String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -462,6 +522,9 @@ model Document {
   organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   chunks    DocumentChunk[]
+  // Phase 192 (D-04): entity mapping rows — onDelete: Cascade via DlpEntity
+  // FK (document purge removes its encrypted entity rows; no orphan PII).
+  dlpEntities DlpEntity[]
 
   // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
   // the project_access note).
@@ -724,12 +787,53 @@ model AgentSkill {
   name        String // e.g. "rag_search", "workspace_memory", "document_temp_process", or custom MCP tool name
   displayName String
     description String @db.Text
-  type        String @default("builtin") // "builtin" | "mcp"
+  type        String @default("builtin") // "builtin" | "mcp" | "custom" — Phase 190 (SKIL-01 D-02) widens the union with "custom"
   config      String @default("{}") // JSON config for the skill
+
+  // Phase 190 (SKIL-01 D-02): the dormant model wakes — additive column set for
+  // custom prompt-template skills (TODO/CUSTOM_SKILLS_SPEC.md §2.2).
+  // Tenancy seam — v0.24 M2 convention (99 models carry organizationId; AgentSkill
+  // previously did not): org-scoped counts (D-18) and tenant reads (TENANT_READ_MODELS).
+  organizationId String @default("00000000-0000-0000-0000-000000000000")
+  // D-02: slash-command slug ("translate") — kebab regex validated at the shared
+  // schema layer (^[a-z0-9-]+$ max 50). NOT plain @unique — see the partial
+  // unique below (Pitfall 4 tombstone rationale).
+  slug String
+  // D-01: enum-as-string pattern (NOT Prisma enum), Chat.titleSource idiom.
+  // v1 carries the literal "prompt" ONLY — "webhook" is deliberately ABSENT
+  // from the v1 union (SKIL-F01 v0.26: SSRF review + air-gap awareness first).
+  skillMode String @default("prompt")
+  // D-02/D-03: JSON-Schema-ish input contract for the skill's parameters
+  // (whitelisted {{param}} replacement — unknown placeholders stay literal).
+  inputSchema String @default("{}") @db.Text
+  // D-06: soft toggle — invocable iff scope matches + isEnabled + not deleted.
+  isEnabled Boolean @default(true)
+  // D-16: seeded builtin catalog rows (display/400-target only; execute stays in code).
+  isBuiltIn Boolean @default(false)
+  // D-18/A2 (deliberate deviation from D-02's literal column list, confirmed by
+  // the 190-01 checkpoint): soft delete + the partial slug unique below free the
+  // slug on tombstones (OrganizationMember partial-unique precedent).
+  deletedAt DateTime?
+  // D-05 three-level scoping: personal (userId), workspace (workspaceId),
+  // global (both null). createdBy = owner (deletion/update: owner or admin, D-07).
+  userId      String?
+  workspaceId String?
+  createdBy   String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Relations (Phase 190, D-02)
+  user      User?      @relation("AgentSkillUser", fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  creator   User?      @relation("AgentSkillCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  // Phase 190 (SKIL-01 D-02 + Pitfall 4): partial unique — soft-deleted rows
+  // (tombstones) free the slug so it can be re-created (P2002 tombstone class
+  // seen across ×20 soft-deleting tables; OrganizationMember precedent).
+  @@unique([slug], where: { deletedAt: null })
+  // Phase 190 (SKIL-01 D-02): org-lookup index on the M2 column (tenant seam).
+  @@index([organizationId])
   @@unique([name])
   @@map("agent_skills")
 }
@@ -753,6 +857,10 @@ model McpCatalogEntry {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  // quick 260918-qts: soft delete for individual catalog entries (admin
+  // per-entry DELETE; seed upsert's update clause never touches this, so
+  // deleted seeded entries stay deleted across restarts)
+  deletedAt DateTime?
 
   // Relations
   connections MCPConnection[]
@@ -984,6 +1092,22 @@ model Widget {
   leadCaptureEnabled   Boolean   @default(false)
     leadCapturePrompt   String? @db.Text   // Custom prompt text for lead form header
 
+  // 260917-mz6 (widget grounding + contact options + lead timing). Additive:
+  // systemPrompt is nullable (null = the module-private grounding floor in
+  // widgetChatPrompt.ts — NO global default constant exists anymore),
+  // contactConfig is a nullable jsonb blob shown when the daily limit trips,
+  // leadCaptureTiming is the email-capture moment enum, timeout pairs with
+  // timing="timeout".
+  systemPrompt              String?  @db.Text  // Per-widget grounding prompt; null = the module-private grounding floor (widgetChatPrompt.ts)
+  contactConfig             Json?    // Contact options blob shown at limit-reached: { formUrl?, bookingUrl?, email?, customUrl?, customLabel? }
+  leadCaptureTiming         String   @default("end")  // Email-capture moment: "start" | "end" | "timeout"
+  leadCaptureTimeoutSeconds Int?     // Seconds before the lead card fires when timing = "timeout"
+  // 260917-qoh (privacy consent + per-widget prompt): per-widget privacy
+  // policy page URL. Shown as a link beside the lead-capture consent
+  // checkbox; null = not configured → the card renders the checkbox without
+  // a link. Rendered host-side via the creditsOpen bridge (http/https only).
+  privacyUrl                String?
+
   // Per-widget rate-limit override (SCALE-04, D-05). null = use global default.
   rateLimitPerMinute  Int?
 
@@ -1082,6 +1206,13 @@ model WidgetLead {
   name       String?
   email      String
   transcript Json     // Array of { role, content, timestamp } messages per D-10
+  // 260917-qoh: archived privacy-consent decision. privacyConsented is
+  // ALWAYS true on rows created after this feature (the shared schema
+  // fails closed on a missing/false flag); the default keeps pre-existing
+  // rows parsing. privacyConsentAt is the SERVER clock at submission
+  // (never client-supplied — non-repudiable, T-Q02).
+  privacyConsented Boolean  @default(false)
+  privacyConsentAt DateTime?
   createdAt  DateTime @default(now())
 
   // Relations
@@ -1158,6 +1289,10 @@ model OcrJob {
   type           OcrJobType
   status         OcrJobStatus  @default(PENDING)
   progress       Int           @default(0)
+  /// quick 260918-p3h (D-3): set when the user cancels a running OCR job
+  /// (uploads cancel route flips it alongside the AIJ; ocrStages stops at the
+  /// next page boundary).
+  cancelledAt    DateTime?
   totalPages     Int?
   processedPages Int           @default(0)
   currentPage    Int?
@@ -1184,7 +1319,8 @@ model OcrJob {
 }
 
 // D-03: ArchiveImportJob — mirrors OcrJob shape for KB-05/KB-06 archive import
-// pipeline. Status values: "PROCESSING" | "COMPLETED" | "FAILED".
+// pipeline. Status values: "PROCESSING" | "COMPLETED" | "FAILED" | "CANCELLED"
+// (quick 260918-p3h).
 model ArchiveImportJob {
   id             String        @id @default(uuid())
   // Phase 182 (SAAS-01b, D-02 promise list): org transitivo via archiveId
@@ -1192,6 +1328,11 @@ model ArchiveImportJob {
   archiveId      String
   documentId     String?
   status         String        @default("PROCESSING")
+  /// quick 260918-p3h (D-2): OCR page-loop progress mirrored from
+  /// ocrJobService.updateJobProgress (raw-SQL keyed on result->>'ocrJobId').
+  progress       Int           @default(0)
+  /// quick 260918-p3h (D-3): set when the user cancels a running KB leg.
+  cancelledAt    DateTime?
   sourceFileName String?
   contentHash    String?
   result         Json?
@@ -1476,6 +1617,50 @@ model DlpPattern {
   // the project_access note).
   @@index([organizationId])
   @@map("dlp_patterns")
+}
+
+// ============================================================
+// Phase 192 (DLP-01..04, D-03/D-04): document-scan entity mapping.
+//
+// The mapping table IS the re-composition source of truth (D-04): chat
+// re-composition and preview unmask = decrypt originalEncrypted + substitute
+// the placeholder. Each row pins ONE entity occurrence-class discovered in a
+// document:
+// - entityClass: one of the shared DLP_ENTITY_CLASSES (PERSON, ADDRESS,
+//   FINANCIAL, GOV_ID, CONTACT) — never re-declared per package (D-02).
+// - placeholder: the instance-numbered token, e.g. [PERSON_1] — occurrence-
+//   stable across the whole document text + all chunks (D-03 normalization
+//   pass runs BEFORE chunking references).
+// - originalEncrypted: encryptionService.encrypt() output (AES-256-GCM,
+//   ENCRYPTION_KEY contract unchanged) — NEVER a plaintext column (D-04
+//   one-way door; the only clean copy lives here + the encrypted original).
+// - chunkId optional: document-wide entities (normalization pass) may not
+//   pin a single chunk when the same placeholder spans chunk boundaries.
+// - occurrences: match count for the entity within the document (dedup
+//   accounting for the eval FP metric).
+// Additive-only (D-04); document deletion cascades the mapping rows so no
+// orphan encrypted ciphertext survives a document purge (no-orphan-PII
+// invariant, mirrors Memory.sourceMessageId cascade rationale).
+// ============================================================
+
+model DlpEntity {
+  id                String   @id @default(uuid())
+  documentId        String
+  /// Optional chunk anchor — document-wide entities may not pin one chunk.
+  chunkId           String?
+  /// One of shared DLP_ENTITY_CLASSES (PERSON|ADDRESS|FINANCIAL|GOV_ID|CONTACT).
+  entityClass       String
+  /// Instance-numbered placeholder token, e.g. [PERSON_1] (D-03).
+  placeholder       String
+  /// encryptionService.encrypt() output — never plaintext (D-04).
+  originalEncrypted String   @db.Text
+  occurrences       Int      @default(1)
+  createdAt         DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@map("dlp_entities")
 }
 
 // SSO models (SsoConfig, IdentityProvider, ScimGroup) moved to

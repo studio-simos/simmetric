@@ -102,6 +102,9 @@ afterAll(() => {
 describe("forwardToCollector failure cleanup (260829-fty)", () => {
   beforeEach(() => {
     (prisma.document.update as jest.Mock).mockReset().mockResolvedValue({});
+    // quick 260918-p3h: the guarded processing claim (T-P3H-04 arm a) issues
+    // document.updateMany before dispatch — default it to a successful claim.
+    (prisma.document.updateMany as jest.Mock).mockReset().mockResolvedValue({ count: 1 });
     (cleanupOcrTextFile as jest.Mock).mockReset().mockResolvedValue(undefined);
     jest.clearAllMocks();
   });
@@ -180,6 +183,9 @@ describe("forwardToCollector failure cleanup (260829-fty)", () => {
 describe("forwardToCollector provider arms (Phase 184 D-06 / Pitfall 1)", () => {
   beforeEach(() => {
     (prisma.document.update as jest.Mock).mockReset().mockResolvedValue({});
+    // quick 260918-p3h: the guarded processing claim (T-P3H-04 arm a) issues
+    // document.updateMany before dispatch — default it to a successful claim.
+    (prisma.document.updateMany as jest.Mock).mockReset().mockResolvedValue({ count: 1 });
     (cleanupOcrTextFile as jest.Mock).mockReset().mockResolvedValue(undefined);
     jest.clearAllMocks();
     mockProviderGet.mockReset().mockResolvedValue(Buffer.from("provider-bytes"));

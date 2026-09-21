@@ -31,6 +31,9 @@ export const FEATURE_FLAGS = [
   "backup_enabled",
   "max_backup_destinations",
   "widget_credits_editing",
+  // Phase 190 (SKIL-05 D-17): numeric limit for custom prompt skills —
+  // community 3 / enterprise Infinity (mirrors custom_agents below).
+  "max_skills",
 ] as const;
 
 export type FeatureFlag = (typeof FEATURE_FLAGS)[number];
@@ -57,6 +60,10 @@ export const COMMUNITY_FEATURE_DEFAULTS: Record<FeatureFlag, boolean | number> =
    * @phase 148 D-09/D-10
    */
   custom_agents: 3,
+  // Phase 190 (SKIL-05 D-17): max_skills mirrors the custom_agents row —
+  // community up to 3 custom prompt skills, enforced at CREATE via
+  // requireFeatureLimit("max_skills", "skill").
+  max_skills: 3,
   widget_enabled: false,
   max_widgets: 1,
   backup_enabled: false,
@@ -72,6 +79,9 @@ export const ENTERPRISE_FEATURE_DEFAULTS: Record<FeatureFlag, boolean | number> 
   max_workspaces: Infinity,
   max_projects: Infinity,
   custom_agents: Infinity,
+  // Phase 190 (SKIL-05 D-17): enterprise = unlimited custom skills
+  // (mirror of custom_agents; raiseable further via overrideFeatureLimit).
+  max_skills: Infinity,
   widget_enabled: true,
   max_widgets: Infinity,
   backup_enabled: true,

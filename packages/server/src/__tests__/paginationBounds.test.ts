@@ -84,6 +84,11 @@ jest.mock("../middleware/rbac", () => ({
   requirePermission: () => (_req: any, _res: any, next: any) => next(),
   requireProjectAccess: () => (_req: any, _res: any, next: any) => next(),
   requireWorkspaceAccess: () => (_req: any, _res: any, next: any) => next(),
+  // Phase 189 (189-02 sweep): routes now import the graded middlewares —
+  // the mock must export them (shadow no-op) or express throws at load.
+  requireWorkspaceWriteAccess: () => (_req: any, _res: any, next: any) => next(),
+  requireWorkspaceRead: () => (_req: any, _res: any, next: any) => next(),
+
 }));
 
 // NOTE: do NOT mock ../middleware/license — the real module defines

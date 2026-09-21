@@ -442,4 +442,76 @@ test.describe("E2E-02 — Widget embed lifecycle WID-03 (D-07, D-03 full-mock)",
     await frame.getByRole("link", { name: /Powered by Simmetric Chat/ }).click();
     await expect.poll(() => widgetPage.evaluate(() => (window as any).__creditsOpened)).toBe("https://simmetric.chat");
   });
+
+  // 188-04 Task 2 (WGTA-02/03, SC-3): real-embed branding + attribution proof.
+  // The seeded E2E widget (globalSetup) has logoUrl/avatarUrl UNSET, so this
+  // exercises the product-baked fallback identity (D-09/D-10) and the
+  // Community attribution row (D-12: whiteLabel false → both links visible;
+  // enterprise white-label → hidden — the assert branches on the resolved flag).
+  test("favicon in iframe head + ProductMark fallback + attribution links (WGTA-02/03, D-09/D-12)", async ({ widgetPage, request }) => {
+    const widgetId = process.env.E2E_WIDGET_ID;
+    expect(widgetId, "E2E_WIDGET_ID must be seeded by globalSetup").toBeTruthy();
+
+    // (a) Favicon — the iframe HTML head carries the product favicon link.
+    // Fetched server-side: the iframe document is served by the widget
+    // service under /widget/<id> (the loader mounts its routes at /widget —
+    // index.ts:47; the sandboxed frame itself is opaque-origin).
+    const iframeHtml = await request.get(`http://localhost:3211/widget/${widgetId}`);
+    expect(iframeHtml.ok(), "iframe HTML route responds").toBeTruthy();
+    const html = await iframeHtml.text();
+    expect(html).toContain('rel="icon"');
+    expect(html).toContain("/widget/favicon.svg");
+
+    // The static asset itself resolves (tracked packages/widget/public/favicon.svg).
+    const favicon = await request.get("http://localhost:3211/widget/favicon.svg");
+    expect(favicon.ok(), "favicon.svg static route responds").toBeTruthy();
+    expect((await favicon.body()).length).toBeGreaterThan(0);
+
+    // Open the panel so the header + footer rows render.
+    const frame = widgetPage.frameLocator('iframe[src*="localhost:3211"]');
+    const hostFab = widgetPage.locator("#simmetric-widget button[aria-expanded]");
+    await expect(hostFab).toHaveAttribute("aria-expanded", "false");
+    await hostFab.click();
+    await expect(hostFab).toHaveAttribute("aria-expanded", "true");
+    await expect(frame.locator("textarea")).toBeVisible({ timeout: 10000 });
+
+    // (b) ProductMark fallback in the chat header (D-09): logoUrl/avatarUrl
+    // UNSET on the seeded widget → the header renders the baked monogram
+    // (<svg role="img" aria-label="Simmetric Chat"> — ProductMark.tsx).
+    const headerMark = frame.locator('[role="img"][aria-label="Simmetric Chat"]');
+    await expect(headerMark).toBeVisible({ timeout: 10000 });
+
+    // (c) Attribution row (WGTA-03, D-12/D-13a): visibility follows the
+    // server-derived whiteLabel flag — Community (false) shows BOTH links,
+    // enterprise white-label removes them. The flag is read from the
+    // internal config API (same source the loader block carries) so the
+    // assert proves the D-12 contract in BOTH directions:
+    //   - local Enterprise install (white_label true) → links HIDDEN,
+    //     credits row remains;
+    //   - Community CI → the describe's tier-probe self-skips before here,
+    //     so the visible branch runs wherever whiteLabel resolves false.
+    const configRes = await request.get(
+      `http://localhost:3000/api/internal/widget/${widgetId}/config`,
+      { headers: { "X-Api-Key": process.env.E2E_WIDGET_API_KEY ?? "sk-c6a7b6662ab64f4c9582bf83e147675b" } },
+    );
+    expect(configRes.ok(), "internal widget config responds").toBeTruthy();
+    const resolvedWhiteLabel = ((await configRes.json()) as { whiteLabel?: boolean }).whiteLabel === true;
+
+    const studioLink = frame.locator('a[href="https://www.studiosimos.it"]');
+    const scLink = frame.locator('a[href="https://www.simmetricchat.com"]');
+    if (resolvedWhiteLabel) {
+      // Enterprise white-label — links removed (D-12), credits row remains.
+      await expect(studioLink).toHaveCount(0);
+      await expect(scLink).toHaveCount(0);
+      await expect(frame.getByRole("link", { name: /Powered by Simmetric Chat/ })).toBeVisible();
+    } else {
+      // Community — both product-constant links visible above the credits row.
+      await expect(studioLink).toBeVisible({ timeout: 10000 });
+      await expect(scLink).toBeVisible({ timeout: 10000 });
+      await expect(studioLink).toHaveText("studiosimos.it");
+      await expect(scLink).toHaveText("Simmetric Chat");
+      // Credits row stays the LAST child (Phase 131 non-regression contract).
+      await expect(frame.getByRole("link", { name: /Powered by Simmetric Chat/ })).toBeVisible();
+    }
+  });
 });

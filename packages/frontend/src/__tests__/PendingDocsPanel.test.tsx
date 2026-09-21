@@ -63,6 +63,9 @@ jest.mock("../queries/useUploadDrafts", () => ({
   // under the existing mock. Full describe blocks are added in Task 3.
   useDeleteDraft: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
   useRenameDraft: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
+  // quick 260918-p3h (D-3) — the panel now consumes useCancelDraftLeg;
+  // mock shape mirrors the other mutation hooks.
+  useCancelDraftLeg: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
 }));
 
 jest.mock("../queries/useArchives", () => ({
