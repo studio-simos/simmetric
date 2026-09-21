@@ -237,7 +237,7 @@ export default function McpPinnerPopover({ disabled }: { disabled: boolean }) {
               {pinCount > 0 && (
                 <Badge
                   variant="secondary"
-                  className="absolute -top-1 -right-1 h-4 w-4 p-0 text-[10px] flex items-center justify-center"
+                  className="absolute -top-1 -right-1 h-4 w-4 p-0 text-[12px] flex items-center justify-center"
                 >
                   {pinCount}
                 </Badge>
@@ -302,7 +302,7 @@ export default function McpPinnerPopover({ disabled }: { disabled: boolean }) {
                     <p className="text-sm font-medium text-popover-foreground truncate">
                       {conn.name}
                       {isGlobal(conn) && (
-                        <span className="ml-1.5 text-[10px] text-muted-foreground uppercase tracking-wide">
+                        <span className="ml-1.5 text-[12px] text-muted-foreground uppercase tracking-wide">
                           {t("mcpPinner.globalBadge")}
                         </span>
                       )}

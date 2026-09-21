@@ -47,27 +47,27 @@ function TokenBar({ input, output }: { input: number; output: number }) {
       <div className="flex h-2.5 w-full overflow-hidden rounded-sm border border-border bg-[var(--surface-alt)]">
         <div
           className="h-full transition-all duration-300"
-          style={{ width: `${inputPct}%`, backgroundColor: "var(--primary, #4c6ef5)" }}
+          style={{ width: `${inputPct}%`, backgroundColor: "var(--chart-1)" }}
           title={`Input ${formatTokens(input)}`}
         />
         <div
           className="h-full transition-all duration-300"
-          style={{ width: `${outputPct}%`, backgroundColor: "#10b981" }}
+          style={{ width: `${outputPct}%`, backgroundColor: "var(--chart-2)" }}
           title={`Output ${formatTokens(output)}`}
         />
       </div>
-      <div className="mt-1.5 flex justify-between text-[10px] text-[var(--text-subtle)]">
+      <div className="mt-1.5 flex justify-between text-[12px] text-[var(--text-subtle)]">
         <span>
           <span
             className="mr-1 inline-block h-2 w-2 rounded-sm align-middle"
-            style={{ backgroundColor: "var(--primary, #4c6ef5)" }}
+            style={{ backgroundColor: "var(--chart-1)" }}
           />
           {formatTokens(input)} in
         </span>
         <span>
           <span
             className="mr-1 inline-block h-2 w-2 rounded-sm align-middle"
-            style={{ backgroundColor: "#10b981" }}
+            style={{ backgroundColor: "var(--chart-2)" }}
           />
           {formatTokens(output)} out
         </span>
@@ -105,13 +105,13 @@ function AggregateView({ data, loading, view }: { data?: ChatTokenAggregate; loa
         label={t("tokens.input", "Input")}
         value={data.totalInput}
         icon={<ArrowDownToLine size={14} />}
-        accent="var(--primary, #4c6ef5)"
+        accent="var(--chart-1)"
       />
       <StatRow
         label={t("tokens.output", "Output")}
         value={data.totalOutput}
         icon={<ArrowUpFromLine size={14} />}
-        accent="#10b981"
+        accent="var(--chart-2)"
       />
       <div className="my-1 border-t border-border" />
       <StatRow
@@ -122,7 +122,7 @@ function AggregateView({ data, loading, view }: { data?: ChatTokenAggregate; loa
       />
       <TokenBar input={data.totalInput} output={data.totalOutput} />
       {view === "session" && data.since && (
-        <p className="mt-2 text-[10px] text-[var(--text-subtle)]">
+        <p className="mt-2 text-[12px] text-[var(--text-subtle)]">
           {t("tokens.since", "Since")} {new Date(data.since).toLocaleTimeString()}
         </p>
       )}

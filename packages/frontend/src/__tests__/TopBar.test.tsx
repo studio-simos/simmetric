@@ -132,8 +132,6 @@ import TopBar from "../components/TopBar";
 const BASE_PROPS = {
   currentSection: "Chat",
   selectedProjectId: "proj-1",
-  user: { username: "jdoe", firstName: "Jane", lastName: "Doe" },
-  onLogout: jest.fn(),
 };
 
 function setup(overrides: Partial<typeof BASE_PROPS> = {}) {

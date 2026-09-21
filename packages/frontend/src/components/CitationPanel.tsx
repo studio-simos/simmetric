@@ -71,7 +71,7 @@ export default function CitationPanel({ sources, onClose }: CitationPanelProps) 
                       </span>
                     )}
                     {source.source === "archive" && (
-                      <span className="inline-flex items-center rounded text-[10px] font-semibold uppercase tracking-wider bg-primary/15 text-primary px-1.5 py-0.5">
+                      <span className="inline-flex items-center rounded text-[12px] font-semibold uppercase tracking-wider bg-primary/15 text-primary px-1.5 py-0.5">
                         {t("chat.archive.badge")}
                       </span>
                     )}
@@ -147,7 +147,7 @@ export function CitationBadge({ index, onClick }: { index: number; onClick: () =
       variant="ghost"
       size="icon"
       onClick={onClick}
-      className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold bg-primary text-primary-foreground hover:opacity-80 transition-opacity"
+      className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[12px] font-bold bg-primary text-primary-foreground hover:opacity-80 transition-opacity"
       title={`Source ${index + 1}`}
     >
       {index + 1}

@@ -97,7 +97,7 @@ export default function SettingsBackups() {
             <TabsTrigger
               key={sub}
               value={sub}
-              className="px-4 py-2.5 text-sm font-medium border-b-2 transition-colors rounded-none data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:bg-transparent"
+              className="px-4 py-2.5 text-sm font-medium transition-colors rounded-none data-[state=active]:bg-accent data-[state=active]:text-primary data-[state=active]:border-transparent"
             >
               {t(`settings.backups.subTabs.${sub}`)}
             </TabsTrigger>

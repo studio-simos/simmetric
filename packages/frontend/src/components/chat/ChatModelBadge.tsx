@@ -75,7 +75,7 @@ function CapabilityChip({ tag, label }: { tag: string; label: string }) {
           : tag === "reasoning"
             ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
             : "bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400";
-  return <span className={cn("text-[10px] px-1.5 py-0.5 rounded font-medium", cls)}>{label}</span>;
+  return <span className={cn("text-[12px] px-1.5 py-0.5 rounded font-medium", cls)}>{label}</span>;
 }
 
 export function ChatModelBadge({
@@ -107,7 +107,7 @@ export function ChatModelBadge({
   if (displayOnly && !model) return null;
 
   const label = model || t("chat.input.model", "Select model");
-  const pad = size === "sm" ? "px-1.5 py-0.5 text-[11px]" : "px-2 py-1 text-xs";
+  const pad = size === "sm" ? "px-1.5 py-0.5 text-[12px]" : "px-2 py-1 text-xs";
   const dotSize = size === "sm" ? "size-1.5" : "size-2";
 
   const hasCaps = !!capabilities && capabilities.length > 0;
@@ -132,7 +132,7 @@ export function ChatModelBadge({
       {providerType && <ProviderIcon type={providerType} />}
       <span className={cn("rounded-full shrink-0", dotColor, dotSize)} aria-hidden="true" />
       <span className={cn("truncate", labelMax)}>{label}</span>
-      {isDefault && <span className="text-primary text-[10px] shrink-0" aria-label={t("chat.modelSelector.default", "Default")}>★</span>}
+      {isDefault && <span className="text-primary text-[12px] shrink-0" aria-label={t("chat.modelSelector.default", "Default")}>★</span>}
       {hasCaps && (
         <span className="inline-flex items-center gap-1 shrink-0">
           {capabilities!.map((tag) => (

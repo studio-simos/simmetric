@@ -86,7 +86,7 @@ export default function ProjectRenameModal({
             }}
             placeholder={t("projectRename.placeholder")}
           />
-          <p className="text-[10px] text-muted-foreground font-mono">
+          <p className="text-[12px] text-muted-foreground font-mono">
             {trimmed.length}/200
           </p>
         </div>

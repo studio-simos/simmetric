@@ -30,6 +30,12 @@ import { cn } from "@/lib/utils";
  * in `index.css` targets. The component itself is theme-agnostic: it never
  * imports any theme library or `useTheme` and never hardcodes hacker colors.
  *
+ * Active state (2026-09 polish): tinted fill + primary text via the inline
+ * color-mix style — NO accent border in light/dark. The `border-l-2` is kept
+ * only as the carrier for the documented `.theme-hacker` neon-green left edge
+ * (see SidebarSettingsThemeInvariants.test.tsx); it stays transparent
+ * otherwise.
+ *
  * The active voice is passed as `activeVoice` ({ tab, labelKey, sectionId } |
  * null) rather than a bare tab key, so both group voices and sub-section
  * voices highlight correctly while a page is open.
@@ -99,10 +105,7 @@ export function SettingsMenu({
               aria-label={t(group.labelKey)}
               onClick={() => onSelectTab(group.key)}
               className={cn(
-                "settings-menu-item justify-start rounded-none px-4 py-3 text-sm font-medium border-l-2 transition-colors",
-                isGroupActive
-                  ? "border-primary"
-                  : "border-transparent text-foreground hover:bg-accent/50",
+                "settings-menu-item justify-start rounded-none px-4 py-3 text-sm font-medium border-l-2 border-transparent transition-colors text-foreground hover:bg-accent/50",
               )}
               style={
                 isGroupActive
@@ -135,10 +138,7 @@ export function SettingsMenu({
                           aria-label={t(section.labelKey)}
                           onClick={() => onSelectSection(group.key, section.id)}
                           className={cn(
-                            "settings-menu-item justify-start rounded-none pl-7 pr-4 py-2 text-[13px] font-normal border-l-2 transition-colors",
-                            isSectionActive
-                              ? "border-primary"
-                              : "border-transparent text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+                            "settings-menu-item justify-start rounded-none pl-7 pr-4 py-2 text-[13px] font-normal border-l-2 border-transparent transition-colors text-muted-foreground hover:bg-accent/40 hover:text-foreground",
                           )}
                           style={
                             isSectionActive

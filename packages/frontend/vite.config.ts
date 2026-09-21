@@ -66,7 +66,7 @@ function configureDevProxy(proxy: any, opts: Record<string, unknown>): void {
     if (isHttp) {
       if (!res.headersSent && !res.writableEnded) {
         res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Backend unavailable (dev proxy)" }));
+        res.end(JSON.stringify({ error: "Backend unavailable" }));
       }
       if (err.code === "ECONNREFUSED") {
         console.warn(

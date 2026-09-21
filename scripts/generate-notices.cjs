@@ -84,7 +84,7 @@ function stableGeneratedAt() {
       const devSha = syncMatch[1];
       try {
         return execSync(
-          `git log -1 --format=%cI -- pnpm-lock.yaml ${JSON.stringify(devSha)}`,
+          `git log -1 --format=%cI ${JSON.stringify(devSha)} -- pnpm-lock.yaml`,
           { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
         ).trim();
       } catch {

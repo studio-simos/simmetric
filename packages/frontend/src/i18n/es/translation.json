@@ -143,6 +143,11 @@
     "ssoSignIn": "Login with SSO",
     "ldap": {
       "hint": "Inicia sesión con tus credenciales del directorio corporativo."
+    },
+    "offline": {
+      "title": "No se puede conectar con {{appName}}",
+      "body": "Asegúrate de que el servidor esté en ejecución y sea accesible desde este dispositivo, y vuelve a intentarlo.",
+      "retry": "Reintentar"
     }
   },
   "chat": {

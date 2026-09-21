@@ -270,7 +270,7 @@ export default function MarketplaceDetail() {
       {/* Section 2 — Header */}
       <div className="mb-[24px] flex items-start justify-between">
         <div>
-          <h1 className="text-[28px] font-semibold text-foreground">
+          <h1 className="text-[24px] font-semibold text-foreground">
             {entry.name}
           </h1>
           <div className="flex items-center gap-3 mt-[8px]">

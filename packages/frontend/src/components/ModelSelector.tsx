@@ -146,7 +146,7 @@ export default function ModelSelector({ value, onChange, unavailableModel, isSta
               {triggerProviderType && <ProviderIcon type={triggerProviderType} />}
               <span className="truncate">{displayLabel}</span>
               {triggerCapabilities?.map((tag) => (
-                <Badge key={tag} variant="outline" className="text-[10px] px-1.5 py-0.5 rounded">
+                <Badge key={tag} variant="outline" className="text-[12px] px-1.5 py-0.5 rounded">
                   {t(capabilityKeyMap[tag] || tag)}
                 </Badge>
               ))}
@@ -198,16 +198,16 @@ export default function ModelSelector({ value, onChange, unavailableModel, isSta
                           {model.displayName || model.name}
                         </span>
                         <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
-                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0.5 rounded">
+                          <Badge variant="secondary" className="text-[12px] px-1.5 py-0.5 rounded">
                             {model.isLocal ? "Local" : "Cloud"}
                           </Badge>
                           {model.capabilities?.map((tag) => (
-                            <Badge key={tag} variant="outline" className="text-[10px] px-1.5 py-0.5 rounded">
+                            <Badge key={tag} variant="outline" className="text-[12px] px-1.5 py-0.5 rounded">
                               {t(capabilityKeyMap[tag] || tag)}
                             </Badge>
                           ))}
                           {model.isDefault && (
-                            <span className="text-[10px] text-primary">★</span>
+                            <span className="text-[12px] text-primary">★</span>
                           )}
                         </div>
                       </CommandItem>

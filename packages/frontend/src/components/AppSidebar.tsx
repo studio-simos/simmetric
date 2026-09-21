@@ -52,6 +52,14 @@ export interface AppSidebarProps {
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
   isMobile?: boolean;
+  /**
+   * R-6: persistent navigation block (AppSidebarNav), rendered between the
+   * scrollable body (ChatSidebar) and the footer. Optional — the existing
+   * rail-only tests render without it. Present in BOTH modes: expanded it
+   * shows the grouped nav rows; in the collapsed rail it shows the
+   * icon-only entries (title tooltips + corner locks) above the footer.
+   */
+  nav?: React.ReactNode;
   children?: React.ReactNode;
 }
 
@@ -80,6 +88,7 @@ export default function AppSidebar({
   setSidebarOpen,
   isMobile = false,
   shareTarget = null,
+  nav,
   children,
 }: AppSidebarProps & { shareTarget?: SidebarShareTarget | null }) {
   // Cache-busting token for the white-label app icon (Feature 8 Slice C).
@@ -218,6 +227,12 @@ export default function AppSidebar({
         {children}
       </div>
 
+      {/* R-6: persistent nav block (AppSidebarNav) — flex-none with its own
+          scroll, sits between the conversation list and the footer. Rendered
+          in both modes (the rail shows the icon-only variant), so the
+          primary navigation stays one click away without the overlay. */}
+      {nav}
+
       {/* Footer: menu button → AppNavOverlay, then the user block →
           UserMenuDialog. Always present, all breakpoints. */}
       <div
@@ -254,10 +269,10 @@ export default function AppSidebar({
           {user?.avatar ? (
             <Avatar className="h-6 w-6">
               <AvatarImage src={user.avatar} alt="" />
-              <AvatarFallback className="text-[10px]">{initialsOf(user)}</AvatarFallback>
+              <AvatarFallback className="text-[12px]">{initialsOf(user)}</AvatarFallback>
             </Avatar>
           ) : (
-            <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground text-[10px] font-medium flex items-center justify-center flex-none">
+            <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground text-[12px] font-medium flex items-center justify-center flex-none">
               {initialsOf(user)}
             </span>
           )}

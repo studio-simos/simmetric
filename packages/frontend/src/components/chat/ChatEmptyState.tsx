@@ -94,7 +94,7 @@ export function ChatEmptyState({
             <span className="block text-sm text-foreground leading-snug">
               {t("chat.emptyState.action.docs.label", "Ask about your documents")}
             </span>
-            <span className="block text-[11px] font-mono text-muted-foreground mt-0.5">
+            <span className="block text-[12px] font-mono text-muted-foreground mt-0.5">
               {t("chat.emptyState.docs", "{{count}} indexed").replace("{{count}}", orDash(documentCount))}
             </span>
           </span>
@@ -113,7 +113,7 @@ export function ChatEmptyState({
             <span className="block text-sm text-foreground leading-snug">
               {t("chat.emptyState.action.kb.label", "Search knowledge base")}
             </span>
-            <span className="block text-[11px] font-mono text-muted-foreground mt-0.5">
+            <span className="block text-[12px] font-mono text-muted-foreground mt-0.5">
               {t("chat.emptyState.kb", "{{count}} archives").replace("{{count}}", String(kbCount))}
             </span>
           </span>
@@ -130,7 +130,7 @@ export function ChatEmptyState({
             <span className="block text-sm text-foreground leading-snug">
               {t("chat.emptyState.skills", "Available skills")}
             </span>
-            <span className="block text-[11px] font-mono text-muted-foreground mt-0.5 truncate">
+            <span className="block text-[12px] font-mono text-muted-foreground mt-0.5 truncate">
               {BUILTIN_SKILLS.join(" · ")}
             </span>
           </span>
@@ -147,7 +147,7 @@ export function ChatEmptyState({
             <span className="block text-sm text-foreground leading-snug">
               {t("chat.emptyState.tokensToday", "Token usage today")}
             </span>
-            <span className="block text-[11px] font-mono text-muted-foreground mt-0.5">
+            <span className="block text-[12px] font-mono text-muted-foreground mt-0.5">
               {tokensToday !== undefined ? formatTokens(tokensToday) : "—"}
             </span>
           </span>
@@ -164,7 +164,7 @@ export function ChatEmptyState({
           className={cn(!activeModel?.model && "opacity-70")}
         />
         {airGapped && (
-          <Badge variant="outline" className="text-[10px] font-mono border-[var(--chat-accent)] text-[var(--chat-accent)]">
+          <Badge variant="outline" className="text-[12px] font-mono border-[var(--chat-accent)] text-[var(--chat-accent)]">
             {t("chat.emptyState.airgapped", "AIR-GAPPED")}
           </Badge>
         )}

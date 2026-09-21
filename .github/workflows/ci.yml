@@ -395,10 +395,18 @@ jobs:
             exit 1
           fi
       - name: Verify SPDX report is up to date (drift gate)
+        # The `Generated:` line stamps the timestamp of the last commit
+        # touching pnpm-lock.yaml — on the public snapshot repo that is the
+        # SNAPSHOT commit itself (every sync touches the lock), a timestamp
+        # the committed file (stamped from the dev-side sha history) can
+        # never match. The gate therefore diffs the CONTENT only: the
+        # Generated line is filtered out of both sides before comparing
+        # (quick 260921 — public-CI false-stale).
         run: |
-          if ! git diff --quiet docs/LICENSE_AUDIT.md; then
+          git show HEAD:docs/LICENSE_AUDIT.md | grep -v '^\*\*Generated:' > "$RUNNER_TEMP/audit-head.txt"
+          grep -v '^\*\*Generated:' docs/LICENSE_AUDIT.md > "$RUNNER_TEMP/audit-new.txt"
+          if ! diff -u "$RUNNER_TEMP/audit-head.txt" "$RUNNER_TEMP/audit-new.txt"; then
             echo "::error::docs/LICENSE_AUDIT.md is stale. Run \`node scripts/generate-notices.cjs\` and commit the result."
-            git diff docs/LICENSE_AUDIT.md
             exit 1
           fi
       - name: Verify project-self license fields

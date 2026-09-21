@@ -109,7 +109,7 @@ export default function SynthesisRunCard({ run, onClick, onDelete }: SynthesisRu
                   type="text"
                   value={renameInput}
                   onChange={(e) => setRenameInput(e.target.value)}
-                  className="flex-1 min-w-0 px-1 py-0.5 h-auto text-[20px] font-semibold leading-[1.2]"
+                  className="flex-1 min-w-0 px-1 py-0.5 h-auto text-[16px] font-semibold leading-[1.2]"
                   autoFocus
                   aria-label={t("synthesis.rename.ariaLabel")}
                   placeholder={run.name}
@@ -123,7 +123,7 @@ export default function SynthesisRunCard({ run, onClick, onDelete }: SynthesisRu
               </form>
             ) : (
               <CardTitle
-                style={{ fontSize: "20px", fontWeight: 600, lineHeight: 1.2 }}
+                style={{ fontSize: "16px", fontWeight: 600, lineHeight: 1.2 }}
                 onDoubleClick={() => { setRenaming(run.id); setRenameInput(run.name); }}
               >
                 {displayTitle}

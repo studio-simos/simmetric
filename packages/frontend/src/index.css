@@ -92,6 +92,49 @@
 .text-size-md { --font-size-multiplier: 1; }
 .text-size-lg { --font-size-multiplier: 1.125; }
 
+/* ─── Status token aliases (polish 2026-09-21) ───
+   Two consumers:
+   1. `text-[var(--success-text)]` / `bg-[var(--error-bg)]` etc. in the DLP
+      audit, templates, maintenance, filters and document-viewer surfaces;
+   2. `@theme inline` maps `--color-success`/`--color-warning` to the `*-text`
+      values below, generating the bare `text-warning` / `bg-warning/10` /
+      `border-warning` utilities used by ModelSelector, OcrModelSelector and
+      RestoreConfirmDialog (these had NO definition before — Tailwind silently
+      dropped them).
+   Success/warning/error map to the same hues the chips rule already
+   sanctions for semantic status (green / amber / destructive), each over a
+   ~10% tint of itself. */
+:root {
+  --success-text: #1a7f37;
+  --success-bg: rgba(26, 127, 55, 0.1);
+  --warning-text: #96561e;
+  --warning-bg: rgba(150, 86, 30, 0.1);
+  --warning-border: #d29922;
+  --error-text: var(--destructive);
+  --error-bg: color-mix(in srgb, var(--destructive) 10%, transparent);
+  /* Legacy aliases kept for surfaces not yet swept onto shadcn tokens. */
+  --text: var(--foreground);
+  --text-muted: var(--muted-foreground);
+  --text-subtle: var(--muted-foreground);
+  --surface: var(--card);
+  --surface-alt: var(--muted);
+}
+
+.dark {
+  --success-text: #7ee787;
+  --success-bg: rgba(126, 231, 135, 0.12);
+  --warning-text: #ffa657;
+  --warning-bg: rgba(255, 166, 87, 0.12);
+  --warning-border: #d29922;
+  /* Legacy aliases rebind per theme so var(--text) etc. track the active
+     palette instead of the light :root values. */
+  --text: var(--foreground);
+  --text-muted: var(--muted-foreground);
+  --text-subtle: var(--muted-foreground);
+  --surface: var(--card);
+  --surface-alt: var(--muted);
+}
+
 /* ─── Base Layer ─── */
 @layer base {
   body {
@@ -261,6 +304,8 @@ body {
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-success: var(--success-text);
+  --color-warning: var(--warning-text);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -336,6 +381,20 @@ body {
   --sidebar-accent-foreground: #00ff9c;
   --sidebar-border: rgba(255, 255, 255, 0.06);
   --sidebar-ring: #00ff9c;
+  /* Status tokens (hacker): neon semantics, same aliases as dark. */
+  --success-text: #7ee787;
+  --success-bg: rgba(126, 231, 135, 0.1);
+  --warning-text: #ffaa00;
+  --warning-bg: rgba(255, 170, 0, 0.1);
+  --warning-border: #ffaa00;
+  --error-text: #ff4466;
+  --error-bg: rgba(255, 68, 102, 0.1);
+  /* Legacy aliases (hacker). */
+  --text: var(--foreground);
+  --text-muted: var(--muted-foreground);
+  --text-subtle: var(--muted-foreground);
+  --surface: var(--card);
+  --surface-alt: var(--muted);
 }
 
 /* Glassmorphism — use only on top-level panels (backdrop-filter is costly) */
