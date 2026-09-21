@@ -58,9 +58,7 @@ jest.mock("../services/dlpEntityService", () => ({
   buildRecompositionMap: (...args: unknown[]) => mockBuildRecompositionMap(...(args as [])),
   buildPlaceholderRegex:
     jest.requireActual("../services/dlpEntityService").buildPlaceholderRegex,
-  loadEntityMap: jest.fn(),
   writeEntityMap: jest.fn(),
-  deleteEntityMap: jest.fn(),
 }));
 
 jest.mock("axios", () => ({

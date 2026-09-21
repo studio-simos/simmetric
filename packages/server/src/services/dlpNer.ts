@@ -34,7 +34,7 @@ import {
  * decoding). enum mirrors shared DLP_ENTITY_CLASSES (kept literal because
  * ollama needs a raw JSON schema object, not a Zod schema).
  */
-export const NER_FORMAT = {
+const NER_FORMAT = {
   type: "object",
   properties: {
     entities: {
@@ -160,7 +160,7 @@ export async function runNerOnChunk(
  * entries whose text occurs VERBATIM in the chunk, dedupe identical
  * (text, entityClass) pairs. Never mask by fuzzy match.
  */
-export function postCheckNerEntries(
+function postCheckNerEntries(
   chunkText: string,
   parsed: NerResponse,
 ): Array<{ text: string; entityClass: DlpEntityClass }> {

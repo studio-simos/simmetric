@@ -237,7 +237,7 @@ describe("widgetChatLimiter max function (SCALE-04, D-05, Open Q1, Pitfall 4)", 
     mockRedisInstance.get.mockResolvedValue(
       JSON.stringify({ id: "wid-abc", rateLimitPerMinute: 0 }),
     );
-    expect(await maxFn(maxReq("/api/chat/wid-abc/stream"), {})).toBe(mod.WIDGET_UNLIMITED_MAX);
+    expect(await maxFn(maxReq("/api/chat/wid-abc/stream"), {})).toBe(2147483647);
   });
 
   it("returns rateLimitPerMinute when it is a positive number, ignores null/negative", async () => {

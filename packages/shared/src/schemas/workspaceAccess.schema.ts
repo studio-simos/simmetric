@@ -32,9 +32,12 @@ export const bulkGrantWorkspaceAccessSchema = z.object({
 /**
  * Phase 189 (D-15): list-entry wire shape for GET /:workspaceId/access —
  * grantedAt serializes to string over JSON; grantedBy is null for legacy rows
- * (D-12 audit marker) and set for admin-granted rows.
+ * (D-12 audit marker) and set for admin-granted rows. The list ROUTE reshapes
+ * the Prisma rows inline (workspaces.ts grants.map) — this schema stays
+ * unexported as the pinned wire-shape contract (shared schemas.test.ts
+ * parses it; no runtime consumer — knip sweep quick-260921-o5z).
  */
-export const workspaceAccessListEntrySchema = z.object({
+const workspaceAccessListEntrySchema = z.object({
   userId: z.string().uuid(),
   username: z.string(),
   role: z.enum(["owner", "editor", "viewer"]),
@@ -42,13 +45,6 @@ export const workspaceAccessListEntrySchema = z.object({
   grantedBy: z.string().nullable(),
 });
 
-/**
- * Phase 189 (D-16): revoke path param — `:userId` on
- * DELETE /:workspaceId/access/:userId (roleIdParamSchema uuid-guard idiom,
- * WR-01: non-UUID params return 400 instead of leaking Prisma errors).
- */
-export const workspaceAccessParamsSchema = z.string().uuid("Invalid user ID");
-
-export type GrantWorkspaceAccessRouteInput = z.infer<typeof grantWorkspaceAccessRouteSchema>;
-export type BulkGrantWorkspaceAccessInput = z.infer<typeof bulkGrantWorkspaceAccessSchema>;
-export type WorkspaceAccessListEntry = z.infer<typeof workspaceAccessListEntrySchema>;
+// Phase 189 (D-16) revoke path-param schema DELETED (knip sweep
+// quick-260921-o5z): no route ever imported it — the revoke handler reads
+// req.params.userId directly and Prisma's FK error maps to 404/400 there.

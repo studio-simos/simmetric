@@ -85,7 +85,7 @@ export async function writeEntityMap(
  * Load the entity-map rows for a document, ordered by placeholder
  * (deterministic re-composition source ordering for plans 03/05).
  */
-export async function loadEntityMap(documentId: string) {
+async function loadEntityMap(documentId: string) {
   return prisma.dlpEntity.findMany({
     where: { documentId },
     orderBy: { placeholder: "asc" },
@@ -132,7 +132,7 @@ export async function buildRecompositionMap(
  * and the document-purge cascade tests; document deletion already cascades
  * via FK, this is the explicit re-scan refresh seam).
  */
-export async function deleteEntityMap(documentId: string): Promise<number> {
+async function deleteEntityMap(documentId: string): Promise<number> {
   const result = await prisma.dlpEntity.deleteMany({ where: { documentId } });
   return result.count;
 }
@@ -160,7 +160,3 @@ export function buildPlaceholderRegex(placeholder: string): RegExp {
   const numPattern = num.split("").join("\\s*");
   return new RegExp(`\\[\\s*${clsPattern}\\s*_\\s*${numPattern}\\s*\\]`, "gi");
 }
-
-/** Type re-export so consumers (plan 03/05) don't import Prisma types. */
-export type DlpEntityRow = Awaited<ReturnType<typeof loadEntityMap>>[number];
-export type { DlpEntityClass };

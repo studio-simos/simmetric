@@ -78,7 +78,7 @@ const SLUG_RE = /^[a-z0-9-]+$/;
 const PLACEHOLDER_RE = /\{\{\s*([a-zA-Z0-9_-]+)\s*\}\}/g;
 
 /** Extract the {{param}} names a template references (deduped, ordered). */
-export function extractPlaceholders(template: string): string[] {
+function extractPlaceholders(template: string): string[] {
   const out: string[] = [];
   for (const match of template.matchAll(PLACEHOLDER_RE)) {
     const key = match[1] as string;

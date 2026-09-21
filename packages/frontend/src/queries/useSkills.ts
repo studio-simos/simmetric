@@ -24,7 +24,7 @@ import { queryKeys } from "./keys";
 /* ------------------------------------------------------------------ */
 
 /** GET /api/skills builtin arm row (read-only registry catalog entries). */
-export interface BuiltinSkillEntry {
+interface BuiltinSkillEntry {
   name: string;
   displayName: string;
   description: string;

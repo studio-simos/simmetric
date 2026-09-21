@@ -132,27 +132,30 @@ jobs:
             exit 1
           fi
           echo "OK: no english-only query literals outside ftsService.ts."
-      - name: Test-count guard (community suite ≤ 3900, recalibrated quick 260831-sqr)
+      - name: Test-count guard (community suite ≤ 5200, recalibrated quick 260921-o5z)
         # Phase 148 SC-3 / D-07: cap community suite growth. The glob is top-level
         # __tests__/ files only (NOT recursive — Pitfall 6). The enterprise package's
         # own __tests__/ is a separate package and NOT counted (D-07).
-        # Recalibration (quick 260831-sqr): the original cap 3404 (15% over the
-        # v1.0 baseline 2960) went stale — the v0.22 milestone grew the suite to
-        # 3781 (server 2995 + frontend 786), so the guard could never pass and
-        # the step had never actually run (test-unit always failed upstream).
-        # New cap 3900 ≈ 3% headroom over the audited 3781 — still an anti-bloat
-        # tripwire, not a permanent red. Re-audit when this trips again.
+        # Recalibration history:
+        #  - quick 260831-sqr: original cap 3404 (15% over the v1.0 baseline
+        #    2960) went stale — the v0.22 milestone grew the suite to 3781
+        #    (server 2995 + frontend 786); new cap 3900 ≈ 3% headroom.
+        #  - quick 260921-o5z: cap 3900 went stale when the suite grew through
+        #    the v0.25/v0.26 phases (192 DLP, 193 LDAP, 190 skills) to 5045
+        #    (server 4042 + frontend 1003, measured 2026-09-21). New cap
+        #    5200 ≈ 3% headroom over the audited 5045 — still an anti-bloat
+        #    tripwire, not a permanent red. Re-audit when this trips again.
         run: |
           COUNT=$(rg -c '^\s*(it|test|describe)\(' \
             packages/server/src/__tests__/*.test.ts \
             packages/frontend/src/__tests__/*.test.tsx \
             2>/dev/null | awk -F: '{s+=$2} END {print s}')
-          echo "Community suite test count: $COUNT (cap: 3900, recalibrated baseline: 3781)"
-          if [ "$COUNT" -gt 3900 ]; then
-            echo "::error::Test count $COUNT exceeds cap 3900 (recalibrated quick 260831-sqr over the audited 3781). Suite bloat — add tests only when the behavior demands it."
+          echo "Community suite test count: $COUNT (cap: 5200, recalibrated baseline: 5045)"
+          if [ "$COUNT" -gt 5200 ]; then
+            echo "::error::Test count $COUNT exceeds cap 5200 (recalibrated quick 260921-o5z over the audited 5045). Suite bloat — add tests only when the behavior demands it."
             exit 1
           fi
-          echo "OK: $COUNT tests under cap 3900"
+          echo "OK: $COUNT tests under cap 5200"
     env:
       JWT_SECRET: ci-test-secret-key-32chars-long!!
       DATABASE_URL: postgresql://simmetricchat:simmetricchat@127.0.0.1:5432/simmetricchat_test

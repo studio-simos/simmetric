@@ -18,9 +18,15 @@ export { chatRequestSchema, renameChatSchema, updateChatModelSchema, linkArchive
 export type { AgentPlan } from "./chat.schema";
 
 // Phase 190 (SKIL-01..05) — custom prompt-template skill contracts +
-// the skillCall transport schema consumed by chat.schema.ts.
-export { createSkillSchema, updateSkillSchema, testSkillSchema, skillCallSchema, skillIdParamSchema, promptSkillConfigSchema, skillInputSchemaSchema, skillScopeSchema, slugSchema, RESERVED_SLUGS, SPOTLIGHT_DELIMITER_MARKERS } from "./skill.schema";
-export type { CreateSkillInput, UpdateSkillInput, TestSkillInput, SkillCallInput, PromptSkillConfig, SkillInputSchema, SkillScope } from "./skill.schema";
+// the skillCall transport schema consumed by chat.schema.ts. The
+// skill-internal schemas (promptSkillConfigSchema, skillInputSchemaSchema,
+// skillScopeSchema, slugSchema, SPOTLIGHT_DELIMITER_MARKERS) and their
+// inferred types are NOT re-exported here (knip sweep, quick-260921-o5z):
+// they have no consumer outside skill.schema.ts — its own schema
+// compositions and z.infer keep them alive in-file. skillCallSchema also
+// stays barrel-less: chat.schema.ts imports it directly from the source
+// module.
+export { createSkillSchema, updateSkillSchema, testSkillSchema, skillIdParamSchema, RESERVED_SLUGS } from "./skill.schema";
 
 export { bulkDeleteDocumentsSchema } from "./document.schema";
 
@@ -29,21 +35,26 @@ export type { ConfigKey, SetConfigInput } from "./config.schema";
 
 export { chatRetentionSchema } from "./chatRetention.schema";
 
-export { createRoleSchema, updateRoleSchema, grantWorkspaceAccessSchema, roleIdParamSchema } from "./role.schema";
+export { createRoleSchema, updateRoleSchema, roleIdParamSchema } from "./role.schema";
 
 // Phase 189 (WSIS-03, D-18): route-specific workspace-access contracts —
 // grant (WITHOUT the optional workspaceId; route takes it from the URL),
 // bulk grant, list-entry wire shape, and the revoke path-param guard.
-export { grantWorkspaceAccessRouteSchema, bulkGrantWorkspaceAccessSchema, workspaceAccessListEntrySchema, workspaceAccessParamsSchema } from "./workspaceAccess.schema";
-export type { GrantWorkspaceAccessRouteInput, BulkGrantWorkspaceAccessInput, WorkspaceAccessListEntry } from "./workspaceAccess.schema";
+// grantWorkspaceAccessSchema (role.schema's route-agnostic body) is NOT
+// re-exported here: its only parse happens inside role.schema.ts itself
+// (GrantWorkspaceAccessInput, knip sweep quick-260921-o5z). The
+// workspaceAccess.* helper schemas/types are similarly single-file — only
+// the two route schemas + their route Input types cross the barrel.
+export { grantWorkspaceAccessRouteSchema, bulkGrantWorkspaceAccessSchema } from "./workspaceAccess.schema";
 
 // Phase 189 (WSIS-01, D-05): personal-workspace creation body.
 export { createPersonalWorkspaceSchema } from "./personalWorkspace.schema";
-export type { CreatePersonalWorkspaceInput } from "./personalWorkspace.schema";
 
 // Phase 182 (SAAS-01d/D-04) — org membership contracts (roleInOrg tier above the 31-permission RBAC).
-export { roleInOrgSchema, createOrganizationMemberSchema } from "./organization.schema";
-export type { RoleInOrgInput, CreateOrganizationMemberInput } from "./organization.schema";
+// createOrganizationMemberSchema + its Input type are NOT re-exported here:
+// the schema composition + z.infer live inside organization.schema.ts and no
+// consumer parses this body through the barrel (knip sweep quick-260921-o5z).
+export { roleInOrgSchema } from "./organization.schema";
 
 
 
@@ -53,7 +64,11 @@ export type { LicensePayload } from "./license.schema";
 export { initializeSchema } from "./system.schema";
 export type { InitializeInput } from "./system.schema";
 
-export { widgetChatRequestSchema, widgetSessionCreateSchema, createWidgetSchema, updateWidgetSchema, widgetSessionIncrementSchema, widgetSearchRequestSchema, widgetLeadSubmitSchema, widgetAnalyticsQuerySchema, widgetWorkspaceArchiveFilterSchema, WIDGET_LOCALES, isHttpUrl, resolveWidgetTexts, resolveSuggestedQuestions, widgetContactOptionsSchema } from "./widget.schema";
+// widgetContactOptionsSchema is NOT re-exported here: its parse happens
+// inside widget.schema.ts's own create/update/resolve compositions
+// (contactConfig field) and the widget package consumes the inferred
+// WidgetContactOptions type (knip sweep quick-260921-o5z).
+export { widgetChatRequestSchema, widgetSessionCreateSchema, createWidgetSchema, updateWidgetSchema, widgetSessionIncrementSchema, widgetSearchRequestSchema, widgetLeadSubmitSchema, widgetAnalyticsQuerySchema, widgetWorkspaceArchiveFilterSchema, WIDGET_LOCALES, isHttpUrl, resolveWidgetTexts, resolveSuggestedQuestions } from "./widget.schema";
 export type { WidgetConfigResponse, WidgetCredits, WidgetContactOptions, WidgetWorkspaceArchiveFilterInput } from "./widget.schema";
 
 export { createMcpConnectionSchema, updateMcpConnectionSchema, toggleMcpConnectionSchema, mcpConnectionIdParamSchema, mcpCatalogEntryIdParamSchema, installMcpServerSchema, uninstallMcpServerSchema, mcpHeadersSchema } from "./mcpConnection.schema";
@@ -66,8 +81,12 @@ export { ocrJobApproveSchema, ocrJobRejectSchema, ocrPreviewRequestSchema, ocrPr
 export type { OcrModelConfig } from "./ocr.schema";
 
 // 260919-kvm — post-job page-repair contracts (re-OCR only [FAILED: pages).
-export { ocrPageRetryRequestSchema, ocrPageRepairResultSchema } from "./ocr.schema";
-export type { OcrPageRetryRequest, OcrPageRepairResult } from "./ocr.schema";
+// ocrPageRepairResultSchema + OcrPageRepairResult are NOT re-exported here:
+// the schema composes inside ocr.schema.ts (repairOcrPages result shape) and
+// the route reads the outcome structurally — no barrel consumer
+// (knip sweep quick-260921-o5z).
+export { ocrPageRetryRequestSchema } from "./ocr.schema";
+export type { OcrPageRetryRequest } from "./ocr.schema";
 
 export { wikiWritePreviewSchema, wikiWriteApproveRejectSchema, wikilinkResolveSchema, wikiDistillSchema, mergePagesSchema } from "./wiki.schema";
 
@@ -85,7 +104,7 @@ export { IngestResponseSchema, IngestStatusCallbackSchema, ReembedRequestSchema,
 export type { HybridSearchFilters } from "./ingest.schema";
 
 export { createUploadDraftSchema, createUploadDraftUrlSchema, assignDraftSchema, cancelDraftLegSchema, renameUploadSchema } from "./uploadDraft.schema";
-export type { AssignDraftInput, CancelDraftLegInput, DraftDestination } from "./uploadDraft.schema";
+export type { AssignDraftInput, DraftDestination } from "./uploadDraft.schema";
 
 export { nativeToolCallSchema } from "./toolCall.schema";
 
@@ -119,12 +138,22 @@ export type { SsoStatusResponse } from "./sso.schema";
 export { getOidcProviderFromDiscoveryUrl } from "./sso.schema";
 
 // Phase 193 (LDAP-01/02, D-03/D-04) — LDAP login + group-map contracts.
+// ldapLoginSchema is community-consumed (routes/authLdapComposite.ts) —
+// untagged export. The ldapMap* names are enterprise-only (routes/ldapAdmin.ts
+// map CRUD safeParse): tagged statement, private-repo allowlist (knip.json
+// `tags` — knip cannot see the root link: dep). Tag extraction reads the
+// comment directly above each export statement — keep the block adjacent to
+// the ldapMap* line only.
+export { ldapLoginSchema } from "./sso.schema";
 /**
  * @enterpriseConsumed — RUNTIME-imported by the private enterprise repo
- * (routes/ldap.ts login parse + routes/ldapAdmin.ts map CRUD safeParse).
+ * (routes/ldapAdmin.ts ldapMapRowSchema/ldapMapPutSchema safeParse).
  */
-export { ldapLoginSchema, ldapMapRowSchema, ldapMapPutSchema } from "./sso.schema";
-export type { LdapLoginInput, LdapMapRow, LdapMapPutInput } from "./sso.schema";
+export { ldapMapRowSchema, ldapMapPutSchema } from "./sso.schema";
+// The Ldap* Input types are NOT re-exported here: no consumer imports them
+// through the barrel — enterprise routes parse with the schemas themselves
+// and community code types the flow inline (knip sweep quick-260921-o5z).
+// The type exports stay in sso.schema.ts where they are inferred.
 
 // Phase 153 (WIKI-01) — graph-wiki trigger request validation (separate
 // endpoint from the LLM synthesis trigger; D-01 + A2).
@@ -141,13 +170,25 @@ export { saveSsoConfigSchema } from "./sso.schema";
  */
 export type { EnterprisePlugin, MinimalExpressApp, MinimalLogger } from "./plugin.schema";
 // Structural interfaces (no express/@prisma/client import — shared zero-dep rule).
-export { API_VERSION } from "./plugin.schema";
+// API_VERSION is NOT re-exported here: the loaders hardcode their accepted
+// apiVersion lists (enterpriseLoader [1], saasLoader [2]) — importing the
+// const would exit(1) real installs (plugin.schema.ts Pitfall 1) — and the
+// contract value is asserted by shared's own pluginSchema test
+// (knip sweep quick-260921-o5z).
 export type { PluginContext, MinimalPrismaClient, PluginScheduler, AuditLog, AuditLogEvent, ConfigKeyValidator } from "./plugin.schema";
 // Phase 186 (SAAS-05) — contract v2: SaaS plugin seam + minimal Part I hook
-// interfaces (D-01/D-03/D-04/D-06/D-07).
+// interfaces (D-01/D-03/D-04/D-06/D-07). Only SaaSPlugin is enterprise/SaaS-
+// sibling-consumed (simmetric-saas/src/index.ts) AND without an in-repo type
+// consumer, so only its barrel entry carries the tag; the rest are in-repo
+// consumed (server pluginLoaderCore.ts) and stay untagged.
+/**
+ * @enterpriseConsumed — imported (type) by the private SaaS sibling repo
+ * (simmetric-saas/src/index.ts imports SaaSPlugin). knip cannot see the
+ * file: sibling.
+ */
+export type { SaaSPlugin } from "./plugin.schema";
 export type {
   SaaSPluginContext,
-  SaaSPlugin,
   BillingProvider,
   QuotaEnforcer,
   PlanResolver,
@@ -220,18 +261,21 @@ export { dlpPatternIdParamSchema } from "./dlp.schema";
 // Phase 192 (DLP-01..04) — document-pipeline DLP contract vocabulary:
 // entity classes, scan-job payload, eval result (discriminated noRun union),
 // backfill request/response, preview unmask query.
+// NOT re-exported as SCHEMAS (knip sweep quick-260921-o5z — zero consumers
+// through the barrel; the schemas compose inside dlpDocumentScan.schema.ts):
+// the dlpEval* arm/row internals (dlpEvalClassRowSchema + the noRun/full
+// arms, consumed only by dlpEvalResultSchema's union), dlpEntityClassSchema
+// (consumed by the scan payload composition), dlpBackfillResponseSchema +
+// nerRequestPayloadSchema (single-file compositions). The DlpEvalClassRow
+// TYPE stays (server dlpEvalService imports it).
 export {
   DLP_ENTITY_CLASSES,
-  dlpEntityClassSchema,
   dlpScanJobPayloadSchema,
-  dlpEvalClassRowSchema,
   dlpEvalResultSchema,
   dlpEvalRunResponseSchema,
   dlpBackfillRequestSchema,
-  dlpBackfillResponseSchema,
   dlpUnmaskQuerySchema,
   nerResponseSchema,
-  nerRequestPayloadSchema,
 } from "./dlpDocumentScan.schema";
 export type {
   DlpEntityClass,
@@ -239,11 +283,8 @@ export type {
   DlpEvalClassRow,
   DlpEvalResult,
   DlpEvalRunResponse,
-  DlpBackfillRequest,
   DlpBackfillResponse,
-  DlpUnmaskQuery,
   NerResponse,
-  NerRequestPayload,
 } from "./dlpDocumentScan.schema";
 
 // Phase 176 (CF-01/D-01) — shared env-config surface (server + collector

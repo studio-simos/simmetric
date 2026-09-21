@@ -16,11 +16,9 @@ import { ROLE_IN_ORG_VALUES } from "../constants/organization";
  */
 export const roleInOrgSchema = z.enum(ROLE_IN_ORG_VALUES);
 
-export const createOrganizationMemberSchema = z.object({
-  organizationId: z.string().uuid("Invalid organization ID"),
-  userId: z.string().uuid("Invalid user ID"),
-  roleInOrg: roleInOrgSchema.default("member"),
-});
-
-export type RoleInOrgInput = z.infer<typeof roleInOrgSchema>;
-export type CreateOrganizationMemberInput = z.infer<typeof createOrganizationMemberSchema>;
+// createOrganizationMemberSchema (Phase 182 member-creation body) had no
+// consumer outside this file — the server validates member creation inline
+// (organizationService.assertRoleInOrg + Prisma write) — deleted by the
+// knip sweep (quick-260921-o5z). roleInOrgSchema stays: the server's
+// ensureDefaultOrgMembership validates through it. The org-role VALUE type
+// is `RoleInOrg` in constants/organization.ts (server imports that one).

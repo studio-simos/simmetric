@@ -56,7 +56,7 @@ import {
 import { isValidCodiceFiscale, isValidPartitaIva, isValidIban } from "./dlpChecksum";
 
 /** Default committed corpus dir (D-11: synthetic only — real docs never enter the repo). */
-export const DEFAULT_EVAL_CORPUS_DIR = join(__dirname, "..", "__tests__", "fixtures", "dlp-eval");
+const DEFAULT_EVAL_CORPUS_DIR = join(__dirname, "..", "__tests__", "fixtures", "dlp-eval");
 
 /** SystemConfig row key persisting the last run (NOT admin-editable — internal). */
 export const DLP_EVAL_LAST_RUN_KEY = "DLP_EVAL_LAST_RUN";

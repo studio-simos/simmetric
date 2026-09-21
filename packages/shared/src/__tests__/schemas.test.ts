@@ -42,7 +42,6 @@ import {
 import {
   grantWorkspaceAccessRouteSchema,
   bulkGrantWorkspaceAccessSchema,
-  workspaceAccessListEntrySchema,
 } from "../schemas/workspaceAccess.schema";
 import { createPersonalWorkspaceSchema } from "../schemas/personalWorkspace.schema";
 import { createProjectSchema } from "../schemas/project.schema";
@@ -675,43 +674,9 @@ describe("bulkGrantWorkspaceAccessSchema", () => {
   });
 });
 
-// Phase 189 (WSIS-03, D-15): list-entry wire shape.
-describe("workspaceAccessListEntrySchema", () => {
-  const UUID = "550e8400-e29b-41d4-a716-446655440000";
-
-  it("accepts grantedBy null (legacy-row marker, D-12)", () => {
-    const result = workspaceAccessListEntrySchema.safeParse({
-      userId: UUID,
-      username: "alice",
-      role: "editor",
-      grantedAt: "2026-09-15T00:00:00.000Z",
-      grantedBy: null,
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts a granted admin string", () => {
-    const result = workspaceAccessListEntrySchema.safeParse({
-      userId: UUID,
-      username: "alice",
-      role: "viewer",
-      grantedAt: "2026-09-15T00:00:00.000Z",
-      grantedBy: "660e8400-e29b-41d4-a716-446655440001",
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects an unknown role", () => {
-    const result = workspaceAccessListEntrySchema.safeParse({
-      userId: UUID,
-      username: "alice",
-      role: "moderator",
-      grantedAt: "2026-09-15T00:00:00.000Z",
-      grantedBy: null,
-    });
-    expect(result.success).toBe(false);
-  });
-});
+// Phase 189 (WSIS-03, D-15): the list-entry wire shape is now an unexported
+// in-file contract (knip sweep quick-260921-o5z — the list route reshapes
+// the Prisma rows inline), so its parse-contract tests went with it.
 
 // Phase 189 (WSIS-01, D-05): personal-workspace creation body.
 describe("createPersonalWorkspaceSchema", () => {

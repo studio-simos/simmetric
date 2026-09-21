@@ -115,8 +115,10 @@ export const ocrPageRetryRequestSchema = z.object({
 });
 export type OcrPageRetryRequest = z.infer<typeof ocrPageRetryRequestSchema>;
 
-// Repair response — per-page outcome + recomputed document tallies.
-export const ocrPageRepairResultSchema = z.object({
+// Repair response — per-page outcome + recomputed document tallies. No
+// external consumer parses this schema or names the type (the route reads
+// the outcome structurally — knip sweep quick-260921-o5z).
+const ocrPageRepairResultSchema = z.object({
   repaired: z.array(
     z.object({
       pageNumber: z.number().int().positive(),
@@ -127,4 +129,3 @@ export const ocrPageRepairResultSchema = z.object({
   failedPages: z.number().int().nonnegative(),
   qualityScore: z.number().nullable(),
 });
-export type OcrPageRepairResult = z.infer<typeof ocrPageRepairResultSchema>;

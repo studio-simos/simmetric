@@ -39,7 +39,7 @@ export interface ArchiveFlatRow {
 }
 
 /** A widget inside a project group, with only THAT project's workspaces. */
-export interface ArchiveGroupWidget {
+interface ArchiveGroupWidget {
   id: string;
   name: string;
   isActive: boolean;

@@ -10,6 +10,11 @@ import { S3Provider } from "./storage/s3Provider";
 
 // Re-export for consumers + tests (the default arm's class is part of the
 // module's public surface, vectorStore-style).
+/**
+ * @enterpriseConsumed — RUNTIME-imported by the private enterprise repo
+ * (services/backup/providers/providerRegistry.ts dynamic import of
+ * S3Provider). knip cannot see the private repo.
+ */
 export { LocalFSProvider, S3Provider };
 
 /**

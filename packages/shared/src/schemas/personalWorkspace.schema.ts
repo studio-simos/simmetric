@@ -15,5 +15,3 @@ import { z } from "zod";
 export const createPersonalWorkspaceSchema = z.object({
   workspaceName: z.string().min(1).max(100),
 });
-
-export type CreatePersonalWorkspaceInput = z.infer<typeof createPersonalWorkspaceSchema>;

@@ -79,7 +79,7 @@ const MAX_ITERATIONS_BACKSTOP = 50;
  * translates it into a "model unavailable — choose another" state and opens
  * the model palette instead of auto-falling back to a substitute.
  */
-export class ModelNotAvailableError extends Error {
+class ModelNotAvailableError extends Error {
   readonly requestedModel: string;
   constructor(requestedModel: string) {
     super(

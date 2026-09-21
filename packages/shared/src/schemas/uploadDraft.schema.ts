@@ -66,7 +66,6 @@ export type AssignDraftInput = z.infer<typeof assignDraftSchema>;
 export const cancelDraftLegSchema = z.object({
   leg: z.enum(["rag", "kb"]).optional(),
 });
-export type CancelDraftLegInput = z.infer<typeof cancelDraftLegSchema>;
 
 // D-07 (Phase 76): rename body for PATCH /api/uploads/:id. 1-500 char — the
 // rename target is a display name (NOT an OS filename), so 500 wins over the

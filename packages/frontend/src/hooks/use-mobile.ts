@@ -6,7 +6,6 @@
 import {useState, useEffect} from "react"
 
 const MOBILE_BREAKPOINT = 768
-const LG_BREAKPOINT = 1024
 
 export function useIsMobile() {
   const [isMobile, setIsMobile] = useState<boolean | undefined>(undefined)
@@ -24,25 +23,9 @@ export function useIsMobile() {
   return !!isMobile
 }
 
-/**
- * useBelowLg — true when the viewport is narrower than `lg` (1024px).
- *
- * Drives the chat-area responsive split: below `lg` the chat sidebar collapses
- * to a Sheet and the console (RightPanel) surfaces via a trigger in the chat
- * title bar; at `lg`+ both are inline and the title bar is hidden.
- */
-export function useBelowLg() {
-  const [belowLg, setBelowLg] = useState<boolean | undefined>(undefined)
-
-  useEffect(() => {
-    const mql = window.matchMedia(`(max-width: ${LG_BREAKPOINT - 1}px)`)
-    const onChange = () => {
-      setBelowLg(window.innerWidth < LG_BREAKPOINT)
-    }
-    mql.addEventListener("change", onChange)
-    setBelowLg(window.innerWidth < LG_BREAKPOINT)
-    return () => mql.removeEventListener("change", onChange)
-  }, [])
-
-  return !!belowLg
-}
+// useBelowLg (lg=1024px viewport probe) was REMOVED by the quick-260921-o5z
+// knip sweep: its last consumer (ChatPanel's below-lg responsive split) was
+// replaced by pure CSS (`lg:hidden` trigger + RightPanel's internal
+// `hidden lg:flex`) in the R-2/R-3 UI revision (fb2524eb, 2026-09-09) — the
+// hook had zero references since then. Re-introduce via useIsMobile's pattern
+// (matchMedia on a 1023px max-width) if a JS-side lg probe is ever needed.

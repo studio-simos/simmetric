@@ -57,7 +57,7 @@ interface SkillsPaletteProps {
 }
 
 /** D-10: 10 rendered SELECTABLE rows + scroll (max-h-[400px]). */
-export const SKILLS_PALETTE_MAX_ROWS = 10;
+const SKILLS_PALETTE_MAX_ROWS = 10;
 
 export default function SkillsPalette({
   open,

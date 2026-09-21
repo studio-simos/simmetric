@@ -56,7 +56,7 @@ export const dlpScanJobPayloadSchema = z.object({
 export type DlpScanJobPayload = z.infer<typeof dlpScanJobPayloadSchema>;
 
 /** Per-class eval row (D-11): detected vs expected counts + FP tally. */
-export const dlpEvalClassRowSchema = z.object({
+const dlpEvalClassRowSchema = z.object({
   entityClass: dlpEntityClassSchema,
   detected: z.number().int().min(0),
   expected: z.number().int().min(0),
@@ -74,11 +74,11 @@ export type DlpEvalClassRow = z.infer<typeof dlpEvalClassRowSchema>;
  * The arms are named so dlpEvalRunResponseSchema can extend both (Zod 4
  * discriminated unions have no .extend of their own).
  */
-export const dlpEvalNoRunArmSchema = z.object({
+const dlpEvalNoRunArmSchema = z.object({
   noRun: z.literal(true),
   passed: z.literal(false),
 });
-export const dlpEvalFullResultArmSchema = z.object({
+const dlpEvalFullResultArmSchema = z.object({
   noRun: z.literal(false).optional(),
   passed: z.boolean(),
   fpRate: z.number().min(0),
@@ -106,7 +106,6 @@ export type DlpEvalRunResponse = z.infer<typeof dlpEvalRunResponseSchema>;
  * clients may send `{}` or a JSON body with no declared keys).
  */
 export const dlpBackfillRequestSchema = z.object({}).passthrough().optional();
-export type DlpBackfillRequest = z.infer<typeof dlpBackfillRequestSchema>;
 
 /** D-12 — POST /api/system/dlp/backfill response. */
 export const dlpBackfillResponseSchema = z.object({
@@ -139,7 +138,6 @@ const booleanQueryParamSchema = z
 export const dlpUnmaskQuerySchema = z.object({
   unmask: booleanQueryParamSchema.optional(),
 });
-export type DlpUnmaskQuery = z.infer<typeof dlpUnmaskQuerySchema>;
 
 /**
  * Phase 192 plan 02 (D-02) — LLM NER wire contracts.
@@ -160,7 +158,6 @@ export const nerResponseSchema = z.object({
 export type NerResponse = z.infer<typeof nerResponseSchema>;
 
 /** NER request payload bound (chunkText max mirrors the 10k free-text cap). */
-export const nerRequestPayloadSchema = z.object({
+const nerRequestPayloadSchema = z.object({
   chunkText: z.string().min(1).max(10_000),
 });
-export type NerRequestPayload = z.infer<typeof nerRequestPayloadSchema>;

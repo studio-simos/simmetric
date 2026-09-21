@@ -155,7 +155,7 @@ describe("widgetDailyMessageLimiter max function (151-02, G-151-1b)", () => {
     mockRedisInstance.get.mockResolvedValue(
       JSON.stringify({ id: "wid-abc", sessionLimitPerDay: 0 }),
     );
-    expect(await maxFn(maxReq("/api/chat/wid-abc/stream"), {})).toBe(mod.WIDGET_UNLIMITED_MAX);
+    expect(await maxFn(maxReq("/api/chat/wid-abc/stream"), {})).toBe(2147483647);
   });
 
   it("ignores null/negative sessionLimitPerDay → global default (50 dev)", async () => {

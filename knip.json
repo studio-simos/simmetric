@@ -84,12 +84,24 @@
         // resolved via the server package's deps through pnpm node_modules.
         "@prisma/adapter-pg",
         "pg",
-        "jest"
+        "jest",
+        // e2e specs resolve these via `createRequire(requireFromServer("…"))`
+        // STRING seams (e2e/globalSetup.ts:62, custom-skills.spec.ts:127,
+        // workspace-access.spec.ts:143, schema-prompt.spec.ts) — knip cannot
+        // follow createRequire, established idiom (pnpm strict isolation).
+        "bcryptjs",
+        "simple-git"
       ]
     },
     "packages/shared": {},
     "packages/server": {
       "entry": ["scripts/*"],
+      // @simmetric-chat/saas: the loader resolves this STRING at runtime via
+      // __pluginResolver/require.resolve (src/services/saasLoader.ts:52,
+      // `specifier: "@simmetric-chat/saas"`) — no static import exists,
+      // identical seam to the root @simmetric-chat/enterprise ignore entry
+      // (knip cannot follow require.resolve of a file: sibling).
+      "ignoreDependencies": ["@simmetric-chat/saas"],
       // jest.config.integration-nodb.js: consumed via `npx jest --config
       // jest.config.integration-nodb.js` (a CLI flag knip cannot see) —
       // file-level ignore covers its module.exports (knip false-flags the

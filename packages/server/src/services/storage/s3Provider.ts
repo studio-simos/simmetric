@@ -63,7 +63,7 @@ export interface S3Config {
 const clientMemo = new Map<string, S3Client>();
 
 /** Test-only accessor for the memoization probe (conformance suite). */
-export function getClientMemoSize(): number {
+function getClientMemoSize(): number {
   return clientMemo.size;
 }
 

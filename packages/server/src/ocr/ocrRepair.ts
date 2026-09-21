@@ -42,21 +42,21 @@ const ARCHIVES_BASE = path.resolve(process.cwd(), "storage/archives");
 const MAX_REPAIR_TARGETS = 50;
 const MAX_REPAIR_ATTEMPTS = 2;
 
-export class JobNotFoundError extends Error {
+class JobNotFoundError extends Error {
   constructor() {
     super("Job not found");
     this.name = "JobNotFoundError";
   }
 }
 
-export class JobNotCompletedError extends Error {
+class JobNotCompletedError extends Error {
   constructor() {
     super("Job not completed");
     this.name = "JobNotCompletedError";
   }
 }
 
-export class TooManyRepairTargetsError extends Error {
+class TooManyRepairTargetsError extends Error {
   requestedCount: number;
   constructor(count: number) {
     super(`Too many failed pages (max ${MAX_REPAIR_TARGETS} per request)`);
@@ -65,7 +65,7 @@ export class TooManyRepairTargetsError extends Error {
   }
 }
 
-export interface RepairPageOutcome {
+interface RepairPageOutcome {
   pageNumber: number;
   markdown: string;
   stillFailed: boolean;

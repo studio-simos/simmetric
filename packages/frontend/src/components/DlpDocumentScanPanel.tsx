@@ -105,7 +105,7 @@ function ClassRow({
   );
 }
 
-export function DlpDocumentScanPanel() {
+function DlpDocumentScanPanel() {
   const { t } = useTranslation();
   const { data: evalResult, isLoading: evalLoading, error: evalError, refetch: refetchEval } =
     useDlpEvalResult();

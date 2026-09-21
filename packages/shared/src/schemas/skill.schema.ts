@@ -29,7 +29,7 @@ import { z } from "zod";
  */
 
 /** Slug for the /slash invocation: kebab-case, max 50 (spec §2.2). */
-export const slugSchema = z.string().min(1).max(50).regex(/^[a-z0-9-]+$/, "Invalid slug");
+const slugSchema = z.string().min(1).max(50).regex(/^[a-z0-9-]+$/, "Invalid slug");
 
 /**
  * D-08 — slugs a custom skill may never take: the 5 hardcoded chat commands
@@ -53,16 +53,14 @@ export const RESERVED_SLUGS = [
 ] as const;
 
 /** D-05 — three scope levels (per-project rides Workspace → Project, no column). */
-export const skillScopeSchema = z.enum(["personal", "workspace", "global"]);
-export type SkillScope = z.infer<typeof skillScopeSchema>;
+const skillScopeSchema = z.enum(["personal", "workspace", "global"]);
 
 /** D-01/D-03 — prompt-mode config. injectAs is the literal "user" ONLY (D-12). */
-export const promptSkillConfigSchema = z.object({
+const promptSkillConfigSchema = z.object({
   template: z.string().min(1).max(50000),
   defaultParams: z.record(z.string(), z.string()).default({}),
   injectAs: z.literal("user").default("user"),
 });
-export type PromptSkillConfig = z.infer<typeof promptSkillConfigSchema>;
 
 /**
  * JSON-Schema-ish input contract: properties keyed by param name (permissive
@@ -70,14 +68,13 @@ export type PromptSkillConfig = z.infer<typeof promptSkillConfigSchema>;
  * extras (type, additionalProperties, …). Defaults to {} so a template
  * without placeholders needs no properties at all (D-04).
  */
-export const skillInputSchemaSchema = z
+const skillInputSchemaSchema = z
   .object({
     properties: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
     required: z.array(z.string()).default([]),
   })
   .passthrough()
   .default({ properties: {}, required: [] });
-export type SkillInputSchema = z.infer<typeof skillInputSchemaSchema>;
 
 /** Template placeholder extraction — exactly 2 braces around word/hyphen chars. */
 const TEMPLATE_PLACEHOLDER_RE = /\{\{\s*([a-zA-Z0-9_-]+)\s*\}\}/g;
@@ -98,7 +95,7 @@ const TOOL_CALL_SYNTAX_MARKERS = ["<function_calls>", "<tool_call>", "⌜"] as c
  * neutralizes any that still arrive via param values (defense-in-depth).
  * Shared here (not imported from the server) so the schema stays a leaf.
  */
-export const SPOTLIGHT_DELIMITER_MARKERS = [
+const SPOTLIGHT_DELIMITER_MARKERS = [
   "=== BEGIN USER-SUPPLIED",
   "=== END USER-SUPPLIED",
 ] as const;
@@ -195,7 +192,6 @@ export const createSkillSchema = z
     // update refine reuses the same scan).
     rejectTemplateInjectionMarkers(data.config.template, ctx);
   });
-export type CreateSkillInput = z.infer<typeof createSkillSchema>;
 
 /**
  * PUT /api/skills/:id body — standalone object (NOT .partial() — drops refines
@@ -258,13 +254,11 @@ export const updateSkillSchema = z
       });
     }
   });
-export type UpdateSkillInput = z.infer<typeof updateSkillSchema>;
 
 /** POST /api/skills/:id/test body — compiled-prompt preview, no LLM call (D-21). */
 export const testSkillSchema = z.object({
   params: z.record(z.string(), z.string().max(50000)).default({}),
 });
-export type TestSkillInput = z.infer<typeof testSkillSchema>;
 
 /**
  * D-11 — the chat-stream transport for an explicit /slug invocation. Rides
@@ -278,7 +272,6 @@ export const skillCallSchema = z
     params: z.record(z.string(), z.string().max(50000)).optional(),
   })
   .strict();
-export type SkillCallInput = z.infer<typeof skillCallSchema>;
 
 /** :id route param guard. */
 export const skillIdParamSchema = z.object({

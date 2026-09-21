@@ -12,5 +12,12 @@ export type { FeatureFlag } from "./license";
 export { PROVIDER_PRESETS } from "./providerPresets";
 export type { ProviderPresetCategory } from "./providerPresets";
 
-export { DEFAULT_ORG_ID, DEFAULT_ORG_SLUG, ROLE_IN_ORG_VALUES } from "./organization";
+// DEFAULT_ORG_SLUG / ROLE_IN_ORG_VALUES are NOT re-exported here: knip
+// (quick-260921-o5z) proved neither has a consumer through this barrel —
+// the default-org slug contract is pinned by the M1 migration's SQL literal
+// (`slug = 'default'`, migrations/20260904120000_m1_create_org) and
+// DEFAULT_ORG_ID carries the runtime seam; ROLE_IN_ORG_VALUES is consumed
+// only in-file by schemas/organization.schema.ts (z.enum). The source-file
+// exports keep the schema's direct import path working.
+export { DEFAULT_ORG_ID } from "./organization";
 export type { RoleInOrg } from "./organization";

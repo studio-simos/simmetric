@@ -14,11 +14,6 @@ import { z } from "zod";
 // Treat empty form inputs as null (matches widget.schema.ts convention).
 const emptyStringToNull = (val: unknown) => (val === "" ? null : val);
 
-/**
- * @enterpriseConsumed — RUNTIME-imported by the private enterprise repo
- * (routes/sso.ts saveSsoConfigSchema). knip cannot see the root `link:` dep;
- * this tag is the allowlist mechanism (see knip.json `tags`).
- */
 export const saveSsoConfigSchema = z.object({
   provider: z.enum(["saml", "oidc", "ldap"]),
   enabled: z.boolean().default(false),
@@ -133,7 +128,9 @@ export const ldapLoginSchema = z.object({
   password: z.string().min(1),
 });
 
-export type LdapLoginInput = z.infer<typeof ldapLoginSchema>;
+// The Ldap* Input types are NOT exported (knip sweep quick-260921-o5z):
+// consumers parse with the schemas themselves (community authLdapComposite,
+// enterprise ldapAdmin) and no code names these types.
 
 // LdapGroupRoleMap CRUD contracts (D-04) — admin surface for the
 // group→role mapping (Plan 02 routes consume these with safeParse).
@@ -145,9 +142,6 @@ export const ldapMapRowSchema = z.object({
 export const ldapMapPutSchema = z.object({
   mappings: z.array(ldapMapRowSchema),
 });
-
-export type LdapMapRow = z.infer<typeof ldapMapRowSchema>;
-export type LdapMapPutInput = z.infer<typeof ldapMapPutSchema>;
 
 // ===== OIDC Provider Derivation (Phase 143 — D-07) =====
 // Pure string-match helper: derives the canonical built-in provider name

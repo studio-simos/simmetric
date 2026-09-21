@@ -52,7 +52,7 @@ export interface ArchiveFlatRow {
 }
 
 /** Four-field stats object (spec §3.1): totals + effective orphans (D-02). */
-export interface ArchiveStats {
+interface ArchiveStats {
   totalWidgets: number;
   totalWorkspacesLinked: number;
   totalProjects: number;
@@ -90,12 +90,7 @@ export function useFlatArchive(filters: WidgetWorkspaceArchiveFilterInput, enabl
 
 /** Archive stats header — totals + effective orphans (no filters, spec §3.1). */
 export function useArchiveStats() {
-  return useQuery<{
-    totalWidgets: number;
-    totalWorkspacesLinked: number;
-    totalProjects: number;
-    orphans: number;
-  }, Error>({
+  return useQuery<ArchiveStats, Error>({
     queryKey: queryKeys.widgets.archive.stats,
     queryFn: () => apiGet(`/widgets/workspace-archive/stats`),
     staleTime: 30_000,

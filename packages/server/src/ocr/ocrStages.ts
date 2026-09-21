@@ -80,7 +80,7 @@ const MAX_EMPTY_RETRIES = 1;
  * failOcrJob, no auto-approve-on-fail side effects — the row was already
  * flipped by the cancel route.
  */
-export class OcrJobCancelledError extends Error {
+class OcrJobCancelledError extends Error {
   constructor(message = "OCR job cancelled by user") {
     super(message);
     this.name = "OcrJobCancelledError";

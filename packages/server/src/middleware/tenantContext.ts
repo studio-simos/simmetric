@@ -83,7 +83,7 @@ export async function resolveOrgFor(req: Request): Promise<string | null> {
  * (unchanged admin bypass — platform-level only, org-scoped license counting
  * keeps working via req.organizationId).
  */
-export function tenantStoreFor(req: Request, organizationId: string): TenantStore {
+function tenantStoreFor(req: Request, organizationId: string): TenantStore {
   return { organizationId, bypass: isAdmin(req.user) };
 }
 

@@ -21,7 +21,7 @@ const isDev = getEnv().NODE_ENV !== "production";
 // limit" (the docs recommend skip or a large max) — reusing the existing
 // async `max` keeps ONE Redis read per request instead of adding a second
 // Redis-reading `skip` callback.
-export const WIDGET_UNLIMITED_MAX = 2147483647;
+const WIDGET_UNLIMITED_MAX = 2147483647;
 
 // Exported key generators for testability (express-rate-limit v8 doesn't expose keyGenerator on handler).
 // SEC-02: key on the widgetId from the URL path so throttling is per-tenant

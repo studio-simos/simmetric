@@ -21,8 +21,12 @@
 /** Fixed UUID of the default Organization — the air-gap tenancy root. */
 export const DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000000";
 
-/** Stable slug of the default Organization (M1 INSERT pins the same value). */
-export const DEFAULT_ORG_SLUG = "default";
+/**
+ * Stable slug of the default Organization (M1 INSERT pins the same value).
+ * No runtime consumer today (request/job code pins DEFAULT_ORG_ID instead) —
+ * the slug lives as a comment so the M1 contract value is still greppable:
+ * M1 INSERT pins `slug = 'default'`.
+ */
 
 /**
  * roleInOrg value set (OrganizationMember.roleInOrg) — enum-as-string pattern

@@ -649,7 +649,7 @@ export async function seedBootstrapAdmin(): Promise<void> {
  * and the management UI can render the builtin catalog. Upsert keyed by the
  * unique name, empty update arm (idempotent — values are code-owned constants).
  */
-export async function seedBuiltinSkills(): Promise<void> {
+async function seedBuiltinSkills(): Promise<void> {
   const builtins = getAllBuiltinSkills();
   for (const skill of builtins) {
     await prisma.agentSkill.upsert({
@@ -701,7 +701,7 @@ export async function seedDatabase(): Promise<void> {
  * name) with an empty update arm: existing rows (admin-toggled) are NEVER
  * rewritten by re-seeding.
  */
-export async function seedBuiltinDlpPatterns(): Promise<void> {
+async function seedBuiltinDlpPatterns(): Promise<void> {
   const { DLP_PATTERNS } = await import("./dlpFilter");
   const DISPLAY_NAMES: Record<string, string> = {
     email: "Email",

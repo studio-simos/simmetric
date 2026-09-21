@@ -40,7 +40,7 @@ export interface DocumentText {
  * (the masker writes them; masking is idempotent, D-03 — no regex on the
  * original values, only on the placeholder syntax).
  */
-export const DLP_PLACEHOLDER_REGEX = /\[\s*[A-Z][A-Z_]*\s*_\s*\d+\s*\]/;
+const DLP_PLACEHOLDER_REGEX = /\[\s*[A-Z][A-Z_]*\s*_\s*\d+\s*\]/;
 
 export function hasDlpPlaceholders(text: string | undefined): boolean {
   return typeof text === "string" && DLP_PLACEHOLDER_REGEX.test(text);
