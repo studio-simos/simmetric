@@ -74,7 +74,7 @@ export default function OcrJobList({ archiveId, onPreview }: Props) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
         <FileText className="h-10 w-10 text-muted-foreground/50 mb-3" />
-        <p className="text-[20px] font-semibold leading-[1.2] text-foreground">
+        <p className="text-[16px] font-semibold leading-[1.2] text-foreground">
           {t("ocr.jobList.emptyTitle") || "No ingestion jobs yet"}
         </p>
         <p className="text-sm text-muted-foreground mt-1">

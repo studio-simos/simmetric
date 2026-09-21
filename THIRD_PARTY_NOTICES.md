@@ -91,6 +91,25 @@ drift-gates the committed copy so a stale notices file fails the build.
 | (MIT OR GPL-3.0-or-later) | jszip | 3.10.1 | https://github.com/Stuk/jszip#readme |
 | (MPL-2.0 OR Apache-2.0) | dompurify | 3.4.14 | https://github.com/cure53/DOMPurify |
 | 0BSD | tslib | 2.8.1 | https://www.typescriptlang.org/ |
+| Apache-2.0 | @aws-sdk/checksums | 3.1000.29 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/checksums |
+| Apache-2.0 | @aws-sdk/client-s3 | 3.1127.0 | https://github.com/aws/aws-sdk-js-v3/tree/main/clients/client-s3 |
+| Apache-2.0 | @aws-sdk/core | 3.977.9 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/core |
+| Apache-2.0 | @aws-sdk/credential-provider-env | 3.972.70 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-env |
+| Apache-2.0 | @aws-sdk/credential-provider-http | 3.972.72 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-http |
+| Apache-2.0 | @aws-sdk/credential-provider-ini | 3.973.15 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-ini |
+| Apache-2.0 | @aws-sdk/credential-provider-login | 3.972.77 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-login |
+| Apache-2.0 | @aws-sdk/credential-provider-node | 3.972.82 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-node |
+| Apache-2.0 | @aws-sdk/credential-provider-process | 3.972.70 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-process |
+| Apache-2.0 | @aws-sdk/credential-provider-sso | 3.973.14 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-sso |
+| Apache-2.0 | @aws-sdk/credential-provider-web-identity | 3.972.76 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-web-identity |
+| Apache-2.0 | @aws-sdk/lib-storage | 3.1127.0 | https://github.com/aws/aws-sdk-js-v3/tree/main/lib/lib-storage |
+| Apache-2.0 | @aws-sdk/middleware-sdk-s3 | 3.972.75 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/middleware-sdk-s3 |
+| Apache-2.0 | @aws-sdk/nested-clients | 3.997.44 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages/nested-clients |
+| Apache-2.0 | @aws-sdk/signature-v4-multi-region | 3.996.46 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages/signature-v4-multi-region |
+| Apache-2.0 | @aws-sdk/token-providers | 3.1116.0 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages/token-providers |
+| Apache-2.0 | @aws-sdk/types | 3.974.5 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/types |
+| Apache-2.0 | @aws-sdk/xml-builder | 3.972.40 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/xml-builder |
+| Apache-2.0 | @aws/lambda-invoke-store | 0.3.0 | https://github.com/awslabs/aws-lambda-invoke-store |
 | Apache-2.0 | @electric-sql/pglite | 0.4.3 | https://pglite.dev |
 | Apache-2.0 | @electric-sql/pglite-socket | 0.1.3 | https://pglite.dev |
 | Apache-2.0 | @electric-sql/pglite-tools | 0.3.3 | https://pglite.dev |
@@ -115,6 +134,12 @@ drift-gates the committed copy so a stale notices file fails the build.
 | Apache-2.0 | @prisma/studio-core | 0.33.0 | https://github.com/prisma/studio#readme |
 | Apache-2.0 | @puppeteer/browsers | 3.2.1 | https://github.com/puppeteer/puppeteer/tree/main#readme |
 | Apache-2.0 | @scarf/scarf | 1.4.0 | https://github.com/scarf-sh/scarf-js |
+| Apache-2.0 | @smithy/core | 3.33.3 | https://github.com/smithy-lang/smithy-typescript/tree/main/packages/core |
+| Apache-2.0 | @smithy/credential-provider-imds | 4.5.2 | https://github.com/smithy-lang/smithy-typescript/tree/main/packages/credential-provider-imds |
+| Apache-2.0 | @smithy/fetch-http-handler | 5.8.0 | https://github.com/smithy-lang/smithy-typescript/tree/main/packages/fetch-http-handler |
+| Apache-2.0 | @smithy/node-http-handler | 4.12.1 | https://github.com/smithy-lang/smithy-typescript/tree/main/packages/node-http-handler |
+| Apache-2.0 | @smithy/signature-v4 | 5.7.3 | https://github.com/smithy-lang/smithy-typescript/tree/main/packages/signature-v4 |
+| Apache-2.0 | @smithy/types | 4.18.0 | https://github.com/smithy-lang/smithy-typescript/tree/main/packages/types |
 | Apache-2.0 | @swc/helpers | 0.5.23 | https://swc.rs |
 | Apache-2.0 | @xenova/transformers | 2.17.2 | https://github.com/xenova/transformers.js#readme |
 | Apache-2.0 | adler-32 | 1.3.1 | http://sheetjs.com/opensource |
@@ -180,7 +205,6 @@ drift-gates the committed copy so a stale notices file fails the build.
 | BSD-2-Clause | entities | 4.5.0, 8.0.0 | https://github.com/fb55/entities#readme |
 | BSD-2-Clause | esprima | 4.0.1 | http://esprima.org |
 | BSD-2-Clause | esutils | 2.0.3 | https://github.com/estools/esutils |
-| BSD-2-Clause | json-schema-typed | 8.0.2 | https://github.com/RemyRylan/json-schema-typed/tree/main/dist/node |
 | BSD-2-Clause | lop | 0.4.2 | https://github.com/mwilliamson/lop#readme |
 | BSD-2-Clause | mammoth | 1.12.2 | https://github.com/mwilliamson/mammoth.js#readme |
 | BSD-2-Clause | option | 0.2.4 | https://github.com/mwilliamson/node-options#readme |
@@ -274,7 +298,6 @@ drift-gates the committed copy so a stale notices file fails the build.
 | ISC | y18n | 5.0.8 | https://github.com/yargs/y18n |
 | ISC | yaml | 2.0.0-1 | https://eemeli.org/yaml/ |
 | ISC | yargs-parser | 22.0.0 | https://github.com/yargs/yargs-parser#readme |
-| ISC | zod-to-json-schema | 3.25.2 | https://github.com/StefanTerdell/zod-to-json-schema#readme |
 | LGPL-3.0-or-later | @img/sharp-libvips-linux-x64 | 1.0.4, 1.2.4, 1.3.3 | https://sharp.pixelplumbing.com |
 | MIT | @apidevtools/json-schema-ref-parser | 14.0.1 | https://apidevtools.com/json-schema-ref-parser/ |
 | MIT | @apidevtools/openapi-schemas | 2.1.0 | https://apitools.dev/openapi-schemas |
@@ -303,7 +326,7 @@ drift-gates the committed copy so a stale notices file fails the build.
 | MIT | @floating-ui/dom | 1.8.0 | https://floating-ui.com |
 | MIT | @floating-ui/react-dom | 2.1.9 | https://floating-ui.com/docs/react-dom |
 | MIT | @floating-ui/utils | 0.2.12 | https://floating-ui.com |
-| MIT | @hono/node-server | 2.1.1 | https://github.com/honojs/node-server |
+| MIT | @hono/node-server | 1.19.17 | https://github.com/honojs/node-server |
 | MIT | @hookform/resolvers | 5.9.1 | https://react-hook-form.com |
 | MIT | @huggingface/jinja | 0.2.2, 0.3.4, 0.5.9 | https://github.com/huggingface/huggingface.js#readme |
 | MIT | @img/colour | 1.1.0 | https://github.com/lovell/colour#readme |
@@ -315,7 +338,11 @@ drift-gates the committed copy so a stale notices file fails the build.
 | MIT | @langchain/core | 1.2.9 | https://github.com/langchain-ai/langchainjs/tree/main/langchain-core/ |
 | MIT | @langchain/textsplitters | 1.0.1 | https://github.com/langchain-ai/langchainjs/tree/main/libs/langchain-textsplitters/ |
 | MIT | @microsoft/fetch-event-source | 2.0.1 | https://github.com/Azure/fetch-event-source#readme |
-| MIT | @modelcontextprotocol/sdk | 1.30.0 | https://modelcontextprotocol.io |
+| MIT | @modelcontextprotocol/client | 2.0.0 | https://modelcontextprotocol.io |
+| MIT | @modelcontextprotocol/core | 2.0.0 | https://modelcontextprotocol.io |
+| MIT | @modelcontextprotocol/node | 2.0.0 | https://modelcontextprotocol.io |
+| MIT | @modelcontextprotocol/server | 2.0.0 | https://modelcontextprotocol.io |
+| MIT | @modelcontextprotocol/server-legacy | 2.0.0 | https://modelcontextprotocol.io |
 | MIT | @napi-rs/canvas | 1.0.8 | https://github.com/Brooooooklyn/canvas#readme |
 | MIT | @napi-rs/canvas-linux-x64-gnu | 1.0.8 | https://github.com/Brooooooklyn/canvas#readme |
 | MIT | @noble/hashes | 1.8.0 | https://paulmillr.com/noble/ |
@@ -436,7 +463,7 @@ drift-gates the committed copy so a stale notices file fails the build.
 | MIT | agentkeepalive | 4.6.0 | https://github.com/node-modules/agentkeepalive#readme |
 | MIT | ajv | 8.20.0 | https://ajv.js.org |
 | MIT | ajv-draft-04 | 1.0.0 | https://github.com/ajv-validator/ajv-draft-04#readme |
-| MIT | ajv-formats | 2.1.1, 3.0.1 | https://github.com/ajv-validator/ajv-formats#readme |
+| MIT | ajv-formats | 2.1.1 | https://github.com/ajv-validator/ajv-formats#readme |
 | MIT | ansi-regex | 6.3.0 | https://github.com/chalk/ansi-regex#readme |
 | MIT | ansi-styles | 4.3.0, 6.2.3 | https://github.com/chalk/ansi-styles#readme |
 | MIT | append-field | 1.0.0 | https://github.com/LinusU/node-append-field#readme |
@@ -460,8 +487,9 @@ drift-gates the committed copy so a stale notices file fails the build.
 | MIT | bn.js | 4.12.5 | https://github.com/indutny/bn.js |
 | MIT | body-parser | 2.3.0 | https://github.com/expressjs/body-parser#readme |
 | MIT | boolean | 3.2.0 | https://github.com/thenativeweb/boolean#readme |
+| MIT | bowser | 2.14.1 | https://github.com/bowser-js/bowser |
 | MIT | brace-expansion | 5.0.9 | https://github.com/juliangruber/brace-expansion#readme |
-| MIT | buffer | 6.0.3 | https://github.com/feross/buffer |
+| MIT | buffer | 5.6.0, 6.0.3 | https://github.com/feross/buffer |
 | MIT | buffer-crc32 | 1.0.0 | https://github.com/brianloveswords/buffer-crc32 |
 | MIT | buffer-from | 1.1.2 | https://github.com/LinusU/buffer-from#readme |
 | MIT | busboy | 1.6.0 | https://github.com/mscdex/busboy#readme |
@@ -775,6 +803,8 @@ drift-gates the committed copy so a stale notices file fails the build.
 | MIT | standard-as-callback | 2.1.0 | https://github.com/luin/asCallback#readme |
 | MIT | statuses | 2.0.2 | https://github.com/jshttp/statuses#readme |
 | MIT | std-env | 3.10.0 | https://github.com/unjs/std-env#readme |
+| MIT | stdnum | 1.12.6 | https://github.com/koblas/stdnum-js#readme |
+| MIT | stream-browserify | 3.0.0 | https://github.com/browserify/stream-browserify |
 | MIT | streamsearch | 1.1.0 | https://github.com/mscdex/streamsearch#readme |
 | MIT | streamx | 2.28.1 | https://github.com/mafintosh/streamx |
 | MIT | string_decoder | 1.1.1, 1.3.0 | https://github.com/nodejs/string_decoder |
@@ -810,7 +840,7 @@ drift-gates the committed copy so a stale notices file fails the build.
 | MIT | uc.micro | 2.1.0 | https://github.com/markdown-it/uc.micro#readme |
 | MIT | uint8array-extras | 1.5.0 | https://github.com/sindresorhus/uint8array-extras#readme |
 | MIT | underscore | 1.13.8 | https://underscorejs.org |
-| MIT | undici | 7.29.0 | https://undici.nodejs.org |
+| MIT | undici | 7.29.1 | https://undici.nodejs.org |
 | MIT | undici-types | 5.26.5, 6.21.0, 8.3.0 | https://undici.nodejs.org |
 | MIT | unpipe | 1.0.0 | https://github.com/stream-utils/unpipe#readme |
 | MIT | use-callback-ref | 1.3.3 | https://github.com/theKashey/use-callback-ref#readme |

@@ -49,6 +49,14 @@ export const envSchema = z.object({
   // ALWAYS_READONLY and NOT registered in systemConfigService — read via
   // getEnv() only, same posture as REDIS_URL.
   COLLECTOR_INGEST_TIMEOUT_MS: z.coerce.number().int().min(0).optional(),
+  // Server→collector POST /api/ingest/wiki-pages wait cap (axios timeout in
+  // indexWikiPage — the hourly wiki-consistency reindex path). 2026-09-21
+  // incident: the hardcoded 60s aborted large wiki pages mid-embedding
+  // (local CPU Xenova is slow), so the drift healed only via manual
+  // re-save. Default 30 min (mirrors OCR_TIMEOUT's 10-min posture —
+  // local CPU embedding of a chunk batch is slow but bounded); 0 disables
+  // the cap entirely. ENV-only infra key (never DB/UI).
+  WIKI_EMBED_TIMEOUT_MS: z.coerce.number().int().min(0).default(1800000),
   // WID-04: widget service URL + shared secret for push HTTP cache-bust.
   // WIDGET_SERVICE_URL points at the widget Express service (default :3211).
   // WIDGET_API_KEY is the symmetric shared secret matching the widget

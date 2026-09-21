@@ -71,7 +71,7 @@ pnpm i18n:check         # i18n key parity across all 8 locales (if strings chang
 pnpm license:check-self # Assert root + all 5 package license fields stay AGPL-3.0-or-later
 ```
 
-CI (`.github/workflows/ci.yml`) runs the following jobs on every push to `main` and every PR: `lint-and-typecheck` (includes `pnpm knip` and `changelog:check`), `test-unit`, `test-airgap` (the unit suite re-run with `NETWORK_EGRESS_BLOCKED=1`), `migration-safety-check`, `license-policy-check` (per-package license allowlists; regenerates `THIRD_PARTY_NOTICES.md` / `docs/LICENSE_AUDIT.md` and fails on drift), `test-e2e` (Playwright against a `pgvector/pgvector:pg16` service), `build`, and `security` (gitleaks scan).
+CI (`.github/workflows/ci.yml`) runs the following jobs on every push to `main` (docs-only pushes — markdown, `docs/**`, LICENSE/SECURITY/CLA changes — skip CI; mixed code+docs commits always run) and every PR: `lint-and-typecheck` (includes `pnpm knip` and `changelog:check`), `test-unit`, `test-airgap` (the unit suite re-run with `NETWORK_EGRESS_BLOCKED=1`), `migration-safety-check`, `license-policy-check` (per-package license allowlists; regenerates `THIRD_PARTY_NOTICES.md` / `docs/LICENSE_AUDIT.md` and fails on drift), `test-e2e` (Playwright against a `pgvector/pgvector:pg16` service), `build`, and `security` (gitleaks scan).
 
 ## Issue Reporting
 

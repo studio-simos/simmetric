@@ -69,11 +69,16 @@ All scripts live in the root `package.json` (Turborepo-orchestrated unless noted
 | `pnpm audit:migrations` | Audit migrations for destructive ops; writes `docs/MIGRATION_AUDIT.md` |
 | `pnpm db:migrate:guard` / `pnpm db:migrate:reset:guard` | Consent guards for destructive migrate/reset |
 | `pnpm i18n:check` | Validate 8-locale translation parity (frontend + widget) |
-| `pnpm license:check` | Verify the configured license without booting the server (exit `0` valid, `1` invalid token, `2` env error) |
+| `pnpm license:check` | Verify the configured license without booting the server (exit `0` valid or no key → Community, `1` token doesn't entitle, `2` env-load error) |
 | `pnpm version:check` / `pnpm version:bump` | Root `package.json` major.minor vs latest git tag sync |
 | `pnpm changelog:check` | Requires a `[Unreleased]` CHANGELOG.md entry when `packages/*/src/**` changed (excluding `__tests__/` at any depth) |
 | `pnpm license:check-self` | Asserts root + all 5 package `license` fields stay `AGPL-3.0-or-later` |
 | `pnpm knip` | Dead-code gate (exit 1 on new unused files/deps/exports) |
+| `pnpm smoke:ollama` | Smoke-test Ollama connectivity from both the server and the collector |
+| `pnpm seed:reranker` | Seed the CrossEncoder reranker models (collector) |
+| `pnpm smoke:license-e2e` | License E2E smoke test (server) |
+| `pnpm smoke:multi-instance` | Multi-instance Redis scale smoke — needs Redis on `localhost:6379` |
+| `pnpm audit:secrets` | Publication secret audit over all tracked files (complements the CI gitleaks job) |
 | `pnpm tauri:dev` / `pnpm tauri:build` | Tauri v2 desktop shell |
 
 ## Testing Strategy
@@ -81,7 +86,7 @@ All scripts live in the root `package.json` (Turborepo-orchestrated unless noted
 Jest 30.x with `@swc/jest` as the active TypeScript transform (`ts-jest` is retained only as a documented rollback path). The root `jest.config.cjs` aggregates 5 projects: shared, server, frontend, collector, widget.
 
 - **Unit suites (`pnpm test`)** run Postgres-free. Server unit tests load `packages/server/.env.test` via `src/__tests__/helpers/setupEnv.ts` and mock heavy deps through jest `moduleNameMapper` (`uuid`, `jsdom`, `pdfjs-dist`, `puppeteer`, `pg-boss`, etc.). Server tests map `@simmetric-chat/shared` to `shared/dist/index.js` — see the shared-rebuild gotcha below.
-- **Integration suites (`pnpm --filter server test:integration`)** hit real Postgres on `localhost:5434` (per `packages/server/.env.test`), matching `*.integration.test.ts` files. Requires a Postgres user with CREATEDB — `jest.globalSetup.js` builds a template database (`simmetricchat_test_template`), each test file gets a cloned worker DB, and `jest.globalTeardown.js` cleans up.
+- **Integration suites (`pnpm --filter server test:integration`)** hit real Postgres on `localhost:5434` (per `packages/server/.env.test`), matching `*.integration.test.ts` files. Requires a Postgres user with CREATEDB — `jest.globalSetup.js` builds a template database (`simmetricchat_test_template`), each test file gets a cloned worker DB, and `jest.globalTeardown.js` cleans up. The collector has its own integration suite (`pnpm --filter collector test:integration`) against a `pgvector_test` DB on port `5433` (separate jest config, `jest.config.integration.cjs`).
 - **Single test:**
 
 ```bash
@@ -90,7 +95,7 @@ pnpm --filter server test -- -t "test name"               # by name
 ```
 
 - **Exclusions:** the root `jest.config.cjs` excludes the `check-build-freshness` and `restoreSymlinkTraversal` suites from local runs (environmental `/tmp` quota + path issues, not regressions; they may pass on CI).
-- **E2E (`pnpm test:e2e`)** needs local Postgres with `prisma migrate deploy` applied, plus built `@simmetric-chat/shared` and `frontend` (Playwright boots the services via plain `tsx` and `vite preview`). The Enterprise license JWT must be present in the gitignored root `.env` (read by the E2E `globalSetup`).
+- **E2E (`pnpm test:e2e`)** needs local Postgres with `prisma migrate deploy` applied, plus built `@simmetric-chat/shared` and `frontend` (Playwright boots the server and widget via plain `tsx` and the frontend via `vite preview`). The gitignored root `.env` must carry the Enterprise license JWT (read by the E2E `globalSetup`) **plus `WIDGET_API_KEY` and `API_KEY_HMAC_SECRET`** — the widget webServer fails loud at boot without the key (Zod `.min(1)`) and the plaintext must match the `api_keys` row `e2e/globalSetup.ts` seeds.
 
 Full details: [TESTING.md](./TESTING.md).
 
@@ -161,7 +166,7 @@ SSE chat streams emit events `token`, `status`, `citations`, `done`, `error`; er
 
 ## RBAC and License Middleware
 
-- **RBAC:** new endpoints must declare their permission requirement via `packages/server/src/middleware/rbac.ts` (`requirePermission(...)`). The 31 permissions are defined in `packages/shared/src/constants/permissions.ts`.
+- **RBAC:** new endpoints must declare their permission requirement via `packages/server/src/middleware/rbac.ts` (`requirePermission(...)`). The 36 permissions are defined in `packages/shared/src/constants/permissions.ts`.
 - **License gating:** enterprise features gate through `packages/server/src/middleware/license.ts` (`requireFeature`, `requireFeatureLimit`) and the feature flags in `packages/shared/src/constants/license.ts`. Gated failures return `402 { error, feature, tier }`.
 - Typical handler stack: `authMiddleware` → `requirePermission("...")` → workspace/project access check → handler.
 
@@ -209,7 +214,7 @@ pnpm i18n:check       # if strings changed
 pnpm license:check-self
 ```
 
-CI (`.github/workflows/ci.yml`) runs on push to `main` and PRs targeting `main`: `lint-and-typecheck` (includes `knip` + `changelog:check`), `test-unit`, `test-airgap` (unit suite re-run with `NETWORK_EGRESS_BLOCKED=1`), `migration-safety-check`, `license-policy-check`, `test-e2e` (Playwright against `pgvector/pgvector:pg16`), `build` (with a dist-freshness check), and `security` (gitleaks scan).
+CI (`.github/workflows/ci.yml`) runs on push to `main` (docs-only pushes — markdown, `docs/**`, LICENSE/SECURITY/CLA — skip CI; mixed code+docs commits always run) and PRs targeting `main`: `lint-and-typecheck` (includes `knip` + `changelog:check`), `test-unit` (with a MinIO service container for the S3 conformance arm, plus the air-gap-grep, FTS-locale-grep, and test-count-cap gates), `test-airgap` (the unit suite re-run with `NETWORK_EGRESS_BLOCKED=1`), `migration-safety-check`, `license-policy-check` (regenerates `THIRD_PARTY_NOTICES.md` + `docs/LICENSE_AUDIT.md` and fails on drift), `test-e2e` (Playwright against `pgvector/pgvector:pg16`), `build` (with a dist-freshness check), and `security` (gitleaks scan).
 
 ## See also
 

@@ -61,7 +61,7 @@ export default function ArchiveCreateDialog({ open, onOpenChange }: ArchiveCreat
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle className="text-[20px] font-semibold">
+          <DialogTitle className="text-[16px] font-semibold">
             {t("archives.createDialog.title")}
           </DialogTitle>
         </DialogHeader>

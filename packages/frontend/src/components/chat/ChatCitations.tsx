@@ -61,7 +61,7 @@ export function ChatCitations({ sources, onOpenPanel }: ChatCitationsProps) {
               className="w-full text-left flex items-start gap-2 rounded border border-border bg-card px-2 py-1.5 hover:border-primary/40 hover:bg-accent/30 transition-theme focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={t("chat.citations.openSource", { name: source.documentName, defaultValue: "Open source: {{name}}" })}
             >
-              <span className="inline-flex items-center justify-center size-4 shrink-0 rounded-full text-[10px] font-bold bg-primary text-primary-foreground mt-0.5">
+              <span className="inline-flex items-center justify-center size-4 shrink-0 rounded-full text-[12px] font-bold bg-primary text-primary-foreground mt-0.5">
                 {i + 1}
               </span>
               <span className="flex-1 min-w-0">
@@ -70,18 +70,18 @@ export function ChatCitations({ sources, onOpenPanel }: ChatCitationsProps) {
                 </span>
                 <span className="flex items-center gap-2 mt-0.5">
                   {source.pageNumber && (
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="text-[12px] text-muted-foreground">
                       {t("chat.citations.page", { n: source.pageNumber, defaultValue: "Page {{n}}" })}
                     </span>
                   )}
                   {source.score !== undefined && (
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="text-[12px] text-muted-foreground">
                       {(source.score * 100).toFixed(1)}%
                     </span>
                   )}
                 </span>
                 {source.chunkText && (
-                  <span className="block text-[11px] text-muted-foreground mt-0.5 line-clamp-2">
+                  <span className="block text-[12px] text-muted-foreground mt-0.5 line-clamp-2">
                     {source.chunkText}
                   </span>
                 )}

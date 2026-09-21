@@ -18,6 +18,7 @@ jest.mock("../config/env", () => ({
     COLLECTOR_URL: "http://localhost:3210",
     COLLECTOR_SECRET: "test-collector-secret",
     VECTOR_DB_PROVIDER: "lancedb",
+    WIKI_EMBED_TIMEOUT_MS: 1800000,
   })),
 }));
 
@@ -70,7 +71,7 @@ describe("indexWikiPage", () => {
         bodyText: BODY_TEXT,
         contentHash: expect.any(String),
       }),
-      { timeout: 60000, headers: { "X-Collector-Secret": expect.any(String) } }
+      { timeout: 1800000, headers: { "X-Collector-Secret": expect.any(String) } }
     );
 
     expect(prisma.archivePage.update).toHaveBeenCalledWith(

@@ -783,11 +783,18 @@ describe("GET /api/skills — list visibility (D-20 + SKIL-03 accessible arm)", 
     expect(res.body.accessible[0].workspaceId).toBe(OTHER_WS_ID);
   });
 
-  it("rows carry config.defaultParams + parsed inputSchema (Plan 05 parser source)", async () => {
+  it("rows carry config.template + defaultParams + parsed inputSchema (editor round-trip + Plan 05 parser source)", async () => {
     (prisma.agentSkill.findMany as jest.Mock).mockResolvedValue([makeCustomRow()]);
     const res = await request(app).get("/api/skills").set(userAuth());
     const row = res.body.custom[0];
-    expect(row.config).toEqual({ defaultParams: { lang: "it" } });
+    // config.template MUST round-trip on the wire — the edit dialog hydrates
+    // from it; a template-less config made every reopen render an empty
+    // template editor (and a re-save would fail template min(1)).
+    expect(row.config).toEqual({
+      template: "Translate {{input}} to {{lang}}",
+      defaultParams: { lang: "it" },
+      injectAs: "user",
+    });
     expect(row.inputSchema).toEqual({ properties: { input: { type: "string" } }, required: ["input"] });
     expect(row.skillMode).toBe("prompt");
   });

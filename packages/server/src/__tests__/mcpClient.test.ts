@@ -13,20 +13,14 @@ jest.mock("../utils/prisma", () => {
   return { __esModule: true, default: createMockPrisma().prisma };
 });
 
-jest.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+jest.mock("@modelcontextprotocol/client", () => ({
   Client: jest.fn().mockImplementation(() => ({
     connect: jest.fn(),
     listTools: jest.fn(),
     close: jest.fn(),
     callTool: jest.fn(),
   })),
-}));
-
-jest.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
   SSEClientTransport: jest.fn().mockImplementation(() => ({ __kind: "sse" })),
-}));
-
-jest.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: jest.fn().mockImplementation(() => ({ __kind: "streamable-http" })),
 }));
 
@@ -57,9 +51,7 @@ jest.mock("../services/systemConfigService", () => ({ seedConfigDefaults: jest.f
 jest.mock("../services/ftsService", () => ({ initPostgreSQLFTS: jest.fn() }));
 jest.mock("../agent/mcpServer", () => ({ mountMCPServer: jest.fn() }));
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client, SSEClientTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import prisma from "../utils/prisma";
 import {
   getConnectionStatuses,

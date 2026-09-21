@@ -7,7 +7,7 @@ This page documents the authentication mechanisms, the standard request/response
 
 ## Authentication
 
-Three credential mechanisms exist. The vast majority of endpoints use JWT Bearer auth.
+Four credential mechanisms exist. The vast majority of endpoints use JWT Bearer auth.
 
 ### JWT Bearer (primary)
 
@@ -42,7 +42,17 @@ The collector calls back into the server with a timing-safe compared header:
 X-Collector-Secret: <COLLECTOR_SECRET>
 ```
 
-Currently used by `PUT /api/documents/:documentId/status` (ingest status callback). This route intentionally has no JWT auth.
+Used by the collector-callback routes: `PUT /api/documents/:documentId/status` (ingest status callback), `GET /api/documents/:documentId/status` (cancellation poll — response is limited to `{ status, progress }`), and `PUT /api/archives/import/:jobId/callback` (archive import callback). These routes intentionally have no JWT auth and run with the tenant-bypass sentinel.
+
+### Query-token auth (image serving)
+
+Middleware: `queryTokenAuth` (`packages/server/src/routes/ocr.ts`). A `?token=<jwt>` query-parameter variant of JWT auth, used only for `<img>` tag asset serving:
+
+```
+GET /api/archives/:id/jobs/:jobId/pages/:pageNumber/image?token=<jwt>
+```
+
+Applies the same org assertion as workspace access (the job's `organizationId` must match the requester's membership org; platform admins keep global visibility).
 
 ### RBAC permission middleware
 
@@ -65,7 +75,7 @@ Middleware: `packages/server/src/middleware/license.ts`.
   402 { "error": "This feature requires an Enterprise license", "feature": "widget_enabled", "tier": "community" }
   ```
 
-- `requireFeatureLimit(flag, model)` enforces numeric limits (`max_workspaces`, `max_projects`, `max_widgets`, ...). When the count reaches the limit:
+- `requireFeatureLimit(flag, model)` enforces numeric limits (`max_workspaces`, `max_projects`, `max_widgets`, `max_skills`, ...). When the count reaches the limit:
 
   ```json
   402 { "error": "workspace limit reached. Your plan allows up to 3 workspaces.", "feature": "max_workspaces", "limit": 3, "current": 3, "tier": "community" }
@@ -86,7 +96,9 @@ The public license tier is readable without auth via `GET /api/license/info`.
 - **500**: unhandled errors are logged and return `{ "error": "Internal server error" }`.
 - **Request validation**: bodies are validated with shared Zod schemas (`packages/shared/src/schemas/`) using `safeParse`.
 - **Body size limits**: JSON bodies up to 100 MB (`express.json`), multipart uploads up to 100 MB (multer).
-- **CORS**: origins are restricted to the `ALLOWED_ORIGINS` allowlist (no origin echo); requests without an `Origin` header (curl, server-to-server) are allowed. Widget embed routes under `/api/internal/widget` use a dedicated dynamic CORS middleware (`widgetCors`) that validates against the widget's own origin allowlist.
+- **CORS**: origins are restricted to the `ALLOWED_ORIGINS` allowlist (no origin echo); requests without an `Origin` header (curl, server-to-server) are allowed. Widget embed routes under `/api/internal/widget` use a dedicated dynamic CORS middleware (`widgetCors`) that validates the `Origin` against the active widgets' origin allowlists (never a wildcard; preflight OPTIONS answered with 204).
+- **Tenant scoping**: every authenticated router runs `authMiddleware → tenantContextMiddleware → permission gates` (the Phase 185 chain order). `tenantContextMiddleware` resolves the requester's `organizationId` from their live `OrganizationMember` row and opens the tenant context; unresolvable membership 404s. Documented exceptions (health, `/api/auth` login/register/`/me`, wizard routes, collector callbacks, MCP server, the OCR image route) run outside tenant scoping — see the exception inventory in `packages/server/src/index.ts`.
+- **Soft deletes**: list/detail handlers filter `deletedAt: null` via the Prisma `withSoftDelete()` extension; delete endpoints are soft by default (hard deletes exist only for specific rows, e.g. MCP connection uninstall).
 
 ## Rate limits
 
@@ -95,13 +107,14 @@ Defined in `packages/server/src/middleware/rateLimit.ts` (`express-rate-limit`).
 | Limiter | Applies to | Production | Development |
 |---|---|---|---|
 | `apiRateLimiter` (global) | Every route, per IP | 200 req/min | 2000 req/min |
-| `authRateLimiter` | `/api/auth/*` write endpoints | 10 req/min | 100 req/min |
+| `authRateLimiter` | `/api/auth/*` write endpoints, `POST /api/auth/ldap/login` | 10 req/min | 100 req/min |
 | `widgetLeadLimiter` | `POST /api/internal/widget/lead` | 3 req/hour | 30 req/hour |
 | `probeRateLimiter` | `POST /api/system/probe-llm`, `POST /api/system/probe-vector` | 10 req/min | 100 req/min |
 
 Notes:
 
-- Requests carrying an `X-Widget-Id` header skip the global limiter — widget traffic is throttled upstream by the widget service's per-key limiter (30 req/min per hashed API key, `packages/widget`).
+- Requests carrying an `X-Widget-Id` header skip the global limiter — widget traffic is throttled upstream by the widget service's per-widget `widgetChatLimiter` (default 30 req/min prod per widget, overridable per-widget via the widget's `rateLimitPerMinute` config with a 0 = unlimited tri-state; `packages/widget/src/middleware/rateLimit.ts`). Widget sessions are additionally capped at 50 msg/min prod by `widgetSessionLimiter`.
+- In dev the auth limiter skips GET requests; both auth and global limiters skip entirely under the E2E harness (`E2E_RUN=1`, set only by `playwright.config.ts`).
 - Standard `RateLimit-*` headers are emitted on limited routes.
 - There is no dedicated chat rate limiter; the ReAct agent enforces per-user concurrency, token budgets, and wallclock timeouts internally (`services/agentBudgetService.ts`).
 
@@ -125,11 +138,15 @@ Mount wiring lives in `createApp()` in `packages/server/src/index.ts`. Several r
 | POST | `/api/system/reindex-documents` | Admin | Re-run indexing |
 | POST | `/api/system/reembed-documents` | Admin | Re-run embedding |
 | POST | `/api/system/ocr/prewarm` | Admin | Warm OCR engines |
-| GET | `/api/system/settings` | Auth | Read system settings |
-| PUT | `/api/system/settings` | Auth (admin validator on write) | Partial-success settings update (`{ updated, rejected }`) |
+| POST | `/api/system/dlp/eval/run` | Admin | Run the DLP pattern evaluation suite |
+| GET | `/api/system/dlp/eval/result` | Admin | Fetch the last DLP evaluation result |
+| POST | `/api/system/dlp/backfill` | Admin | Legacy document DLP backfill scan |
+| GET | `/api/system/settings` | Admin | Read system settings (global view) |
+| GET | `/api/system/settings?organizationId=` | Admin | Org-resolved settings view (cascade tenant > global > ENV > default, per-entry `source` flag) |
+| PUT | `/api/system/settings` | Admin | Partial-success settings update (`{ updated, rejected }`); items may carry `organizationId` for tenant-scoped rows |
 | GET | `/api/system/settings/embedding-config` | Public (collector service) | Embedding configuration |
 | GET | `/api/system/settings/vector-db-config` | Public (collector service) | Vector DB configuration |
-| PUT | `/api/system/chat-retention` | Auth (audited) | Chat message retention days (confirm-data-loss contract) |
+| PUT | `/api/system/chat-retention` | Admin (`admin:settings`, audited) | Chat message retention days (confirm-data-loss contract) |
 | GET | `/api/system/dlp/patterns` | Auth (`admin:settings`) | List DLP patterns |
 | POST/PUT/DELETE | `/api/system/dlp/patterns[...]` | Auth (`admin:settings`) | DLP pattern CRUD |
 | POST | `/api/system/dlp/patterns/:id/test` | Auth (`admin:settings`) | Test a pattern against sample text |
@@ -155,12 +172,14 @@ Mount wiring lives in `createApp()` in `packages/server/src/index.ts`. Several r
 | POST | `/api/auth/change-password` | Auth | Change own password |
 | POST | `/api/auth/set-initial-password` | Auth | First-login password rotation |
 | POST | `/api/auth/admin-reset-password` | Admin | Reset a user's password |
+| POST | `/api/auth/ldap/login` | Public (rate limited) | Composite LDAP login (mounted after the plugin loaders; serves the local-auth fallback when the `SsoConfig` row reports provider `ldap`, 404 otherwise) |
 | GET | `/api/users` | Admin | List users |
+| POST | `/api/users/me/personal-workspace` | Auth | Create the onboarding personal workspace (community core — no license gate) |
 | GET/PUT/PATCH | `/api/users/:id` | Auth | User profile read/update |
 | POST/DELETE | `/api/users/:id/avatar` | Auth | Avatar upload/removal |
 | DELETE | `/api/users/:id` | Admin | Delete a user |
 | GET | `/api/roles/me/menu-sections` | Auth | Menu sections for current user |
-| GET/POST/PUT/DELETE | `/api/roles[...]` | Admin | Role CRUD, assign/revoke (`POST /api/roles/assign`, `POST /api/roles/revoke`), menu sections |
+| GET/POST/PUT/DELETE | `/api/roles[...]` | Admin | Role CRUD (incl. `GET /api/roles/:roleId`), assign/revoke (`POST /api/roles/assign`, `POST /api/roles/revoke`), menu sections (`GET/PUT /api/roles/:roleId/menu-sections`) |
 | GET | `/api/api-keys` | Auth | List own API keys |
 | POST | `/api/api-keys` | Auth | Create an API key |
 | DELETE | `/api/api-keys/:keyId` | Auth | Revoke an API key |
@@ -174,43 +193,47 @@ Mount wiring lives in `createApp()` in `packages/server/src/index.ts`. Several r
 | GET/PUT/DELETE | `/api/projects/:projectId` | Auth (`requireProjectAccess`) | Project CRUD, usage, export, access grants |
 | GET | `/api/workspaces` | Auth | List accessible workspaces |
 | POST | `/api/workspaces` | Auth (`workspace:create`, `max_workspaces` limit) | Create workspace |
-| GET/PUT/DELETE | `/api/workspaces/:workspaceId` | Auth (`requireWorkspaceAccess`) | Workspace CRUD, restore, access grants |
+| GET/PUT/DELETE | `/api/workspaces/:workspaceId` | Auth (`requireWorkspaceAccess` / write gate) | Workspace CRUD + restore (`PUT /api/workspaces/:workspaceId/restore`) |
 | DELETE | `/api/workspaces/permanent` | Admin | Hard-delete a soft-deleted workspace |
+| POST/GET/DELETE | `/api/workspaces/:workspaceId/access[...]` | Auth (`requireWorkspaceAccess`, owner-or-admin) | Workspace access grants (incl. bulk grant via `/access/bulk`) |
 | GET/POST/PUT/DELETE | `/api/workspaces/:workspaceId/folders[...]` | Auth (`requireWorkspaceAccess`) | Folder CRUD + restore |
-| POST | `/api/uploads` | Auth | Stage an upload |
-| POST | `/api/uploads/:id/assign` | Auth | Assign staged upload to a target |
-| POST | `/api/uploads/:id/retry` | Auth | Retry a failed upload |
+| POST | `/api/uploads` | Auth (`document:write`) | Stage an upload (multipart) |
+| POST | `/api/uploads/:id/assign` | Auth (`document:write` + `archive:write`) | Assign staged upload to a target |
+| POST | `/api/uploads/:id/retry` | Auth (`document:write` + `archive:write`) | Retry a failed upload |
+| POST | `/api/uploads/:id/cancel` | Auth (`document:write`) | Cancel a staged upload |
 | GET | `/api/uploads/pending` | Auth | List pending staged uploads |
 | PATCH/DELETE | `/api/uploads/:id` | Auth (`document:write`) | Update/remove staged upload |
 | GET | `/api/documents` | Auth | List documents |
-| POST | `/api/documents/upload` | Auth (`document:write`) | Multipart document upload |
+| POST | `/api/documents/upload` | Auth (`document:write` + workspace write, no admin bypass) | Multipart document upload |
 | GET | `/api/documents/:documentId` | Auth | Document metadata |
-| GET | `/api/documents/:documentId/text` | Auth | Extracted text |
+| GET | `/api/documents/:documentId/text` | Auth | Extracted text (DLP-masked by default; `?unmask=true` opt-in behind the DLP access gate + `dlp:unmask`) |
+| GET | `/api/documents/:documentId/status` | Collector secret (`X-Collector-Secret`) | Cancellation poll for the collector (returns `{ status, progress }` only) |
 | PUT | `/api/documents/:documentId/status` | Collector secret (`X-Collector-Secret`) | Ingest status callback |
+| POST | `/api/documents/:documentId/cancel` | Auth (`document:write`) | Cancel in-flight document processing |
 | POST | `/api/documents/bulk-delete` | Auth (`document:delete`) | Bulk delete |
 | DELETE | `/api/documents/:documentId` | Auth (`document:delete`) | Delete document |
 
 ### Chat
 
-All chat routes are mounted under `/api/workspaces` (the chat routers and the workspace router share the prefix) and require workspace access (`requireWorkspaceAccess`) except where noted. Source: `chat.ts`, `chatList.ts`, `chatCrud.ts`, `chatAgentConfig.ts`, `chatExport.ts`, `chatImport.ts`, `chatTokens.ts`.
+All chat routes are mounted under `/api/workspaces` (the chat routers and the workspace router share the prefix) and require workspace access (`requireWorkspaceAccess` / `requireWorkspaceWriteAccess()`) except where noted. Source: `chat.ts`, `chatList.ts`, `chatCrud.ts`, `chatAgentConfig.ts`, `chatExport.ts`, `chatImport.ts`, `chatTokens.ts`.
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/workspaces/:workspaceId/chat` | Non-streaming agent chat |
+| POST | `/api/workspaces/:workspaceId/chat` | Non-streaming agent chat (response `content` is re-composed per-request for permitted DLP users; canonical persistence stays masked) |
 | POST | `/api/workspaces/:workspaceId/chat/stream` | SSE streaming agent chat (see protocol below) |
 | GET | `/api/workspaces/:workspaceId/chats` | List chats (with pin + message counts) |
 | GET | `/api/workspaces/:workspaceId/chats/:chatId/messages` | List messages of a chat |
 | PUT | `/api/workspaces/:workspaceId/chats/:chatId` | Rename chat |
 | PATCH | `/api/workspaces/:workspaceId/chats/:chatId/model` | Change chat model |
-| PATCH | `/api/workspaces/:workspaceId/chats/:chatId/archive` | Link/unlink an archive |
+| PATCH | `/api/workspaces/:workspaceId/chats/:chatId/archive` | Link/unlink an archive (adds `chat:write` permission) |
 | PUT | `/api/workspaces/:workspaceId/chats/:chatId/move` | Move chat between folders |
-| POST | `/api/workspaces/:workspaceId/chats/:chatId/pin` | Pin/unpin chat |
+| POST/DELETE | `/api/workspaces/:workspaceId/chats/:chatId/pin` | Pin/unpin chat |
 | PUT/DELETE | `/api/workspaces/:workspaceId/chats/:chatId/messages/:messageId` | Edit/delete a message |
 | DELETE | `/api/workspaces/:workspaceId/chats/:chatId` | Delete chat |
 | GET | `/api/workspaces/:workspaceId/chats/export` | Export all chats as JSON |
 | GET | `/api/workspaces/:workspaceId/chats/:chatId/export` | Export one chat as JSON |
-| POST | `/api/workspaces/:workspaceId/chats/import/preview` | Validate a chat JSON import |
-| POST | `/api/workspaces/:workspaceId/chats/import/confirm` | Apply a chat JSON import |
+| POST | `/api/workspaces/:workspaceId/chats/import/preview` | Validate a chat JSON import (multipart `file`) |
+| POST | `/api/workspaces/:workspaceId/chats/import/confirm` | Apply a chat JSON import (multipart `file`) |
 | GET | `/api/workspaces/:workspaceId/agent-config` | Workspace agent configuration |
 | PUT | `/api/workspaces/:workspaceId/agent-config` | Update agent configuration + enabled skills |
 | GET | `/api/workspaces/:workspaceId/chats/:chatId/tokens` | Per-message token usage for a chat |
@@ -218,7 +241,7 @@ All chat routes are mounted under `/api/workspaces` (the chat routers and the wo
 
 ### Archives (wiki), OCR, and synthesis
 
-Archive domain routes are spread over multiple routers all mounted at `/api/archives` (plus `/api/archive-schema-templates` and the `/api/ocr` catalog). Permissions use `archive:read` / `archive:write` / `archive:delete`.
+Archive domain routes are spread over multiple routers all mounted at `/api/archives` (plus `/api/archive-schema-templates` and the `/api/ocr` catalog). Permissions use `archive:read` / `archive:write` / `archive:delete`; list/read routes are gated by workspace access (existence-hiding) rather than a flat permission.
 
 | Method | Path | Description |
 |---|---|---|
@@ -235,16 +258,22 @@ Archive domain routes are spread over multiple routers all mounted at `/api/arch
 | POST | `/api/archives/:archiveId/index` | Incremental indexing |
 | POST | `/api/archives/:archiveId/copy-from-doc` | Create pages from documents |
 | GET | `/api/archives/import/:jobId` | Import job status |
-| PUT | `/api/archives/import/:jobId/callback` | Collector import callback |
+| PUT | `/api/archives/import/:jobId/callback` | Collector import callback (no JWT auth — `X-Collector-Secret`) |
 | GET | `/api/archive-schema-templates` | List schema templates |
+| GET | `/api/archive-schema-templates/:id` | Schema template detail |
 | POST | `/api/archive-schema-templates` | Create schema template (Admin) |
 | POST | `/api/archive-schema-templates/:id/apply` | Apply template to an archive |
 | GET | `/api/ocr/models` | Auth (`archive:read`) | OCR catalog (available models/engines) |
 | POST | `/api/ocr/preview` | Auth (`archive:read`) | Preview OCR output before ingest |
+| GET/POST | `/api/ocr/preferences` | Auth (`archive:read` / `archive:write`) | Per-user OCR defaults |
+| GET | `/api/ocr/defaults` | Auth (`archive:read`) | Default OCR engine settings |
 | GET | `/api/archives/:id/jobs` | List OCR/URL jobs for an archive |
 | GET | `/api/archives/:id/jobs/:jobId` | Job detail |
+| GET | `/api/archives/:id/jobs/:jobId/pages/:pageNumber/image` | Query-token auth (`?token=<jwt>`) | OCR page image (for `<img>` tags) |
 | POST | `/api/archives/:id/jobs/:jobId/approve` | Approve OCR results |
 | POST | `/api/archives/:id/jobs/:jobId/reject` | Reject OCR results |
+| POST | `/api/archives/:id/jobs/:jobId/cancel` | Cancel a running job |
+| POST | `/api/archives/:id/jobs/:jobId/pages/retry` | Retry failed OCR pages |
 | DELETE | `/api/archives/:id/jobs/:jobId` | Delete a job |
 | GET | `/api/synthesis/status` | Synthesis pipeline status |
 | GET | `/api/synthesis/pending/count` | Pending synthesis runs |
@@ -277,20 +306,33 @@ The `/api/wiki-edits` prefix is an alias of the same wikilinks router.
 | POST/PUT/DELETE | `/api/providers[...]` | Auth (`provider:write`) | Provider CRUD |
 | GET | `/api/providers/models/available` | Auth (`provider:read`) | Models available for configuration |
 | GET | `/api/providers/:id/models` | Auth (`provider:read`) | Models of a provider |
+| POST | `/api/providers/:id/models/refresh` | Auth (`provider:write`) | Refresh the provider's model list |
+| POST | `/api/providers/:providerId/models/pull` | Auth (`provider:write`) | Pull a model (Ollama; streamed progress) |
+| PUT | `/api/providers/:providerId/models/:modelId` | Auth (`provider:write`) | Update a model entry |
+| PUT | `/api/providers/:providerId/models/:modelId/set-default` | Auth (`provider:read`) | Set the default model |
+| DELETE | `/api/providers/:providerId/models/:modelId` | Auth (`provider:write`) | Remove a model |
 | PUT | `/api/providers/:id/set-default` | Auth (`provider:read`) | Set default provider |
+| POST | `/api/providers/:id/ollama-login` | Admin | Start Ollama Cloud login (Docker deployments only; 501 when Docker is unavailable) |
+| GET | `/api/providers/:id/ollama-login/status` | Admin | Ollama Cloud login status (`{ status, connectUrl }`) |
 | GET | `/api/provider-presets` | Auth (`provider:read`) | Curated provider presets |
+| GET | `/api/provider-presets/:presetId` | Auth (`provider:read`) | Preset detail |
 | POST | `/api/provider-presets/:presetId/install` | Auth (`provider:write`) | Install a preset |
 | GET/POST/PUT/DELETE | `/api/mcp-connections[...]` | Admin | MCP server connections CRUD |
+| GET | `/api/mcp-connections/statuses` | Admin | Live connection statuses |
 | POST | `/api/mcp-connections/:connectionId/toggle` | Admin | Enable/disable a connection |
 | POST | `/api/mcp-connections/:connectionId/test` | Admin | Probe a connection |
-| GET | `/api/mcp-connections/statuses` | Admin | Live connection statuses |
 | GET | `/api/mcp-marketplace` | Auth | Marketplace catalog |
+| GET | `/api/mcp-marketplace/:entryId` | Auth | Catalog entry detail |
 | POST | `/api/mcp-marketplace/:entryId/install` | Admin | Install a marketplace entry |
 | POST | `/api/mcp-marketplace/:entryId/uninstall` | Admin | Uninstall |
-| GET | `/api/agent/skills` | Auth | Built-in agent skills |
-| GET/POST/DELETE | `/api/chats/:chatId/pins[...]` | Auth | MCP tool pins per chat |
+| POST | `/api/mcp-marketplace` | Admin | Create a catalog entry (admin panel / E2E) |
+| DELETE | `/api/mcp-marketplace/:entryId` | Admin | Delete a catalog entry |
+| GET | `/api/agent/skills` | Auth | Built-in agent skills (read-only) |
+| GET/POST/PUT/DELETE | `/api/skills[...]` | Auth (`skill:read` / `skill:create` / `skill:write` / `skill:delete`; create adds a `max_skills` limit) | Custom-skill CRUD (personal/global/workspace scopes, server-side arbitration) |
+| POST | `/api/skills/:id/test` | Auth (`skill:read`) | Compiled-prompt preview (no LLM call, no DLP masking) |
+| GET/POST/DELETE | `/api/chats/:chatId/pins[...]` | Auth | MCP tool pins per chat (any workspace member) |
 
-An MCP server (for external MCP clients) is mounted at `GET /api/mcp/sse` and `POST /api/mcp/message` (`packages/server/src/agent/mcpServer.ts`).
+An MCP server (for external MCP clients) is mounted at `POST /api/mcp/mcp` (v2 stateless Streamable HTTP, JSON responses), `GET /api/mcp/sse` and `POST /api/mcp/message` (legacy SSE v1 — one-year grace period) in `packages/server/src/agent/mcpServer.ts`. Auth is `MCP_API_KEY` Bearer when set; without it the endpoints are loopback-only (a warn is logged at mount).
 
 ### Memories
 
@@ -320,10 +362,13 @@ Admin-side management (`/api/widgets`, Admin + `widget_enabled` feature) and the
 | GET | `/api/widgets/analytics/daily` | Admin | Daily widget analytics |
 | GET | `/api/widgets/analytics/topics` | Admin | Topic analytics |
 | GET | `/api/widgets/analytics/summary` | Admin | Aggregate analytics |
+| GET | `/api/widgets/workspace-archive` | Admin | Widget↔workspace assignments grouped by project |
+| GET | `/api/widgets/workspace-archive/flat` | Admin | One row per widgetId × workspaceId |
+| GET | `/api/widgets/workspace-archive/stats` | Admin | Assignment totals + effective orphans |
 | POST | `/api/internal/widget/chat/stream` | API key | SSE chat stream for the widget proxy |
 | POST | `/api/internal/widget/search` | API key | RAG search for the widget |
 | POST | `/api/internal/widget/lead` | API key (rate limited) | Lead capture |
-| GET | `/api/internal/widget/:id/config` | API key | Widget embed configuration |
+| GET | `/api/internal/widget/:id/config` | API key | Widget embed configuration (has an inline feature check on the read path) |
 | POST | `/api/internal/widget/session` | API key | Create a widget session |
 | GET | `/api/internal/widget/session/:token` | API key | Read session |
 | PATCH | `/api/internal/widget/session/:token/increment` | API key | Increment message counters |
@@ -334,16 +379,21 @@ Admin-side management (`/api/widgets`, Admin + `widget_enabled` feature) and the
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/templates` | Auth | Workspace templates |
+| GET | `/api/templates/:templateId` | Auth | Template detail |
 | POST | `/api/templates` | Auth | Create template |
 | PUT/DELETE | `/api/templates/:templateId` | Admin | Update/delete template |
-| GET | `/api/webhooks` | Admin | Outgoing webhooks |
+| GET | `/api/webhooks` | Admin | Outgoing webhooks (always-on feature — no license gate) |
 | POST/PUT/DELETE | `/api/webhooks[...]` | Admin | Webhook CRUD |
 | POST | `/api/webhooks/:webhookId/test` | Admin | Send a test event |
 | GET | `/api/__tests__/*` | None (dev only) | E2E helpers — mounted only when `NODE_ENV !== "production"`; production boots 404 |
 
-### Enterprise plugin routes
+Two public download endpoints live outside `/api`: `GET /avatars/:size/:file` and `GET /branding/:file` are public reads (URL-is-capability, byte-identical to the removed static mounts) served provider-first with a permanent filesystem fallback.
+
+### Enterprise and SaaS plugin routes
 
 When the `@simmetric-chat/enterprise` package is installed and a valid `LICENSE_KEY` is present, the enterprise plugin mounts additional routers via the plugin loader (`packages/server/src/services/enterpriseLoader.ts`): `/api/enterprise` (protected), `/api/sso` (protected), SAML/OIDC callbacks under `/api/auth` (public), and SCIM under `/scim/v2` (public, Bearer token). In a community build these paths 404. Enterprise features are additionally gated per-route with the `402 { error, feature, tier }` shape. See `docs/ENTERPRISE_PLUGIN.md` for the plugin contract.
+
+A `@simmetric-chat/saas` plugin package (`packages/server/src/services/saasLoader.ts`) can similarly mount routers via the same loader machinery; it also 404s in community builds. Both plugin loads precede the 404/error catch-alls so plugin routes stay reachable, and the community LDAP composite route (`POST /api/auth/ldap/login`) is mounted after both plugin loads.
 
 ## SSE chat streaming protocol
 
@@ -360,13 +410,13 @@ When the `@simmetric-chat/enterprise` package is installed and a valid `LICENSE_
 | `done` | Metadata object (below) | Terminal success event |
 | `error` | `{ "error": string }` | Terminal failure event |
 
-The `done` payload includes: `chatId`, `messageId`, `iterations`, `tokenUsage`, `model`, `providerType`, `mcpSources`, `resolvedWikilinks`, optional `dlp_matches` (only when DLP is enabled and matches were found), optional `doneReason`, and `pipeline` (which tools were called and whether sources were found).
+The `done` payload includes: `chatId`, `messageId`, `iterations`, `tokenUsage`, `model`, `providerType`, `mcpSources`, `resolvedWikilinks`, optional `dlp_matches` (only when DLP is enabled and matches were found), optional `content` (terminal re-composed text for permitted DLP users — omitted when byte-identical to the streamed tokens), optional `doneReason` (per-provider normalized termination reason), and `pipeline` (which tools were called and whether sources were found).
 
-Scaling note: when `REDIS_URL` is configured, each SSE event is also published to `sse:chat:{chatId}` so clients connected to other server instances behind a load balancer receive the stream; without Redis, SSE is single-instance.
+Scaling note: when `REDIS_URL` is configured, each SSE event is also published to `sse:chat:{chatId}` (Redis pub/sub) so clients connected to other server instances behind a load balancer receive the stream; without Redis, SSE is single-instance.
 
 ## Discovering the API live
 
 - Swagger UI: `http://localhost:3000/api-docs`
 - OpenAPI JSON: `http://localhost:3000/api-docs/json`
 
-The Swagger spec is generated from JSDoc annotations in the route files (`packages/server/src/config/swagger.ts`). Route files are the authoritative reference when this page and the code disagree.
+The Swagger spec is generated from JSDoc annotations in the route files (`packages/server/src/config/swagger.ts`). Note the mounting order: `createApp()` registers the core routers but intentionally omits the 404/error catch-alls — those are mounted by `mountCatchAlls()` in `packages/server/src/index.ts` AFTER the enterprise and SaaS plugin loaders so plugin routes register before the catch-all and remain reachable. Route files are the authoritative reference when this page and the code disagree.

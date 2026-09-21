@@ -25,6 +25,7 @@ import { useMe, useMenuSections, useLogout } from "./queries/useAuth";
 import { useSystemIsInitialized } from "./queries/useSystem";
 import { useWorkspaces } from "./queries/useWorkspaces";
 import { apiGet } from "./utils/api";
+import { useBootOffline } from "./hooks/useBootOffline";
 import ChatPanel from "./components/ChatPanel";
 import AnalyticsPanel from "./components/AnalyticsPanel";
 import EnterpriseSpinner from "./components/EnterpriseSpinner";
@@ -35,6 +36,7 @@ import WidgetsPage from "./components/WidgetsPage";
 import WidgetDetailPage from "./components/WidgetDetailPage";
 import DocumentsPage from "./components/DocumentsPage";
 import LoginPage from "./components/LoginPage";
+import BootOfflineBanner from "./components/BootOfflineBanner";
 import ForcePasswordChange from "./components/ForcePasswordChange";
 // Phase 152-03 (WIZ-01, D-01) — SetupWizard renders on a fresh install
 // (setup_wizard_mode==="active") instead of LoginPage. Imported eagerly
@@ -62,6 +64,9 @@ import UnifiedUploadPage from "./components/UnifiedUploadPage";
 import AppSidebar from "./components/AppSidebar";
 import type { SidebarShareTarget } from "./components/AppSidebar";
 import AppNavOverlay from "./components/AppNavOverlay";
+// UI revision R-6 — persistent sidebar navigation (same nav model as the
+// AppNavOverlay; RBAC semantics byte-identical).
+import AppSidebarNav from "./components/sidebar/AppSidebarNav";
 import UserMenuDialog from "./components/ui/UserMenuDialog";
 import ChatSidebar from "./components/ChatSidebar";
 import UpgradePrompt from "./components/UpgradePrompt";
@@ -145,6 +150,10 @@ function App() {
   const [appSubtitle, setAppSubtitle] = useState("");
   const [appIconUrl, setAppIconUrl] = useState("");
   const [initializing, setInitializing] = useState(true);
+  // Boot-offline banner (critique 2026-09-21 #2): flips true only when the
+  // boot queries have not settled within the timeout window. Cleared as soon
+  // as the skeleton drops; Retry re-arms it (see useBootOffline).
+  const { bootOffline, retry: retryBoot } = useBootOffline(initializing);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>("");
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -442,6 +451,14 @@ function App() {
           <div className="flex flex-col items-center gap-3">
             <Skeleton className="h-8 w-48 rounded-md" />
             <Skeleton className="h-4 w-32 rounded-md" />
+            {/* Boot-offline banner (critique 2026-09-21 #2): appears only
+                after the useBootOffline timeout — never during the normal
+                (sub-4s) backend boot race covered by the dev-proxy retry
+                hook. Names the problem and the recovery instead of an
+                indefinite silent skeleton. */}
+            {bootOffline && (
+              <BootOfflineBanner appName={appName} onRetry={retryBoot} />
+            )}
           </div>
         </div>
       </TooltipProvider>
@@ -576,6 +593,16 @@ function App() {
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
           shareTarget={shareTarget}
+          nav={
+            <AppSidebarNav
+              menuSections={effectiveMenuSections}
+              isAdmin={isAdmin}
+              isEnterprise={isEnterprise}
+              primaryColor={primaryColor}
+              t={t}
+              collapsed={!sidebarOpen}
+            />
+          }
         >
           <ChatSidebar
             workspaceId={currentWorkspaceId ?? ""}
@@ -641,8 +668,6 @@ function App() {
           <TopBar
             currentSection={currentSection}
             selectedProjectId={selectedProjectId}
-            user={user}
-            onLogout={handleLogout}
           />
           <div className="flex-1 flex overflow-hidden min-h-0">
             <div className="flex-1 overflow-hidden min-w-0">

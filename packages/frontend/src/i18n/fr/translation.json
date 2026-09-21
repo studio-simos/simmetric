@@ -143,6 +143,11 @@
     "ssoSignIn": "Login with SSO",
     "ldap": {
       "hint": "Connectez-vous avec vos identifiants d'annuaire d'entreprise."
+    },
+    "offline": {
+      "title": "Impossible de joindre {{appName}}",
+      "body": "Vérifiez que le serveur est en cours d'exécution et accessible depuis cet appareil, puis réessayez.",
+      "retry": "Réessayer"
     }
   },
   "chat": {

@@ -119,7 +119,7 @@ export default function UserDropdown({ user, onLogout }: UserDropdownProps) {
               className="w-6 h-6 rounded-full object-cover"
             />
           ) : (
-            <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground text-[10px] font-medium flex items-center justify-center">
+            <span className="w-6 h-6 rounded-full bg-primary text-primary-foreground text-[12px] font-medium flex items-center justify-center">
               {initials(user)}
             </span>
           )}
@@ -130,7 +130,7 @@ export default function UserDropdown({ user, onLogout }: UserDropdownProps) {
         {/* Header: username + role badge */}
         <DropdownMenuLabel className="font-mono text-xs text-muted-foreground flex items-center gap-2">
           <span className="truncate text-primary">{user?.username ?? "—"}</span>
-          <span className="text-[9px] uppercase tracking-wider border border-border rounded px-1 py-0.5 text-primary">
+          <span className="text-[12px] uppercase tracking-wider border border-border rounded px-1 py-0.5 text-primary">
             {roleLabel}
           </span>
         </DropdownMenuLabel>
@@ -194,7 +194,7 @@ export default function UserDropdown({ user, onLogout }: UserDropdownProps) {
         <DropdownMenuSeparator />
 
         {/* Footer: license tier (primary-colored) + app version */}
-        <div className="px-2 py-1.5 flex items-center justify-between text-[10px] font-mono text-muted-foreground">
+        <div className="px-2 py-1.5 flex items-center justify-between text-[12px] font-mono text-muted-foreground">
           {licenseTier && (
             <span className="uppercase tracking-wider rounded px-1.5 py-0.5 text-primary">
               {t("user-dropdown.license")}: {licenseTier.toUpperCase()}

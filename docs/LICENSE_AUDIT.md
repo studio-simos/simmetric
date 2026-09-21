@@ -1,8 +1,12 @@
 # License Audit (SPDX Report)
 
-**Generated:** 2026-09-01T09:55:48+02:00
+**Generated:** 2026-09-19T22:39:11+02:00
 **Command:** `pnpm licenses list --json --prod`
-**Total packages:** 765
+<<<<<<< Updated upstream
+**Total packages:** 793
+=======
+**Total packages:** 795
+>>>>>>> Stashed changes
 
 > Full enumeration of every production dependency in the pnpm workspace,
 > grouped by license ID. A defensible audit names each dependency, not
@@ -17,6 +21,25 @@
 | (MIT OR GPL-3.0-or-later) | jszip | 3.10.1 | https://github.com/Stuk/jszip#readme | Stuart Knightley |
 | (MPL-2.0 OR Apache-2.0) | dompurify | 3.4.14 | https://github.com/cure53/DOMPurify | Dr.-Ing. Mario Heiderich, Cure53 |
 | 0BSD | tslib | 2.8.1 | https://www.typescriptlang.org/ | Microsoft Corp. |
+| Apache-2.0 | @aws-sdk/checksums | 3.1000.29 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/checksums | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/client-s3 | 3.1127.0 | https://github.com/aws/aws-sdk-js-v3/tree/main/clients/client-s3 | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/core | 3.977.9 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/core | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/credential-provider-env | 3.972.70 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-env | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/credential-provider-http | 3.972.72 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-http | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/credential-provider-ini | 3.973.15 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-ini | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/credential-provider-login | 3.972.77 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-login | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/credential-provider-node | 3.972.82 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-node | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/credential-provider-process | 3.972.70 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-process | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/credential-provider-sso | 3.973.14 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-sso | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/credential-provider-web-identity | 3.972.76 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-web-identity | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/lib-storage | 3.1127.0 | https://github.com/aws/aws-sdk-js-v3/tree/main/lib/lib-storage | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/middleware-sdk-s3 | 3.972.75 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/middleware-sdk-s3 | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/nested-clients | 3.997.44 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages/nested-clients | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/signature-v4-multi-region | 3.996.46 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages/signature-v4-multi-region | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/token-providers | 3.1116.0 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages/token-providers | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/types | 3.974.5 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/types | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws-sdk/xml-builder | 3.972.40 | https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/xml-builder | AWS SDK for JavaScript Team |
+| Apache-2.0 | @aws/lambda-invoke-store | 0.3.0 | https://github.com/awslabs/aws-lambda-invoke-store | Amazon Web Services |
 | Apache-2.0 | @electric-sql/pglite | 0.4.3 | https://pglite.dev | Electric DB Limited |
 | Apache-2.0 | @electric-sql/pglite-socket | 0.1.3 | https://pglite.dev | Electric DB Limited |
 | Apache-2.0 | @electric-sql/pglite-tools | 0.3.3 | https://pglite.dev | Electric DB Limited |
@@ -41,6 +64,12 @@
 | Apache-2.0 | @prisma/studio-core | 0.33.0 | https://github.com/prisma/studio#readme | — |
 | Apache-2.0 | @puppeteer/browsers | 3.2.1 | https://github.com/puppeteer/puppeteer/tree/main#readme | The Chromium Authors |
 | Apache-2.0 | @scarf/scarf | 1.4.0 | https://github.com/scarf-sh/scarf-js | Scarf Systems |
+| Apache-2.0 | @smithy/core | 3.33.3 | https://github.com/smithy-lang/smithy-typescript/tree/main/packages/core | AWS Smithy Team |
+| Apache-2.0 | @smithy/credential-provider-imds | 4.5.2 | https://github.com/smithy-lang/smithy-typescript/tree/main/packages/credential-provider-imds | AWS SDK for JavaScript Team |
+| Apache-2.0 | @smithy/fetch-http-handler | 5.8.0 | https://github.com/smithy-lang/smithy-typescript/tree/main/packages/fetch-http-handler | AWS SDK for JavaScript Team |
+| Apache-2.0 | @smithy/node-http-handler | 4.12.1 | https://github.com/smithy-lang/smithy-typescript/tree/main/packages/node-http-handler | AWS SDK for JavaScript Team |
+| Apache-2.0 | @smithy/signature-v4 | 5.7.3 | https://github.com/smithy-lang/smithy-typescript/tree/main/packages/signature-v4 | AWS SDK for JavaScript Team |
+| Apache-2.0 | @smithy/types | 4.18.0 | https://github.com/smithy-lang/smithy-typescript/tree/main/packages/types | AWS Smithy Team |
 | Apache-2.0 | @swc/helpers | 0.5.23 | https://swc.rs | 강동윤 |
 | Apache-2.0 | @xenova/transformers | 2.17.2 | https://github.com/xenova/transformers.js#readme | Xenova |
 | Apache-2.0 | adler-32 | 1.3.1 | http://sheetjs.com/opensource | sheetjs |
@@ -106,7 +135,6 @@
 | BSD-2-Clause | entities | 4.5.0, 8.0.0 | https://github.com/fb55/entities#readme | Felix Boehm |
 | BSD-2-Clause | esprima | 4.0.1 | http://esprima.org | Ariya Hidayat |
 | BSD-2-Clause | esutils | 2.0.3 | https://github.com/estools/esutils | — |
-| BSD-2-Clause | json-schema-typed | 8.0.2 | https://github.com/RemyRylan/json-schema-typed/tree/main/dist/node | Remy Rylan |
 | BSD-2-Clause | lop | 0.4.2 | https://github.com/mwilliamson/lop#readme | Michael Williamson |
 | BSD-2-Clause | mammoth | 1.12.2 | https://github.com/mwilliamson/mammoth.js#readme | Michael Williamson |
 | BSD-2-Clause | option | 0.2.4 | https://github.com/mwilliamson/node-options#readme | Michael Williamson |
@@ -200,7 +228,6 @@
 | ISC | y18n | 5.0.8 | https://github.com/yargs/y18n | Ben Coe |
 | ISC | yaml | 2.0.0-1 | https://eemeli.org/yaml/ | Eemeli Aro |
 | ISC | yargs-parser | 22.0.0 | https://github.com/yargs/yargs-parser#readme | Ben Coe |
-| ISC | zod-to-json-schema | 3.25.2 | https://github.com/StefanTerdell/zod-to-json-schema#readme | Stefan Terdell |
 | LGPL-3.0-or-later | @img/sharp-libvips-linux-x64 | 1.0.4, 1.2.4, 1.3.3 | https://sharp.pixelplumbing.com | Lovell Fuller |
 | MIT | @apidevtools/json-schema-ref-parser | 14.0.1 | https://apidevtools.com/json-schema-ref-parser/ | James Messinger |
 | MIT | @apidevtools/openapi-schemas | 2.1.0 | https://apitools.dev/openapi-schemas | James Messinger |
@@ -229,7 +256,7 @@
 | MIT | @floating-ui/dom | 1.8.0 | https://floating-ui.com | atomiks |
 | MIT | @floating-ui/react-dom | 2.1.9 | https://floating-ui.com/docs/react-dom | atomiks |
 | MIT | @floating-ui/utils | 0.2.12 | https://floating-ui.com | atomiks |
-| MIT | @hono/node-server | 2.1.1 | https://github.com/honojs/node-server | Yusuke Wada |
+| MIT | @hono/node-server | 1.19.17 | https://github.com/honojs/node-server | Yusuke Wada |
 | MIT | @hookform/resolvers | 5.9.1 | https://react-hook-form.com | bluebill1049 |
 | MIT | @huggingface/jinja | 0.2.2, 0.3.4, 0.5.9 | https://github.com/huggingface/huggingface.js#readme | Hugging Face |
 | MIT | @img/colour | 1.1.0 | https://github.com/lovell/colour#readme | — |
@@ -241,7 +268,11 @@
 | MIT | @langchain/core | 1.2.9 | https://github.com/langchain-ai/langchainjs/tree/main/langchain-core/ | LangChain |
 | MIT | @langchain/textsplitters | 1.0.1 | https://github.com/langchain-ai/langchainjs/tree/main/libs/langchain-textsplitters/ | LangChain |
 | MIT | @microsoft/fetch-event-source | 2.0.1 | https://github.com/Azure/fetch-event-source#readme | Microsoft |
-| MIT | @modelcontextprotocol/sdk | 1.30.0 | https://modelcontextprotocol.io | Anthropic, PBC |
+| MIT | @modelcontextprotocol/client | 2.0.0 | https://modelcontextprotocol.io | Anthropic, PBC |
+| MIT | @modelcontextprotocol/core | 2.0.0 | https://modelcontextprotocol.io | Anthropic, PBC |
+| MIT | @modelcontextprotocol/node | 2.0.0 | https://modelcontextprotocol.io | Anthropic, PBC |
+| MIT | @modelcontextprotocol/server | 2.0.0 | https://modelcontextprotocol.io | Anthropic, PBC |
+| MIT | @modelcontextprotocol/server-legacy | 2.0.0 | https://modelcontextprotocol.io | Anthropic, PBC |
 | MIT | @napi-rs/canvas | 1.0.8 | https://github.com/Brooooooklyn/canvas#readme | — |
 | MIT | @napi-rs/canvas-linux-x64-gnu | 1.0.8 | https://github.com/Brooooooklyn/canvas#readme | — |
 | MIT | @noble/hashes | 1.8.0 | https://paulmillr.com/noble/ | Paul Miller |
@@ -362,7 +393,7 @@
 | MIT | agentkeepalive | 4.6.0 | https://github.com/node-modules/agentkeepalive#readme | fengmk2 |
 | MIT | ajv | 8.20.0 | https://ajv.js.org | Evgeny Poberezkin |
 | MIT | ajv-draft-04 | 1.0.0 | https://github.com/ajv-validator/ajv-draft-04#readme | Evgeny Poberezkin |
-| MIT | ajv-formats | 2.1.1, 3.0.1 | https://github.com/ajv-validator/ajv-formats#readme | Evgeny Poberezkin |
+| MIT | ajv-formats | 2.1.1 | https://github.com/ajv-validator/ajv-formats#readme | Evgeny Poberezkin |
 | MIT | ansi-regex | 6.3.0 | https://github.com/chalk/ansi-regex#readme | Sindre Sorhus |
 | MIT | ansi-styles | 4.3.0, 6.2.3 | https://github.com/chalk/ansi-styles#readme | Sindre Sorhus |
 | MIT | append-field | 1.0.0 | https://github.com/LinusU/node-append-field#readme | Linus Unnebäck |
@@ -386,8 +417,9 @@
 | MIT | bn.js | 4.12.5 | https://github.com/indutny/bn.js | Fedor Indutny |
 | MIT | body-parser | 2.3.0 | https://github.com/expressjs/body-parser#readme | — |
 | MIT | boolean | 3.2.0 | https://github.com/thenativeweb/boolean#readme | — |
+| MIT | bowser | 2.14.1 | https://github.com/bowser-js/bowser | Dustin Diaz |
 | MIT | brace-expansion | 5.0.9 | https://github.com/juliangruber/brace-expansion#readme | — |
-| MIT | buffer | 6.0.3 | https://github.com/feross/buffer | Feross Aboukhadijeh |
+| MIT | buffer | 5.6.0, 6.0.3 | https://github.com/feross/buffer | Feross Aboukhadijeh |
 | MIT | buffer-crc32 | 1.0.0 | https://github.com/brianloveswords/buffer-crc32 | Brian J. Brennan |
 | MIT | buffer-from | 1.1.2 | https://github.com/LinusU/buffer-from#readme | — |
 | MIT | busboy | 1.6.0 | https://github.com/mscdex/busboy#readme | Brian White |
@@ -701,6 +733,8 @@
 | MIT | standard-as-callback | 2.1.0 | https://github.com/luin/asCallback#readme | luin |
 | MIT | statuses | 2.0.2 | https://github.com/jshttp/statuses#readme | — |
 | MIT | std-env | 3.10.0 | https://github.com/unjs/std-env#readme | — |
+| MIT | stdnum | 1.12.6 | https://github.com/koblas/stdnum-js#readme | David Koblas |
+| MIT | stream-browserify | 3.0.0 | https://github.com/browserify/stream-browserify | James Halliday |
 | MIT | streamsearch | 1.1.0 | https://github.com/mscdex/streamsearch#readme | Brian White |
 | MIT | streamx | 2.28.1 | https://github.com/mafintosh/streamx | Mathias Buus |
 | MIT | string_decoder | 1.1.1, 1.3.0 | https://github.com/nodejs/string_decoder | — |
@@ -736,7 +770,7 @@
 | MIT | uc.micro | 2.1.0 | https://github.com/markdown-it/uc.micro#readme | — |
 | MIT | uint8array-extras | 1.5.0 | https://github.com/sindresorhus/uint8array-extras#readme | Sindre Sorhus |
 | MIT | underscore | 1.13.8 | https://underscorejs.org | Jeremy Ashkenas |
-| MIT | undici | 7.29.0 | https://undici.nodejs.org | — |
+| MIT | undici | 7.29.1 | https://undici.nodejs.org | — |
 | MIT | undici-types | 5.26.5, 6.21.0, 8.3.0 | https://undici.nodejs.org | — |
 | MIT | unpipe | 1.0.0 | https://github.com/stream-utils/unpipe#readme | Douglas Christopher Wilson |
 | MIT | use-callback-ref | 1.3.3 | https://github.com/theKashey/use-callback-ref#readme | theKashey |

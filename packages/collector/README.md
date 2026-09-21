@@ -21,7 +21,7 @@ It is designed to run as a standalone service — it does not import the server 
 This package is **private** (`"private": true` in `package.json`) and not published to npm. It is installed as part of the monorepo:
 
 ```bash
-git clone https://github.com/simmetric-chat/simmetric-chat simmetric-chat
+git clone git@github.com:studio-simos/simmetric simmetric-chat
 cd simmetric-chat
 pnpm install
 ```
@@ -55,13 +55,13 @@ src/
 │   ├── parser.ts         # Document parsing (PDF, DOCX, PPTX, XLSX, TXT, MD, CSV, YouTube; ocrMode routing)
 │   ├── chunker.ts        # RecursiveCharacterTextSplitter wrapper
 │   ├── embeddings.ts     # Embedding strategy: Local (Xenova), HF v4 (hf-local), OpenAI, Ollama
-│   ├── reranker.ts       # CrossEncoder reranker (Xenova/bge-reranker-base) + availability pre-flight
+│   ├── reranker.ts       # CrossEncoder reranker (Xenova/bge-reranker-base, lazy singleton)
 │   ├── ollamaClient.ts   # Map-keyed lazy singleton factory for the official ollama-js client
 │   ├── vectorStore.ts    # Vector store strategy: LanceDB (default), Qdrant, Chroma; pgvector in pgVectorProvider.ts
 │   └── pgVectorProvider.ts # pgvector provider (raw pg Pool, URL via runtime config)
 ├── smoke/
 │   └── ollamaJs.smoke.ts # Dual-runtime ollama resolution smoke checks
-├── __tests__/            # Jest suites: parser, parserOcrRouting, embeddings, hfLocalEmbedding airgap, ingest, ingest.rerank, reranker airgap, ollamaClient, ollamaKeepAliveEnv, vectorStore, chromaProvider, pgvectorHelper, pgVectorProvider (+ integration suites)
+├── __tests__/            # Jest suites: parser, parserOcrRouting, embeddings, hfLocalEmbedding airgap, ingest (progress + cancellation), ingest.rerank, reranker airgap, ollamaClient, ollamaKeepAliveEnv, envExampleParity, rawEnvReads, vectorStore, chromaProvider, pgvectorHelper, pgVectorProvider (+ integration suites + globalSetup/Teardown)
 ├── utils/
 │   ├── logger.ts         # Winston logger
 │   ├── fileUtils.ts      # Filename sanitization and unique path resolution
@@ -88,18 +88,19 @@ src/
 
 ## Processing pipeline
 
-1. **Parse** — Extract plain text from the uploaded file or URL.
-2. **Chunk** — Split text into 1000-char chunks with 200-char overlap using `RecursiveCharacterTextSplitter` (wiki pages use 800/100).
-3. **Embed** — Generate vector embeddings via the configured provider, keyed by the request's `embeddingModel`.
-4. **Store** — Save vectors and citation metadata to the configured vector database.
-5. **Cleanup** — Delete the uploaded file from `storage/uploads/`.
-6. **Callback** — Notify the main server of completion or failure via `PUT /api/documents/:id/status` (best-effort, 5000ms timeout).
+1. **Parse** — Extract plain text from the uploaded file or URL (progress notify 25%).
+2. **Chunk** — Split text into 1000-char chunks with 200-char overlap using `RecursiveCharacterTextSplitter` (wiki pages use 800/100). Progress notify 40%.
+3. **Embed** — Generate vector embeddings via the configured provider, keyed by the request's `embeddingModel`. Embeddings run in slices of 64 with per-slice progress notifies (40→90) and a cancellation check on every slice boundary.
+4. **Store** — Save vectors and citation metadata to the configured vector database (progress notify 95%).
+5. **Cancellation** — Before each boundary (pre-parse, post-parse, post-chunk, per-embed-slice, post-store) the collector polls the server's secret-authed `GET /api/documents/:id/status`; a `cancelled` status throws `IngestCancelledError` and the handler responds `200 { status: "cancelled" }` with **no** failed notify. Poll failures are fail-open (never fail the ingest). A cancellation detected after the vectors were written triggers a best-effort purge through the same deletion path as `DELETE /api/ingest/:documentId`.
+6. **Cleanup** — Delete the uploaded file from `storage/uploads/`.
+7. **Callback** — Notify the main server of completion or failure via `PUT /api/documents/:id/status` (best-effort, 5000ms timeout).
 
 ## Reranking
 
 The collector also hosts a CrossEncoder reranker (`src/services/reranker.ts`) that the server calls **post-RRF** to re-score the fused top-K candidate list. It is a sibling of the HF local embedding provider: lazy `pipeline()` load, an `initializing` promise mutex against concurrent load storms, and a fail-closed air-gap stance (remote downloads gated by `HF_ALLOW_REMOTE_MODELS`, default `true`; set `false` for air-gapped deployments with a pre-seeded cache).
 
-- Model: `Xenova/bge-reranker-base` (default `RERANKER_MODEL`), loaded via `@xenova/transformers` with `quantized: true`. The `seed:reranker` script pre-populates the on-disk cache for `onnx-community/bge-reranker-v2-m3-ONNX` (~544MB int8 ONNX) — set `RERANKER_MODEL` to match whichever model you seed.
+- Model: `Xenova/bge-reranker-base` (default `RERANKER_MODEL`), loaded via `@xenova/transformers` with `quantized: true` on a `text-classification` pipeline. The `seed:reranker` script pre-populates the on-disk cache for `onnx-community/bge-reranker-v2-m3-ONNX` (~544MB int8 ONNX) — set `RERANKER_MODEL` to match whichever model you seed. The former `checkRerankerAvailability()` pre-flight was removed in the Phase 180 dead-code sweep (no production caller); a cache miss surfaces as a pipeline-load hard error instead.
 - Scores are sigmoid-mapped logits → 0..1 probabilities; the route sorts candidates DESC by score.
 - Cache dir resolution: `RERANKER_CACHE_DIR` → `HF_CACHE_DIR` → HF default. For air-gapped deployments, seed the cache on a networked host with `pnpm --filter collector seed:reranker` (optionally pinning `--revision <sha>` for supply-chain safety) and point `RERANKER_CACHE_DIR` outside `node_modules`.
 
@@ -110,18 +111,18 @@ The collector exposes the following HTTP endpoints (all mounted under `/api`):
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/health` | Service health check (`{ status, service, timestamp }`) |
-| `POST` | `/api/ingest` | Upload and process a document (multipart). Requires `documentId` and `embeddingModel` in the body. Gated by `requireCollectorSecret` |
-| `POST` | `/api/ingest/query` | Vector search within a workspace. Body: `{ query, workspaceId, embeddingModel?, limit? }` (limit defaults to 5, capped at 100). Not secret-gated |
+| `POST` | `/api/ingest` | Upload and process a document (multipart). Body validated by `IngestUploadBodySchema` — requires `documentId` and `embeddingModel`; `ocrMode` is a strict enum (`auto` \| `vision` \| `skip`, default `auto`), `docType` defaults to `md`. Gated by `requireCollectorSecret` (constant-time secret comparison) |
+| `POST` | `/api/ingest/query` | Vector search within a workspace. Body: `{ query, workspaceId, embeddingModel?, limit?, filters? }` (limit defaults to 5, capped at 100; optional `filters` support `documentTypes` (max 6) + `dateFrom`/`dateTo` ISO bounds — RAG metadata filtering, 260830-ur9). Returns `{ results, dimension }` (`dimension` comes from the embedding provider, present even when the table is empty). Not secret-gated |
 | `POST` | `/api/ingest/rerank` | CrossEncoder reranking of RRF-fused candidates. Body: `{ query, candidates: [{ chunkId, documentId, chunkText, score, source?, chunkIndex?, metadata? }] }` (Zod-validated via `RerankRequestSchema`, max 100 candidates). Returns `{ results: [{ ...candidate, score }] }` sorted DESC by score (sigmoid 0..1). Read-only pure function — not secret-gated (the server's `rerankCandidates` does not send `X-Collector-Secret`) |
 | `GET` | `/api/ingest/chunks/:documentId` | Retrieve all chunks for a document from the vector store (query: `workspaceId`, `workspaceName?`). Validates IDs before they reach a LanceDB SQL `where` clause (injection guard). Not secret-gated |
-| `POST` | `/api/ingest/reembed` | Re-embed an existing document's chunks with a (possibly different) `embeddingModel`. Idempotent: deletes existing vectors before writing new ones; an empty `chunks` array is a no-op. Gated by `requireCollectorSecret` |
+| `POST` | `/api/ingest/reembed` | Re-embed an existing document's chunks with a (possibly different) `embeddingModel`. Idempotent: deletes existing vectors before writing new ones; an empty `chunks` array is a no-op. Optionally re-stamps `documentType`/`documentCreatedAt`(+Ms) when provided. Gated by `requireCollectorSecret` |
 | `POST` | `/api/ingest/youtube` | Extract and ingest a YouTube transcript. Requires `url`, `documentId`, `embeddingModel`. Gated by `requireCollectorSecret` |
 | `POST` | `/api/ingest/wiki-pages` | Chunk, embed, and store wiki page vectors (Zod-validated body: `archiveId`, `pageId`, `slug`, `title`, `bodyText`, `contentHash`). Pre-flights embedding-model availability and returns 503 with `{ error, embeddingModel, available: false }` if the local model is unavailable. Gated by `requireCollectorSecret` |
 | `POST` | `/api/ingest/archive-page` | Parse-only endpoint for the archive import pipeline (multipart file + `{ jobId, archiveId, documentId? }`). Does **not** chunk/embed/store — it parses the file and callbacks the server at `PUT /api/archives/import/:jobId/callback` with `{ status, extractedText, title }`, returning `{ jobId, status: "completed" }`. Gated by `requireCollectorSecret` |
 | `DELETE` | `/api/ingest/:documentId` | Remove document vectors (query: `workspaceId`, `workspaceName?`). Gated by `requireCollectorSecret` |
 | `DELETE` | `/api/ingest/wiki-pages/:pageId` | Remove wiki page vectors. Gated by `requireCollectorSecret` |
 
-**Response shape (upload/youtube):** `{ documentId, chunkCount, chunks: [{ chunkIndex, chunkText, paragraph, charStart, charEnd }], embeddingModel, table, status }`. The `chunks[].chunkText` field is passed through so the server can populate PostgreSQL `document_chunks.searchVector` for hybrid RAG (the collector never writes to PostgreSQL through Prisma).
+**Response shape (upload/youtube):** `{ documentId, chunkCount, chunks: [{ chunkIndex, chunkText, paragraph, charStart, charEnd }], embeddingModel, table, status }` — plus `ocrSkipped` on the upload path when OCR was bypassed (CR-01 fix: the skip reason is surfaced to the server instead of silently completing with 0 chunks). Both payloads are producer-side safeParse-validated against the shared `IngestResponseSchema` before being sent. The `chunks[].chunkText` field is passed through so the server can populate PostgreSQL `document_chunks.searchVector` for hybrid RAG (the collector never writes to PostgreSQL through Prisma). A user-cancelled ingest responds `200 { documentId, status: "cancelled" }`.
 
 **Key exports (programmatic):**
 
@@ -150,12 +151,13 @@ The collector exposes the following HTTP endpoints (all mounted under `/api`):
 - **ollama** ^0.6.3 — Official ollama-js client (embeddings + smoke gate)
 - **chromadb** ^3.5.0 — Official Chroma SDK (vector store provider)
 - **pg** ^8.23.0 + **pgvector** ^0.3.0 — pgvector provider (raw Pool, no Prisma)
-- **cors** ^2.8.6, **dotenv** ^17.4.2 — CORS and `.env` loading
+- **apache-arrow** 18.1.0 (pinned) — Arrow runtime for the LanceDB SDK
+- **cors** ^2.8.6 — CORS middleware
 - **axios** ^1.19.0 — Server config fetch + status callbacks
 - **winston** ^3.19.0 — Structured logging
 - **zod** ^4.4.3 — Request validation (shared schemas)
 - **commander** ^15.0.0 — `seed:reranker` CLI argument parsing
-- **@simmetric-chat/shared** `workspace:*` — Shared Zod schemas and types (only cross-package import)
+- **@simmetric-chat/shared** `workspace:*` — Shared Zod schemas and types (only cross-package import; also supplies the zero-dependency `loadRootEnv()` root-`.env` loader — no `dotenv` dependency)
 
 ## Embedding providers
 
@@ -187,7 +189,7 @@ Strategy pattern with the `VectorStoreProvider` interface (`addDocuments`, `sear
 
 ## Environment variables
 
-Validated by Zod in `src/config/env.ts`; invalid env causes `process.exit(1)` with an actionable diagnostic naming the resolved `.env` path and missing keys. The `.env` file is resolved by walking up from `__dirname` to the repo-root marker (`pnpm-workspace.yaml`), independent of the operator's `cwd` — **not** `process.cwd()` — with a cwd-adjacent fallback for packaged layouts (e.g. Tauri sidecar) that skip the root merge.
+Validated by Zod in `src/config/env.ts` (15 schema keys); invalid env causes `process.exit(1)` with an actionable diagnostic naming the resolved `.env` path and missing keys. The `.env` file is resolved by walking up from `__dirname` to the repo-root marker (`pnpm-workspace.yaml`), independent of the operator's `cwd` — **not** `process.cwd()` — with a cwd-adjacent fallback for packaged layouts (e.g. Tauri sidecar) that skip the root merge. The root `.env` is loaded by the zero-dependency `loadRootEnv()` from `@simmetric-chat/shared` (fills only keys absent from `process.env`; per-package `.env` override files were removed in the Phase 177 cleanup).
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -224,14 +226,14 @@ The collector has a dedicated Jest test suite under `src/__tests__/`:
 | `envExampleParity.test.ts` | Collector `envSchema` ↔ root `.env.example` parity tripwire (shape-only introspection; one-way schema ⊆ file enforcement) |
 | `rawEnvReads.test.ts` | Raw `process.env` channel behavioral guard — `HF_ALLOW_REMOTE_MODELS`, `XENOVA_CACHE_DIR`, `HF_CACHE_DIR`, reranker cache chain, `OPENAI_API_KEY` dual-path, `LOG_LEVEL`; turns RED if any raw read is absorbed into Zod |
 | `hfLocalEmbedding.airgap.test.ts` | HF v4 provider air-gap stance (`allowRemoteModels=false`, cache miss = hard error, dtype `q8`) |
+| `reranker.airgap.test.ts` | `CrossEncoderReranker` air-gap stance — no network on score, cache miss = hard error, sigmoid arithmetic, env stance, `quantized: true` API, DESC sort (6 tests) |
 | `parser.test.ts` | `parseOffice` PPTX fallback behavior (degraded `parserFallback` result on officeparser rejection, normal passthrough, fallback warning log) |
 | `parserOcrRouting.test.ts` | `ocrMode` (`auto`/`vision`/`skip`) routing and `ocrSkipped` graceful degradation |
-| `ingest.test.ts` | Route-level behavior (auth boundary, query `dimension` exposure, reembed idempotency + shared chunk-id; `notifyServerStatus` is axios-mocked, not asserted) |
+| `ingest.test.ts` | Route-level behavior (auth boundary, query `dimension` exposure, reembed idempotency + shared chunk-id, metadata stamping + query filters 260830-ur9, quick 260918-p3h progress + cooperative cancellation with asserted axios notifies) |
 | `ingest.rerank.test.ts` | `POST /api/ingest/rerank` — no-secret 200 (NOT 401), Zod 400, DESC sort with sigmoid scores, 500 on reranker failure |
-| `reranker.airgap.test.ts` | `CrossEncoderReranker` air-gap stance — no network on score, cache miss = hard error, sigmoid arithmetic, env stance, `quantized: true` API, DESC sort (6 tests) |
 | `ollamaClient.test.ts` | `getOllamaClient()` Map-keyed lazy singleton (host\|timeoutMs\|auth cache key) |
 | `ollamaKeepAliveEnv.test.ts` | `OLLAMA_KEEP_ALIVE` Zod default (`10m`) and operator override passthrough |
-| `vectorStore.test.ts` | LanceDB/Qdrant/Chroma provider behavior (409/404 idempotency) |
+| `vectorStore.test.ts` | LanceDB/Qdrant/Chroma provider behavior (409/404 idempotency, metadata pre-filter must-clauses, LanceDB filter degrade) |
 | `chromaProvider.test.ts` | `ChromaProvider` unit tests with mocked chromadb SDK |
 | `pgvectorHelper.test.ts` | `toPgVector` serializer + `parseVectorDim` dim-mismatch guard |
 | `pgVectorProvider.test.ts` | `PgVectorProvider` unit tests — mocked `pg.Pool`: table-name derivation, dim-mismatch BLOCK, upsert/search/delete SQL shape, batch cap, `close()`, optional `registerTypes` |
@@ -245,13 +247,13 @@ pnpm --filter collector test -- path/to/file.test.ts  # Run a single test file
 **Integration tests** (`*.integration.test.ts`, excluded from the unit suite) hit real services and are run via `test:integration`:
 
 ```bash
-# pgvector integration (pgVectorProvider.integration.test.ts, chromaProvider.integration.test.ts):
+# pgvector integration (pgVectorProvider.integration.test.ts):
 # requires a real pgvector on port 5433 — skips when unavailable:
 docker run -d -p 5433:5432 -e POSTGRES_USER=test -e POSTGRES_PASSWORD=test \
   -e POSTGRES_DB=pgvector_test pgvector/pgvector:pg16
 pnpm --filter collector test:integration
 
-# Chroma integration (gated behind CHROMA_AVAILABLE):
+# Chroma integration (chromaProvider.integration.test.ts, gated behind CHROMA_AVAILABLE):
 # NOTE: the `chroma` service is commented out in docker/docker-compose.yml —
 # uncomment it (and the chroma-data volume) first:
 # docker compose -f docker/docker-compose.yml up -d chroma

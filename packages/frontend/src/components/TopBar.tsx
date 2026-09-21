@@ -13,26 +13,11 @@ import { useProjects } from "../queries/useProjects";
 import TokenCounterWidget from "./TokenCounterWidget";
 import ProjectRenameModal from "./ProjectRenameModal";
 
-interface TopBarUser {
-  username: string;
-  firstName?: string | null;
-  lastName?: string | null;
-  avatar?: string | null;
-}
-
 export interface TopBarProps {
   /** Active section / page title shown in the bar (already i18n-resolved by caller). */
   currentSection: string;
   /** Currently selected project id (drives the project name label + rename target). */
   selectedProjectId: string;
-  /**
-   * Authenticated user — kept in the props shape for the App.tsx call site
-   * (UI revision R-5 moved the user menu into the sidebar's UserMenuDialog),
-   * but the bar itself no longer renders a user menu.
-   */
-  user?: TopBarUser | null;
-  /** Logout handler (passed through to App wiring; unused inside the bar). */
-  onLogout?: () => void;
   className?: string;
 }
 

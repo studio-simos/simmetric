@@ -143,6 +143,11 @@
     "ssoSignIn": "Login with SSO",
     "ldap": {
       "hint": "Melden Sie sich mit Ihren Unternehmensverzeichnis-Zugangsdaten an."
+    },
+    "offline": {
+      "title": "{{appName}} ist nicht erreichbar",
+      "body": "Stellen Sie sicher, dass der Server läuft und von diesem Gerät aus erreichbar ist, und versuchen Sie es dann erneut.",
+      "retry": "Erneut versuchen"
     }
   },
   "chat": {

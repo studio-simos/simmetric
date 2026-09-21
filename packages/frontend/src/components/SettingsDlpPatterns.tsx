@@ -273,19 +273,19 @@ export function SettingsDlpPatterns() {
                       {p.displayName}
                     </span>
                     {p.isBuiltIn && (
-                      <Badge variant="secondary" className="text-[10px]">
+                      <Badge variant="secondary" className="text-[12px]">
                         {t("dlpPatterns.builtIn")}
                       </Badge>
                     )}
                     {!p.isEnabled && (
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-[12px]">
                         {t("dlpPatterns.disabled")}
                       </Badge>
                     )}
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <code className="text-[11px] text-muted-foreground">{p.name}</code>
-                    <code className="text-[11px] text-muted-foreground truncate max-w-[60%] opacity-70">
+                    <code className="text-[12px] text-muted-foreground">{p.name}</code>
+                    <code className="text-[12px] text-muted-foreground truncate max-w-[60%] opacity-70">
                       /{p.pattern}/{p.patternFlags}
                     </code>
                   </div>
@@ -400,14 +400,14 @@ export function SettingsDlpPatterns() {
               {preview && (
                 <div className="mt-2 space-y-1.5" data-testid="dlp-pattern-preview">
                   <div>
-                    <p className="text-[11px] font-medium text-muted-foreground">
+                    <p className="text-[12px] font-medium text-muted-foreground">
                       {t("dlpPatterns.dialog.matches", { count: preview.matches.length })}:
                     </p>
                     <div className="flex flex-wrap gap-1 mt-1">
                       {preview.matches.map((m, i) => (
                         <code
                           key={`${m.index}-${i}`}
-                          className="text-[11px] bg-destructive/10 text-destructive px-1.5 py-0.5 rounded"
+                          className="text-[12px] bg-destructive/10 text-destructive px-1.5 py-0.5 rounded"
                         >
                           {m.matchedText || "∅"}
                         </code>
@@ -415,10 +415,10 @@ export function SettingsDlpPatterns() {
                     </div>
                   </div>
                   <div>
-                    <p className="text-[11px] font-medium text-muted-foreground">
+                    <p className="text-[12px] font-medium text-muted-foreground">
                       {t("dlpPatterns.dialog.redactedPreview")}:
                     </p>
-                    <code className="block text-[11px] bg-muted px-2 py-1 rounded mt-1 whitespace-pre-wrap break-all">
+                    <code className="block text-[12px] bg-muted px-2 py-1 rounded mt-1 whitespace-pre-wrap break-all">
                       {preview.redactedText}
                     </code>
                   </div>

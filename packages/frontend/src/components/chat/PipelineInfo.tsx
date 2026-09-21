@@ -25,7 +25,7 @@ export function PipelineInfo({ toolsCalled, sourcesFound, ragSearched, ragResult
   const usedTools = toolsCalled.length > 0;
 
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground/60">
+    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground/60">
       {/* Source indicator */}
       {hasSources ? (
         <span className="inline-flex items-center gap-1 rounded bg-primary/10 text-primary/70 px-1.5 py-0.5">

@@ -250,11 +250,11 @@ export default function SettingsApiKeys() {
                 </TableCell>
                 <TableCell className="px-5 py-3">
                   {key.expiresAt ? (
-                    <Badge variant="outline" className="text-[10px]">
+                    <Badge variant="outline" className="text-[12px]">
                       {new Date(key.expiresAt).toLocaleDateString()}
                     </Badge>
                   ) : (
-                    <Badge variant="secondary" className="text-[10px]">
+                    <Badge variant="secondary" className="text-[12px]">
                       {t("settings.apiKeys.expiresNever")}
                     </Badge>
                   )}

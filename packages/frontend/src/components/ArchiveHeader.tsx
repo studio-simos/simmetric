@@ -74,7 +74,7 @@ export default function ArchiveHeader({ archive, onNewPage, onExport, onDelete, 
       <Card className="mt-4">
         <CardHeader className="flex flex-col sm:flex-row items-start justify-between gap-3">
           <div>
-            <CardTitle className="text-2xl sm:text-[28px] font-semibold leading-[1.2]">{archive.name}</CardTitle>
+            <CardTitle className="text-2xl sm:text-[24px] font-semibold leading-[1.2]">{archive.name}</CardTitle>
             {archive.description && (
               <CardDescription>{archive.description}</CardDescription>
             )}

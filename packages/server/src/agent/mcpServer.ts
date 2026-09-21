@@ -13,16 +13,23 @@
  * - rag_query: Search a workspace's documents
  * - list_workspaces: List available workspaces for the authenticated user
  *
- * Transport: Server-Sent Events (SSE) for HTTP-based connections.
+ * Transports:
+ * - Streamable HTTP (stateless mode, primary): POST /api/mcp/mcp
+ *   Each request is self-contained (MCP `2026-07-28` stateless core) — no
+ *   initialize handshake, no Mcp-Session-Id, any instance can serve any
+ *   request. `enableJsonResponse` keeps responses JSON-only so no SSE stream
+ *   is held open behind load balancers.
+ * - Legacy SSE (deprecated in v2, kept for old clients during the one-year
+ *   grace period): GET /api/mcp/sse + POST /api/mcp/message.
  *
- * Uses the low-level Server class with proper schema imports.
- * SDK v1.29+ requires schema objects (not string literals) for setRequestHandler.
+ * Uses the low-level Server class with proper schema imports from
+ * `@modelcontextprotocol/core` (the v2 split-package home for schemas).
  */
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { CallToolRequest } from "@modelcontextprotocol/sdk/types.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { Server } from "@modelcontextprotocol/server";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { SSEServerTransport } from "@modelcontextprotocol/server-legacy";
+import type { CallToolRequest, ListToolsResult } from "@modelcontextprotocol/server";
 import type { Express, Request, Response } from "express";
 import prisma from "../utils/prisma";
 import { getEnv } from "../config/env";
@@ -30,8 +37,9 @@ import { logger } from "../utils/logger";
 import axios from "axios";
 
 // MCP-01 (D-01 / Phase 150): per-session SSE state, keyed by the SDK-generated
-// sessionId. Replaces the module-level singleton transport that dropped the
-// first IDE when a second connected.
+// sessionId. Only used by the LEGACY SSE surface below. The Streamable HTTP
+// endpoint is stateless (v2 `2026-07-28`): a fresh transport per request, no
+// session Map, no reaper.
 //
 // The MCP SDK's low-level `Server` (the class used here, NOT the high-level
 // `McpServer`) does NOT support multiple concurrent transports on a single
@@ -46,6 +54,14 @@ interface McpSession {
   transport: SSEServerTransport;
 }
 const sseSessions = new Map<string, McpSession>();
+
+// MCP v2 (SEP-2549): cache hints for the cacheable `2026-07-28` results,
+// keyed by operation. The SDK stamps `ttlMs` / `cacheScope` into the result
+// `_meta` when the handler does not provide its own values. The tool list is
+// static per deployment (workspace filtering happens at tools/call), so a
+// 5-minute user-scope cache lets clients skip repeated tools/list round-trips
+// without holding a stream open to observe changes.
+const TOOLS_LIST_CACHE_HINT = { ttlMs: 300_000, cacheScope: "public" as const };
 
 /**
  * MCP-03 (D-05 / D-06 / Phase 150): auth gate for the MCP server endpoints.
@@ -95,11 +111,17 @@ function createMCPServer(): Server {
       capabilities: {
         tools: {},
       },
+      // MCP v2 (SEP-2549): cache hints for the cacheable 2026-07-28 results.
+      // Applied when the handler result does not provide its own cache fields.
+      cacheHints: {
+        "tools/list": TOOLS_LIST_CACHE_HINT,
+      },
     },
   );
 
-  // Register the tool list handler
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
+  // Register the tool list handler. v2 typed form: string-key method +
+  // typed request payload (replaces the v1 Zod-schema single-arg form).
+  server.setRequestHandler("tools/list", async (): Promise<ListToolsResult> => {
     return {
       tools: [
         {
@@ -142,8 +164,8 @@ function createMCPServer(): Server {
     };
   });
 
-  // Handle tool calls
-  server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest) => {
+  // Handle tool calls. v2 typed form: string-key method + typed request.
+  server.setRequestHandler("tools/call", async (request: CallToolRequest) => {
     const { name, arguments: args } = request.params;
     // D-08: `arguments` is optional in CallToolRequestParams (`Record<string,
     // unknown> | undefined`). The previous `any` annotation destructured
@@ -177,7 +199,7 @@ function createMCPServer(): Server {
             content: [{ type: "text", text: text || "No results found." }],
           };
         } catch (err: unknown) {
-  const message = err instanceof Error ? err.message : String(err);
+          const message = err instanceof Error ? err.message : String(err);
           return {
             content: [{ type: "text", text: `Search failed: ${message}` }],
             isError: true,
@@ -222,7 +244,7 @@ function createMCPServer(): Server {
             content: [{ type: "text", text }],
           };
         } catch (err: unknown) {
-  const message = err instanceof Error ? err.message : String(err);
+          const message = err instanceof Error ? err.message : String(err);
           return {
             content: [{ type: "text", text: `Failed to list workspaces: ${message}` }],
             isError: true,
@@ -243,15 +265,12 @@ function createMCPServer(): Server {
 
 /**
  * Mount the MCP server onto the Express app.
- * Provides two endpoints:
- * - GET /api/mcp/sse — SSE connection for MCP clients
- * - POST /api/mcp/message — Message endpoint for MCP clients
+ * Provides:
+ * - POST /api/mcp/mcp — Streamable HTTP (stateless, MCP v2 primary)
+ * - GET /api/mcp/sse — legacy SSE connection for MCP v1 clients
+ * - POST /api/mcp/message — legacy message endpoint for MCP v1 clients
  */
 export function mountMCPServer(app: Express): void {
-  // MCP-01: a `Server` is created per SSE connection in the GET handler
-  // (the SDK's low-level Server does not support multiple concurrent
-  // transports on one instance).
-
   // MCP-03 (D-06): emit ONE warn log at mount time when MCP_API_KEY is unset
   // so the operator is alerted that the MCP server is running in
   // unauthenticated localhost-only mode.
@@ -259,6 +278,47 @@ export function mountMCPServer(app: Express): void {
     logger.warn("[mcp-server] MCP_API_KEY not set — MCP server running in unauthenticated localhost-only mode");
   }
 
+  // ── v2 stateless Streamable HTTP ────────────────────────────────────────
+  // Each POST is fully self-contained: a fresh `Server` + stateless
+  // `NodeStreamableHTTPServerTransport` per request (sessionIdGenerator
+  // undefined → no Mcp-Session-Id is issued or validated). Any server
+  // instance can serve any request — no sticky sessions, no session store.
+  // `enableJsonResponse: true` keeps responses as plain JSON (no SSE stream).
+  app.post("/api/mcp/mcp", async (req: Request, res: Response) => {
+    const auth = mcpAuthCheck(req);
+    if (!auth.ok) {
+      res.status(auth.status).json({ error: auth.message });
+      return;
+    }
+
+    // Phase 185: platform principal — same bypass surface as the legacy
+    // endpoints below, set only after the auth gate passes.
+    req.tenantBypass = true;
+
+    const server = createMCPServer();
+    const transport = new NodeStreamableHTTPServerTransport({
+      sessionIdGenerator: undefined, // stateless (v2)
+      enableJsonResponse: true,
+    });
+    res.on("close", () => {
+      // Best-effort teardown; ignore errors — the transport/request ends here.
+      server.close().catch(() => {});
+    });
+    try {
+      await server.connect(transport);
+      // Express has already parsed the body — pass it so the transport does
+      // not attempt to re-read the consumed stream.
+      await transport.handleRequest(req, res, req.body);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error("[mcp-server] Streamable HTTP request failed", { error: message });
+      if (!res.headersSent) {
+        res.status(500).json({ error: "MCP request failed" });
+      }
+    }
+  });
+
+  // ── Legacy SSE (v1 clients, one-year grace period) ─────────────────────
   // MCP-01 (D-01): per-session SSE. Each GET creates a fresh Server +
   // SSEServerTransport pair, stores it in the Map keyed by the SDK-generated
   // sessionId, and removes itself on `res.close`.
@@ -324,5 +384,5 @@ export function mountMCPServer(app: Express): void {
     session.transport.handlePostMessage(req, res);
   });
 
-  logger.info("[mcp-server] MCP server mounted at /api/mcp/sse");
+  logger.info("[mcp-server] MCP server mounted at /api/mcp/mcp (stateless Streamable HTTP, v2) + /api/mcp/sse (legacy SSE)");
 }

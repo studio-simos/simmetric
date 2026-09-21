@@ -10,6 +10,16 @@
  * this service connects to the MCP server, discovers available tools,
  * and registers them as skills in the Agent's skill registry.
  *
+ * MCP v2 (`2026-07-28`) notes:
+ * - Transport fallback: StreamableHTTP primary → 4xx → SSE fallback (D-09).
+ *   The client-side SSE transport REMAINS in v2 for connecting to legacy
+ *   SSE-only servers (server-side SSE is what v2 removed); it is a
+ *   grace-period fallback, not the primary path.
+ * - `callTool` no longer takes an explicit result schema parameter in v2.
+ * - Version negotiation defaults to `legacy` (initialize handshake) so we
+ *   remain compatible with v1 servers; servers advertising `2026-07-28`
+ *   upgrade transparently via the SDK's negotiation.
+ *
  * Security: MCP tool execution is sandboxed — tools run in the MCP server's
  * process, not in our server. We only pass the query and workspace context.
  *
@@ -23,9 +33,7 @@
  * - testMCPServerConnection honors transportType (D-17).
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client, SSEClientTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { mcpHeadersSchema } from "@simmetric-chat/shared";
 import { registerSkill, unregisterSkillsForConnection, type SkillParams, type SkillResult } from "../agent/skills";
 import prisma from "../utils/prisma";

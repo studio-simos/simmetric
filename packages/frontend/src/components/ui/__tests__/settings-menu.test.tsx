@@ -84,7 +84,10 @@ describe("SettingsMenu", () => {
     expect(securityHeader).toHaveAttribute("data-active", "true");
     expect(securityHeader).toHaveAttribute("aria-current", "page");
     expect(securityHeader.className).toContain("settings-menu-item");
-    expect(securityHeader.className).toContain("border-primary");
+    // Active state (2026-09 polish): tinted fill + primary text via the
+    // inline color-mix style — NO sienna accent border in light/dark.
+    expect(securityHeader.style.backgroundColor).toContain("color-mix");
+    expect(securityHeader.style.color).toBe("var(--primary)");
 
     const generalHeader = screen
       .getByText("settings.tabs.general")
@@ -110,7 +113,10 @@ describe("SettingsMenu", () => {
     expect(rolesVoice).toHaveAttribute("data-active", "true");
     expect(rolesVoice).toHaveAttribute("aria-current", "true");
     expect(rolesVoice.className).toContain("settings-menu-item");
-    expect(rolesVoice.className).toContain("border-primary");
+    // Active state (2026-09 polish): tinted fill + primary text via the
+    // inline color-mix style — NO sienna accent border in light/dark.
+    expect(rolesVoice.style.backgroundColor).toContain("color-mix");
+    expect(rolesVoice.style.color).toBe("var(--primary)");
 
     // A non-active voice under the same group is not marked active.
     const usersVoice = screen

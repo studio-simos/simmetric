@@ -82,7 +82,7 @@ function UnfiledDropTarget({ children }: { children: React.ReactNode }) {
   return (
     <div
       ref={setNodeRef}
-      className={cn("transition-colors duration-150 rounded-lg", (isOver) && "bg-primary/50/10 border-2 border-primary/50")}
+      className={cn("transition-colors duration-150 rounded-lg", (isOver) && "bg-primary/10 border-2 border-primary/50")}
     >
       {children}
     </div>
@@ -456,7 +456,7 @@ export default function ChatSidebar({ workspaceId, currentChatId, onSelectChat, 
             <div className="p-2 space-y-2">
               {sidebarView === "date" ? (
                 <div className="space-y-2">
-                  <div className="px-1 py-1 text-[11px] text-secondary-foreground/70">
+                  <div className="px-1 py-1 text-[12px] text-secondary-foreground/70">
                     {t("sidebar.dateView.dndDisabled")}
                   </div>
                   {DATE_BUCKET_ORDER.map((bucket) => {
