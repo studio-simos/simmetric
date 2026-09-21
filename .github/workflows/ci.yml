@@ -115,8 +115,13 @@ jobs:
         # match the per-job `github_network_<hash>` suffix — --network host
         # targets 127.0.0.1:9000 reliably instead).
         run: |
+          # One docker run per mc subcommand — the quay.io/minio/mc image's
+          # entrypoint IS `mc` (run 35651908053: `sh -c "…"` reached mc as
+          # args → "`sh` is not a recognized command"; mc takes no shell).
           docker run --rm --network host \
-            quay.io/minio/mc:latest sh -c "mc alias set ci http://127.0.0.1:9000 simmetricchat simmetricchat && mc mb --ignore-existing ci/simmetricchat"
+            quay.io/minio/mc:latest alias set ci http://127.0.0.1:9000 simmetricchat simmetricchat
+          docker run --rm --network host \
+            quay.io/minio/mc:latest mb --ignore-existing ci/simmetricchat
       - run: pnpm test
       - name: Air-gap grep gate (no outbound HTTP from license service)
         # Phase 148 SC-2 / D-04 / D-06: the license service MUST be phone-home-free.
