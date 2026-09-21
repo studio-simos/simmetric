@@ -63,14 +63,41 @@ function fetchLicenses() {
  * (the CI drift-gate requires `git diff --exit-code docs/LICENSE_AUDIT.md` to
  * be clean after re-running this script) — the timestamp only changes when
  * the dependency tree actually changes, not on every run.
+ *
+ * Two-repo correction (quick 260921): in the PUBLIC snapshot repo every sync
+ * commit touches pnpm-lock.yaml, so `git log` returns the snapshot commit's
+ * timestamp (different on every release) and the drift gate false-fails. The
+ * snapshot commit message embeds the SOURCE dev sha (`sync from dev <sha>`),
+ * so when HEAD is a sync commit we resolve the timestamp from that source sha
+ * instead — falling back to the plain git log on the dev repo itself.
  */
 function stableGeneratedAt() {
   try {
+    // Snapshot commit? Extract the embedded source sha from the message.
+    const subject = execSync('git log -1 --format=%s', {
+      cwd: ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    const syncMatch = subject.match(/sync from dev ([0-9a-f]{7,40})/);
+    if (syncMatch) {
+      const devSha = syncMatch[1];
+      try {
+        return execSync(
+          `git log -1 --format=%cI -- pnpm-lock.yaml ${JSON.stringify(devSha)}`,
+          { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+        ).trim();
+      } catch {
+        // Source sha not present in this clone's history — epoch fallback
+        // keeps the gate deterministic (it only holds for dev-side commits).
+        return '1970-01-01T00:00:00Z';
+      }
+    }
     return execSync('git log -1 --format=%cI -- pnpm-lock.yaml', {
       cwd: ROOT,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim()
+    }).trim();
   } catch {
     // Not a git repo or no commits yet — fall back to a fixed epoch so the
     // output is still stable across runs (the drift-gate is a no-op in that
