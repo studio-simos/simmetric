@@ -43,6 +43,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "knip": "^6.33.0",
     "license-checker-rseidelsohn": "5.0.1",
+    "simple-git": "^3.36.0",
     "turbo": "^2.10.12",
     "typescript-eslint": "^8.68.0"
   },

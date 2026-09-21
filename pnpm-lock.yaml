@@ -52,6 +52,9 @@ importers:
       license-checker-rseidelsohn:
         specifier: 5.0.1
         version: 5.0.1(supports-color@8.1.1)
+      simple-git:
+        specifier: ^3.36.0
+        version: 3.36.0(supports-color@8.1.1)
       turbo:
         specifier: ^2.10.12
         version: 2.10.12
