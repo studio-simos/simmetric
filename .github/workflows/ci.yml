@@ -72,7 +72,11 @@ jobs:
     # unset; in CI the env export below turns the arm on unconditionally.
     services:
       minio:
-        image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+        # Registry-resilience (run 35627047286): Docker Hub denied anonymous
+        # pulls of minio/minio (3x "pull access denied", repro'd off-runner
+        # even for :latest) while quay.io — MinIO's documented primary
+        # registry — served the same tag anonymously. Same tag, mirrored.
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
         env:
           MINIO_ROOT_USER: simmetricchat
           MINIO_ROOT_PASSWORD: simmetricchat
@@ -102,7 +106,7 @@ jobs:
         # the default job network (service hostname = the service name).
         run: |
           docker run --rm --network ${{ job.container-network || 'github_network_test-unit' }} \
-            minio/mc sh -c "mc alias set ci http://minio:9000 simmetricchat simmetricchat && mc mb --ignore-existing ci/simmetricchat"
+            quay.io/minio/mc:latest sh -c "mc alias set ci http://minio:9000 simmetricchat simmetricchat && mc mb --ignore-existing ci/simmetricchat"
       - run: pnpm test
       - name: Air-gap grep gate (no outbound HTTP from license service)
         # Phase 148 SC-2 / D-04 / D-06: the license service MUST be phone-home-free.

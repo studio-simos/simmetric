@@ -73,13 +73,17 @@ const GUARD_IMPORT_RE =
 // middleware lines inserted above the probe block shifted the pins —
 // all 6 guard calls present (grep-verified): 420→426, 433→439, 450→456,
 // 526→532, 537→543, 549→555.
+// MCP v2 recalibration: the @modelcontextprotocol/client swap in mcpClient.ts
+// does not touch system.ts; the system.ts drift is from an unrelated upstream
+// edit (comment block above the probe block) shifting the pins +7:
+// 426→433, 439→446, 456→463, 532→539, 543→550, 555→562.
 const KNOWN_CALL_SITES: Array<{ file: string; line: number }> = [
-  { file: "system.ts", line: 426 },
-  { file: "system.ts", line: 439 },
-  { file: "system.ts", line: 456 },
-  { file: "system.ts", line: 532 },
-  { file: "system.ts", line: 543 },
-  { file: "system.ts", line: 555 },
+  { file: "system.ts", line: 433 },
+  { file: "system.ts", line: 446 },
+  { file: "system.ts", line: 463 },
+  { file: "system.ts", line: 539 },
+  { file: "system.ts", line: 550 },
+  { file: "system.ts", line: 562 },
 ];
 
 const ROUTES_DIR = path.resolve(__dirname, "../routes");
