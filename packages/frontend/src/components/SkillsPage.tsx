@@ -175,7 +175,7 @@ export default function SkillsPage(props: SkillsPageProps) {
     <div className="h-full overflow-y-auto p-6" data-testid="skills-page">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-[24px] font-semibold leading-[1.2] text-foreground">
+          <h1 className="text-[28px] font-semibold leading-[1.2] text-foreground">
             {t("skills.page.heading")}
           </h1>
           <p className="text-sm text-muted-foreground mt-1">{t("skills.page.subtitle")}</p>
@@ -240,7 +240,7 @@ export default function SkillsPage(props: SkillsPageProps) {
         ) : builtin.length === 0 && isLoading ? null : custom.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center" data-testid="skills-empty">
             <Wrench className="h-12 w-12 text-muted-foreground/50 mb-4" strokeWidth={1.5} />
-            <h2 className="text-[24px] font-semibold text-foreground mb-2">
+            <h2 className="text-[28px] font-semibold text-foreground mb-2">
               {t("skills.empty.heading")}
             </h2>
             <p className="text-base text-muted-foreground mb-6">{t("skills.empty.body")}</p>

@@ -131,11 +131,7 @@ function toRowJson(row: {
     isEnabled: row.isEnabled,
     workspaceId: row.workspaceId,
     createdBy: row.createdBy,
-    config: {
-      template: typeof config.template === "string" ? config.template : "",
-      defaultParams: (config.defaultParams as Record<string, string>) ?? {},
-      injectAs: typeof config.injectAs === "string" ? config.injectAs : "user",
-    },
+    config: { defaultParams: (config.defaultParams as Record<string, string>) ?? {} },
     inputSchema,
   };
 }

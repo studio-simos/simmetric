@@ -94,7 +94,7 @@ export default function SynthesisDashboard() {
   if (isLoading && runs.length === 0) {
     return (
       <div className="h-full overflow-auto p-6">
-        <h1 className="mb-6" style={{ fontSize: "24px", fontWeight: 600, lineHeight: 1.1 }}>
+        <h1 className="mb-6" style={{ fontSize: "28px", fontWeight: 600, lineHeight: 1.1 }}>
           {t("synthesis.dashboard.title")}
         </h1>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -111,7 +111,7 @@ export default function SynthesisDashboard() {
     return (
       <div className="h-full overflow-auto p-6 flex items-center justify-center">
         <div className="text-center max-w-md">
-          <h2 style={{ fontSize: "24px", fontWeight: 600, lineHeight: 1.1 }}>
+          <h2 style={{ fontSize: "28px", fontWeight: 600, lineHeight: 1.1 }}>
             {t("synthesis.dashboard.error.heading")}
           </h2>
           <p
@@ -139,7 +139,7 @@ export default function SynthesisDashboard() {
       <div className="h-full overflow-auto p-6 flex items-center justify-center">
         <div className="text-center max-w-md">
           <Inbox className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
-          <h2 style={{ fontSize: "24px", fontWeight: 600, lineHeight: 1.1 }}>
+          <h2 style={{ fontSize: "28px", fontWeight: 600, lineHeight: 1.1 }}>
             {t("synthesis.dashboard.empty.heading")}
           </h2>
           <p
@@ -156,7 +156,7 @@ export default function SynthesisDashboard() {
   // Populated state
   return (
     <div className="h-full overflow-auto p-6">
-      <h1 className="mb-6" style={{ fontSize: "24px", fontWeight: 600, lineHeight: 1.1 }}>
+      <h1 className="mb-6" style={{ fontSize: "28px", fontWeight: 600, lineHeight: 1.1 }}>
         {t("synthesis.dashboard.title")}
       </h1>
 

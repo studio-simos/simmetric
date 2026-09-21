@@ -8,7 +8,7 @@ import { cva } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const kbdHintVariants = cva(
-  "chat-kbd-hint mt-1.5 text-[12px] font-mono text-muted-foreground transition-opacity duration-300",
+  "chat-kbd-hint mt-1.5 text-[11px] font-mono text-muted-foreground transition-opacity duration-300",
   {
     variants: {
       visible: {

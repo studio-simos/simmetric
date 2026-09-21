@@ -143,11 +143,6 @@
     "ssoSignIn": "Login with SSO",
     "ldap": {
       "hint": "使用您的企业目录凭据登录。"
-    },
-    "offline": {
-      "title": "无法连接到 {{appName}}",
-      "body": "请确认服务器正在运行且可从此设备访问，然后重试。",
-      "retry": "重试"
     }
   },
   "chat": {

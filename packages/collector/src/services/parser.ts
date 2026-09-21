@@ -26,26 +26,6 @@ export interface ParsedDocument {
 }
 
 /**
- * Strip NUL bytes (0x00) from extracted text (2026-09-21 AI-ACT.pdf incident).
- *
- * pdf-parse/pdfjs emit U+0000 for glyphs certain PDF fonts/encodings cannot
- * map. PostgreSQL CANNOT store 0x00 in any text/varchar/tsvector column —
- * the server-side FTS insert (`document_chunks` unnest batch in
- * documents.ts) fails with `invalid byte sequence for encoding "UTF8": 0x00`
- * (SQLSTATE 22021), and because that write is non-blocking the document
- * still ends up "completed" with zero FTS rows → the document viewer shows
- * "No extracted text" and full-text search misses the document entirely.
- *
- * Sanitizing at the SOURCE (the parser owns every ingest path — upload,
- * YouTube, wiki) fixes all downstream consumers (chunks → vector store
- * metadata → FTS insert → viewer text) in one pass. Stripping NULs is
- * lossless for real prose: 0x00 never carries meaning in extracted text.
- */
-export function stripNulCharacters(text: string): string {
-  return text.replaceAll("\u0000", "");
-}
-
-/**
  * OCR routing mode — explicit signal from the server (D-03/D-04/D-07/D-08).
  *
  * - "auto"   — default, pre-check with pdf-parse (existing behavior)
@@ -103,7 +83,7 @@ export async function parseYoutubeUrl(url: string): Promise<ParsedDocument> {
 
   try {
     const transcript = await fetchTranscript(videoId);
-    const fullText = stripNulCharacters(transcript.map((entry) => entry.text).join(" "));
+    const fullText = transcript.map((entry) => entry.text).join(" ");
 
     return {
       text: fullText,
@@ -135,7 +115,7 @@ async function parsePdf(
     let pages: number | undefined;
     try {
       const skipData = await pdfParse(buffer);
-      text = stripNulCharacters(skipData.text || "").trim();
+      text = (skipData.text || "").trim();
       pages = skipData.numpages;
     } catch (parseErr: unknown) {
       const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
@@ -149,12 +129,12 @@ async function parsePdf(
   }
 
   const data = await pdfParse(buffer);
-  const textContent = stripNulCharacters(data.text).trim();
+  const textContent = data.text.trim();
 
   // "auto" mode: if pdf-parse extracted meaningful text, use it directly (existing behavior)
   if (ocrMode === "auto" && textContent.length > 100) {
     return {
-      text: stripNulCharacters(data.text),
+      text: data.text,
       metadata: {
         title: source,
         pages: data.numpages,
@@ -172,7 +152,7 @@ async function parsePdf(
     // No model provided — D-04 graceful degradation (no local OCR fallback)
     logger.info(`[parser] PDF "${source}" OCR skipped — no ocrModel provided (ocrMode=${ocrMode})`);
     return {
-      text: stripNulCharacters(data.text || ""),
+      text: data.text || "",
       metadata: { title: source, pages: data.numpages, source, ocrApplied: false, ocrSkipped: "OCR skipped: no vision model" },
     };
   }
@@ -217,7 +197,7 @@ async function parsePdfWithOcr(
 
 function parseText(buffer: Buffer, source: string): ParsedDocument {
   return {
-    text: stripNulCharacters(buffer.toString("utf-8")),
+    text: buffer.toString("utf-8"),
     metadata: {
       title: source,
       source,
@@ -226,7 +206,7 @@ function parseText(buffer: Buffer, source: string): ParsedDocument {
 }
 
 function parseCsv(buffer: Buffer, source: string): ParsedDocument {
-  const text = stripNulCharacters(buffer.toString("utf-8"));
+  const text = buffer.toString("utf-8");
   return {
     text,
     metadata: {
@@ -244,14 +224,14 @@ async function parseDocx(filePath: string, buffer: Buffer, source: string): Prom
   try {
     const text = await parseOfficeFileAsync(filePath);
     return {
-      text: stripNulCharacters(text),
+      text,
       metadata: { title: source, source },
     };
   } catch (err: any) {
     logger.warn(`[parser] officeparser failed for "${source}", falling back to mammoth: ${err.message}`);
     const result = await mammoth.extractRawText({ buffer });
     return {
-      text: stripNulCharacters(result.value),
+      text: result.value,
       metadata: { title: source, source },
     };
   }
@@ -269,7 +249,7 @@ async function parseOffice(filePath: string, source: string): Promise<ParsedDocu
   try {
     const text = await parseOfficeFileAsync(filePath);
     return {
-      text: stripNulCharacters(text),
+      text,
       metadata: { title: source, source },
     };
   } catch (err: any) {
@@ -299,7 +279,7 @@ function parseXlsx(buffer: Buffer, source: string): ParsedDocument {
   }
 
   return {
-    text: stripNulCharacters(texts.join("\n")),
+    text: texts.join("\n"),
     metadata: {
       title: source,
       source,

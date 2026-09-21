@@ -38,12 +38,6 @@ export interface SidebarItemProps {
   collapsed?: boolean;
   /** Click handler (caller navigates + closes mobile sheet). */
   onClick?: () => void;
-  /**
-   * Extra classes for the expanded row (caller-owned sizing, e.g. the
-   * ≥44px touch-target floor below `lg`). Appended last so it can
-   * override the defaults via tailwind-merge.
-   */
-  className?: string;
 }
 
 export default function SidebarItem({
@@ -55,7 +49,6 @@ export default function SidebarItem({
   isActive = false,
   collapsed = false,
   onClick,
-  className,
 }: SidebarItemProps) {
   const activeStyle =
     isActive && primaryColor
@@ -71,14 +64,10 @@ export default function SidebarItem({
         onClick={onClick}
         title={label}
         aria-label={label}
-        // `relative` hosts the caller's absolutely-positioned rail badge
-        // (e.g. the tiny corner lock in the persistent nav rail).
-        className="relative w-full flex items-center justify-center px-1 py-2 rounded text-sm justify-center h-auto text-muted-foreground hover:bg-muted"
+        className="w-full flex items-center justify-center px-1 py-2 rounded text-sm justify-center h-auto text-muted-foreground hover:bg-muted"
         style={activeStyle}
-        data-path={path}
       >
         {icon ?? <span className="w-4 h-4" />}
-        {badge}
       </Button>
     );
   }
@@ -91,7 +80,6 @@ export default function SidebarItem({
       className={cn(
         "w-full text-left px-3 py-2 rounded text-sm justify-start h-auto flex items-center gap-2",
         isActive ? "font-medium" : "text-muted-foreground hover:bg-muted",
-        className,
       )}
       style={activeStyle}
       data-path={path}

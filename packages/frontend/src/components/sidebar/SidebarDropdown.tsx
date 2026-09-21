@@ -56,7 +56,7 @@ export default function SidebarDropdown({
   return (
     <div className="px-3 py-3 border-b border-input/60">
       <label
-        className="block px-3 py-1 text-[12px] font-mono uppercase tracking-wider select-none text-[var(--sidebar-dropdown-label)]"
+        className="block px-3 py-1 text-[10px] font-mono uppercase tracking-wider select-none text-[var(--sidebar-dropdown-label)]"
       >
         {label}
       </label>

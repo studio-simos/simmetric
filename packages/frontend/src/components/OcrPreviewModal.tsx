@@ -112,7 +112,7 @@ export default function OcrPreviewModal({ job, archiveId, open, onClose }: Props
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <h2 className="text-[16px] font-semibold leading-[1.2] text-foreground truncate">
+          <h2 className="text-[20px] font-semibold leading-[1.2] text-foreground truncate">
             {t("ocr.preview.title", { filename: sourceFileName })}
           </h2>
           {job.result && (

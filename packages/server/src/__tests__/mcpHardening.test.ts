@@ -32,14 +32,18 @@ jest.mock("../utils/prisma", () => {
 // Mock the MCP SDK client transports so importing mcpClient does not pull in
 // heavy ESM. We only need the runtime helpers (__setActiveConnectionForTest,
 // getMCPToolsForWorkspace) — not connectMCPServer.
-jest.mock("@modelcontextprotocol/client", () => ({
+jest.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   Client: jest.fn().mockImplementation(() => ({
     connect: jest.fn(),
     listTools: jest.fn(),
     close: jest.fn(),
     callTool: jest.fn(),
   })),
+}));
+jest.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
   SSEClientTransport: jest.fn().mockImplementation(() => ({ __kind: "sse" })),
+}));
+jest.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: jest.fn().mockImplementation(() => ({ __kind: "streamable-http" })),
 }));
 

@@ -122,7 +122,7 @@ export default function MarketplacePage() {
     <div className="h-full overflow-y-auto p-6">
       {/* Section 1 — Page header */}
       <div className="pt-[32px] pb-[24px]">
-        <h1 className="text-[24px] font-semibold text-foreground">
+        <h1 className="text-[28px] font-semibold text-foreground">
           {t("marketplace.title")}
         </h1>
       </div>

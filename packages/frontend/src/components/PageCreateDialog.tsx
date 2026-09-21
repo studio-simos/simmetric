@@ -75,7 +75,7 @@ export default function PageCreateDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto min-w-0">
         <DialogHeader>
-          <DialogTitle className="text-[16px] font-semibold">
+          <DialogTitle className="text-[20px] font-semibold">
             {t("archives.createPageTitle")}
           </DialogTitle>
         </DialogHeader>

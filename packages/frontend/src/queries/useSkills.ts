@@ -31,7 +31,7 @@ interface BuiltinSkillEntry {
   type: string;
 }
 
-/** Custom/accessible row — config round-trips in full (template included: the edit dialog hydrates from it). */
+/** Custom/accessible row — every row carries config.defaultParams + parsed inputSchema. */
 export interface CustomSkillRow {
   id: string;
   slug: string;
@@ -43,7 +43,7 @@ export interface CustomSkillRow {
   isEnabled: boolean;
   workspaceId: string | null;
   createdBy: string | null;
-  config: { template: string; defaultParams: Record<string, string>; injectAs: string };
+  config: { defaultParams: Record<string, string> };
   inputSchema: Record<string, unknown>;
 }
 

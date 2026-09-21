@@ -42,13 +42,11 @@ On top of the env loading above, the server manages admin-editable settings in t
 | `ALWAYS_READONLY` infra keys: `JWT_SECRET`, `DATABASE_URL`, `SERVER_PORT`, `COLLECTOR_PORT`, `SERVER_URL`, `COLLECTOR_URL` | **ENV > default — never the DB.** These keys are `readOnly: true` in the settings API, and `PUT /api/system/settings` rejects them. | No |
 | Every other UI-editable key | **DB > ENV > default.** A DB row (set from the Settings UI) wins over an env value; the settings GET marks such keys with `envOverridden: true` so the UI can show that the env var is currently ineffective. UI edits take effect immediately (Redis cache is invalidated on write). | Yes |
 
-A third class — the `STORAGE_PROVIDER` / `S3_*` storage keys (Phase 184) — is *not* in the server Zod schema but rides `getSetting`'s generic ENV tier (raw `process.env` bracket access, same doctrine as `upload_draft_reaper_*`). They resolve per-org through the Phase 183 cascade (`tenant > global > ENV > default`), so a tenant can use S3 while the community default stays LocalFS.
-
 Practical consequence: setting an env var for a UI-editable key only acts as a *fallback* — as soon as an admin saves that key in Settings, the DB value wins.
 
 ## Environment variables reference
 
-Everything below mirrors the root `.env.example` and the Zod schemas (`packages/server/src/config/env.ts` — 94 keys, `packages/collector/src/config/env.ts` — 15 keys, `packages/widget/src/config/env.ts` — 6 keys; all three counts are pinned by the parity-test sentinels). "Default" is the code default applied when the key is absent from both `process.env` and the root `.env`.
+Everything below mirrors the root `.env.example` and the Zod schemas (`packages/server/src/config/env.ts` — 83 keys, `packages/collector/src/config/env.ts`, `packages/widget/src/config/env.ts` — 6 keys). "Default" is the code default applied when the key is absent from both `process.env` and the root `.env`.
 
 ### Shared / bootstrap (cross-service)
 
@@ -104,7 +102,6 @@ Everything below mirrors the root `.env.example` and the Zod schemas (`packages/
 | `OCR_MODEL` | No | `glm-ocr:latest` | Vision OCR model (supports `model:version`). |
 | `OCR_TIMEOUT` | No | `600000` | OCR timeout (10 min — vision models are slow). |
 | `COLLECTOR_INGEST_TIMEOUT_MS` | No | unset — no cap | Optional server→collector ingest POST wait cap. Default is UNLIMITED (quick 260918-p3h): large PDFs + local embedding legitimately exceed any fixed limit, and the per-document cancel endpoints are the relief valve. Set the key (ms) to restore a wait cap; `0` also disables it. ENV-only infra key (never DB/UI). |
-| `WIKI_EMBED_TIMEOUT_MS` | No | `1800000` | Server→collector `POST /api/ingest/wiki-pages` wait cap (30 min). Used by the hourly wiki-consistency reindex; the old hardcoded 60s aborted large wiki pages mid-embedding (2026-09-21 incident). Raise for very large pages on slow hosts; `0` disables the cap. ENV-only infra key. |
 | `OCR_NUM_PREDICT` | No | `8192` | Max output tokens for the OCR model (min 256). |
 | `SYNTHESIS_LLM_MODEL` | No | `gemma4:latest` | Model for the auto-synthesis pipeline. |
 | `EMBEDDING_PROVIDER` | server, collector | No | `local` | `local` / `openai` / `ollama` / `hf-local` (shared schema). |
@@ -142,21 +139,8 @@ Everything below mirrors the root `.env.example` and the Zod schemas (`packages/
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | No | — | VAPID web-push keypair. Unset = ephemeral dev keys generated with a warning. |
 | `VAPID_SUBJECT` | No | — | Push subject; consumption default `mailto:admin@simmetric-chat.local`. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | No | — | SMTP for password reset + backup notifications. Unset = the related features log-and-skip instead of failing. `SMTP_PORT` validated 1–65535. |
-| `PUPPETEER_EXECUTABLE_PATH` | No | `/usr/bin/chromium-browser` | Chromium executable for archive PDF export (consumption-site default in `archiveExportService.ts`). |
+| `PUPPETEER_EXECUTABLE_PATH` | No | consumption-site default | Chromium executable for archive PDF export. |
 | `ALLOWED_ORIGINS` | No | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000` | CORS allowlist (comma-separated). Trimmed, empties dropped; empty/absent falls back to the dev-friendly default list. |
-
-#### Storage provider keys (SystemConfig ENV tier — not Zod schema keys)
-
-Documented in the `[server]` section of `.env.example` but deliberately **outside** the server Zod schema: these keys are read through `getSetting`'s generic ENV tier and are admin-editable in the Settings UI (`STORAGE_PROVIDER`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` are all `configKeySchema` keys). Resolution per org: `tenant > global > ENV > default`.
-
-| Variable | Default | Description |
-|---|---|---|
-| `STORAGE_PROVIDER` | `localfs` | `localfs` (default, byte-compatible with the pre-Phase-184 fs behavior) or `s3` (S3-compatible: AWS/MinIO/R2/Wasabi). |
-| `S3_ENDPOINT` | empty | Empty = AWS-native signing; set for MinIO/R2/Wasabi (enables `forcePathStyle` + `WHEN_REQUIRED` checksums). |
-| `S3_BUCKET` | empty | Required fail-loud when `STORAGE_PROVIDER=s3` (`storageProvider.ts` throws a named error at resolve time). |
-| `S3_REGION` | `us-east-1` sentinel | Fine for MinIO. |
-| `S3_ACCESS_KEY_ID` | empty | Required fail-loud when `STORAGE_PROVIDER=s3`. |
-| `S3_SECRET_ACCESS_KEY` | empty | Required fail-loud when `STORAGE_PROVIDER=s3`. |
 
 ### `[collector]` — ingest pipeline :3210
 
@@ -174,7 +158,7 @@ The widget reads exactly **6** schema keys: `NODE_ENV`, `WIDGET_PORT`, `SERVER_U
 
 ## Raw-read keys (outside the Zod schemas)
 
-A small set of keys is deliberately read raw from `process.env` and is **not** part of any package schema. They are documented as pointer comments at the bottom of `.env.example` and pinned by the collector's `rawEnvReads.test.ts` (its `RAW_ENV_EXCEPTIONS` set fails if any of them is absorbed into a Zod schema):
+A small set of keys is deliberately read raw from `process.env` and is **not** part of any package schema. They are documented as pointer comments at the bottom of `.env.example` and pinned by the collector's `rawEnvReads.test.ts`:
 
 | Variable | Applies to | Purpose |
 |---|---|---|
@@ -184,16 +168,14 @@ A small set of keys is deliberately read raw from `process.env` and is **not** p
 | `HF_ALLOW_REMOTE_MODELS` | collector | Remote model-download gate for the local/reranker providers (`false` closes it for air-gapped deployments with a pre-seeded cache; anything other than the exact string `false` keeps it open). |
 | `OPENAI_API_KEY` | collector (raw only) | Dual-path channel: it *is* a server schema key (documented in the `[server]` LLM section), but on the collector it is raw-only (used by `embeddings.ts`). |
 
-Note: `STORAGE_PROVIDER` / `S3_*` are a related-but-different class — they are not Zod schema keys either, but they *are* DB-backed `configKeySchema` keys with a generic ENV tier (see the storage-provider table above), so they do not belong to this raw-only set.
-
 ## DB-backed system settings (Settings UI)
 
-Beyond env vars, admins configure 75 settings keys at runtime through the Settings UI (`GET`/`PUT /api/system/settings`, admin-only). The canonical key list is the `configKeySchema` enum in `packages/shared/src/schemas/config.schema.ts` (LLM, embedding, vector DB, storage provider + S3, agent watchdogs, branding, DLP, feature flags, OCR, synthesis, upload drafts, retention, RAG reranker, auto title/tags, web search, and more). Fallback values for these keys live in `CONFIG_DEFAULTS` (`packages/shared/src/constants/permissions.ts`) and are seeded into the DB on first boot.
+Beyond env vars, admins configure ~70 settings keys at runtime through the Settings UI (`GET`/`PUT /api/system/settings`, admin-only). The canonical key list is the `configKeySchema` enum in `packages/shared/src/schemas/config.schema.ts` (LLM, embedding, vector DB, agent watchdogs, branding, feature flags, OCR, synthesis, retention, web search, and more). Fallback values for these keys live in `CONFIG_DEFAULTS` (`packages/shared/src/constants/permissions.ts`) and are seeded into the DB on first boot.
 
 Behavioral rules (verified in `systemConfigService.ts` and `routes/settings.ts`):
 
 - `PUT /api/system/settings` returns `{ updated, rejected }` — partial success is normal; the frontend refetches after save.
-- Rejected keys include: keys not in `configKeySchema`, `ALWAYS_READONLY` infra keys, `chat_message_retention_days` (it has a dedicated write route in `routes/chatRetention.ts` enforcing data-loss confirmation), and `BRANDING_*` keys when no Enterprise plugin is loaded (the config-key-validator hook rejects them when the plugin registers a validator; community builds reject unconditionally).
+- Rejected keys include: keys not in `configKeySchema`, `ALWAYS_READONLY` infra keys, `chat_message_retention_days` (it has a dedicated write route enforcing data-loss confirmation), and `BRANDING_*` keys when no Enterprise plugin is loaded.
 - When Redis is configured, changed keys invalidate the `config:{key}` cache so other instances see the new value immediately (5-minute TTL as secondary expiry).
 
 ## Fail-loud behavior and diagnostics
@@ -207,21 +189,21 @@ Summary of hard requirements per package:
 
 | Package | Required keys | Additional runtime enforcement |
 |---|---|---|
-| server | `JWT_SECRET`, `COLLECTOR_SECRET` | `ENCRYPTION_KEY` required when `NODE_ENV=production`; `API_KEY_HMAC_SECRET` required at first API-key use (500, not 401 — a 401 would mask the misconfiguration as a spoofing vector); `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` required when `STORAGE_PROVIDER=s3` |
+| server | `JWT_SECRET`, `COLLECTOR_SECRET` | `ENCRYPTION_KEY` required when `NODE_ENV=production`; `API_KEY_HMAC_SECRET` required at first API-key use |
 | collector | `COLLECTOR_SECRET` | — |
 | widget | `WIDGET_API_KEY` | — |
 
 ## Per-environment overrides
 
 - **Precedence channel:** to override any `.env` value for a single process (CI, systemd, compose), set a real environment variable — `process.env` always wins and is never overwritten by the file.
-- **Docker Compose:** `docker/docker-compose.yml` passes `env_file: ../.env` (`required: false` — the stack boots with image defaults if the file is absent) to all three services, and sets container-network values (`postgres:5432`, `http://server:3000`, `redis://redis:6379`) in its `environment:` blocks, which win over `env_file`. Do **not** redeclare `LICENSE_KEY` or `ENCRYPTION_KEY` as `${VAR:-}` interpolations in compose `environment:` — shell interpolation resolves to an empty string and silently overrides the `env_file` value (downgrading to Community / disabling at-rest encryption). See the guard comments in `docker-compose.yml`.
+- **Docker Compose:** `docker/docker-compose.yml` passes `env_file: ../.env` (optional — the stack boots with image defaults if the file is absent) to all three services, and sets container-network values (`postgres:5432`, `http://server:3000`, `redis://redis:6379`) in its `environment:` blocks, which win over `env_file`. Do **not** redeclare `LICENSE_KEY` or `ENCRYPTION_KEY` as `${VAR:-}` interpolations in compose `environment:` — shell interpolation resolves to an empty string and silently overrides the `env_file` value (downgrading to Community / disabling at-rest encryption). See the guard comments in `docker-compose.yml`.
 - **Production:** set `NODE_ENV=production`, provide `ENCRYPTION_KEY` (hard requirement), and override `SEED_ADMIN_PASSWORD` / `SEED_BOOTSTRAP_ADMIN` to avoid shipping the well-known bootstrap credential.
 - **Tests:** server unit tests load the tracked `packages/server/.env.test` (via the test setup helper) and mock the DB; they never read the root `.env`. The Enterprise `LICENSE_KEY` JWT lives only in the gitignored root `.env` and is consumed by the E2E `globalSetup`.
 - **Tauri desktop:** the packaged layout has no `pnpm-workspace.yaml` marker, so `loadRootEnv()` is a graceful no-op and configuration arrives through real environment variables supplied by the shell.
 
 ## Tripwires: schema ↔ `.env.example` parity
 
-Three test suites — `packages/server/src/__tests__/envExampleParity.test.ts` (94-key sentinel), `packages/collector/src/__tests__/envExampleParity.test.ts` (15 keys), and `packages/widget/src/__tests__/envExampleParity.test.ts` (6 keys) — fail the moment a Zod schema key loses documentation in the root `.env.example` (active `KEY=` and commented `# KEY=` lines both count). When you add or rename a schema key, update `.env.example` in the same change.
+Three test suites — `packages/server/src/__tests__/envExampleParity.test.ts` (83-key sentinel), `packages/collector/src/__tests__/envExampleParity.test.ts`, and `packages/widget/src/__tests__/envExampleParity.test.ts` — fail the moment a Zod schema key loses documentation in the root `.env.example` (active `KEY=` and commented `# KEY=` lines both count). When you add or rename a schema key, update `.env.example` in the same change.
 
 ## Related docs
 

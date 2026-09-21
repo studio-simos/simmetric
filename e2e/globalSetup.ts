@@ -708,9 +708,10 @@ async function seedE2eFixtures(prisma: PrismaClient): Promise<void> {
     select: { value: true },
   });
   if (!wizardMode || wizardMode.value !== "completed") {
-    await prisma.systemConfig.updateMany({
-      where: { key: "setup_wizard_mode", organizationId: null },
-      data: { value: "completed" },
+    await prisma.systemConfig.upsert({
+      where: { key: "setup_wizard_mode" },
+      create: { key: "setup_wizard_mode", value: "completed" },
+      update: { value: "completed" },
     });
     console.log("[globalSetup] Healed setup_wizard_mode → completed (admin exists; stale/missing value was blocking the E2E login surface)");
   }

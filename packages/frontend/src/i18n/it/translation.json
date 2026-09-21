@@ -143,11 +143,6 @@
     },
     "ldap": {
       "hint": "Accedi con le tue credenziali della directory aziendale."
-    },
-    "offline": {
-      "title": "Impossibile raggiungere {{appName}}",
-      "body": "Assicurati che il server sia in esecuzione e raggiungibile da questo dispositivo, poi riprova.",
-      "retry": "Riprova"
     }
   },
   "chat": {

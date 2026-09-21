@@ -357,13 +357,13 @@ export default function RightPanel({ selectedProjectId, className, variant = "pa
               />
             </button>
           </div>
-          <div className="grid grid-cols-3 gap-1.5 font-mono text-[12px]">
+          <div className="grid grid-cols-3 gap-1.5 font-mono text-[11px]">
             <StatCell label="IN" value={hasTokens ? formatTokens(inToday) : "—"} />
             <StatCell label="OUT" value={hasTokens ? formatTokens(outToday) : "—"} />
             <StatCell label="TOT" value={hasTokens ? formatTokens(totalToday) : "—"} accent />
           </div>
           {currentChatId && chatTokens && (
-            <p className="text-[12px] text-muted-foreground font-mono">
+            <p className="text-[10px] text-muted-foreground font-mono">
               {t("rightPanel.conversation")}:{" "}
               <span className="text-foreground tabular-nums">
                 {formatTokens(chatTokens.total)}
@@ -377,7 +377,7 @@ export default function RightPanel({ selectedProjectId, className, variant = "pa
             </p>
           )}
           {!hasTokens && (
-            <p className="text-[12px] text-muted-foreground font-mono">
+            <p className="text-[10px] text-muted-foreground font-mono">
               {t("rightPanel.noTokenData")}
             </p>
           )}
@@ -406,7 +406,7 @@ export default function RightPanel({ selectedProjectId, className, variant = "pa
                 disabled={linkArchiveMutation.isPending}
               >
                 <SelectTrigger
-                  className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 font-mono text-[12px]"
+                  className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 font-mono text-[11px]"
                   aria-label={t("chat.archive.sectionTitle")}
                 >
                   <SelectValue placeholder={t("chat.archive.none")} />
@@ -424,7 +424,7 @@ export default function RightPanel({ selectedProjectId, className, variant = "pa
               </Select>
             )}
             {displayArchiveId && archives.length > 0 && (
-              <p className="text-[12px] text-muted-foreground font-mono">
+              <p className="text-[10px] text-muted-foreground font-mono">
                 {t("chat.archive.pageCount", { count: displayArchivePageCount })}
               </p>
             )}
@@ -440,7 +440,7 @@ export default function RightPanel({ selectedProjectId, className, variant = "pa
             {BUILTIN_SKILLS.map((key) => (
               <div
                 key={key}
-                className="flex items-center gap-1.5 px-1.5 py-1 rounded text-[12px] hover:bg-muted/40 transition-theme"
+                className="flex items-center gap-1.5 px-1.5 py-1 rounded text-[11px] hover:bg-muted/40 transition-theme"
                 title={t(`skills.${key}.description`)}
               >
                 <span className="w-1 h-1 rounded-full bg-primary/70 flex-none" />
@@ -451,18 +451,18 @@ export default function RightPanel({ selectedProjectId, className, variant = "pa
             ))}
           </div>
           <div className="pt-1 space-y-0.5">
-            <p className="px-1.5 text-[12px] font-mono uppercase tracking-wider text-muted-foreground">
+            <p className="px-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
               {t("rightPanel.mcpConnections")}
             </p>
             {scopedConnections.length === 0 ? (
-              <p className="px-1.5 text-[12px] text-muted-foreground font-mono">
+              <p className="px-1.5 text-[10px] text-muted-foreground font-mono">
                 {t("rightPanel.noMcp")}
               </p>
             ) : (
               scopedConnections.map((c) => (
                 <div
                   key={c.id}
-                  className="flex items-center gap-1.5 px-1.5 py-1 rounded text-[12px] hover:bg-muted/40 transition-theme"
+                  className="flex items-center gap-1.5 px-1.5 py-1 rounded text-[11px] hover:bg-muted/40 transition-theme"
                   title={c.lastError ?? c.url}
                 >
                   <span
@@ -473,7 +473,7 @@ export default function RightPanel({ selectedProjectId, className, variant = "pa
                   />
                   <span className="font-mono text-foreground/90 truncate flex-1">{c.name}</span>
                   {typeof c.toolCount === "number" && c.toolCount > 0 && (
-                    <span className="font-mono text-[12px] text-muted-foreground tabular-nums">
+                    <span className="font-mono text-[10px] text-muted-foreground tabular-nums">
                       {c.toolCount}T
                     </span>
                   )}
@@ -520,7 +520,7 @@ export default function RightPanel({ selectedProjectId, className, variant = "pa
           title={t("rightPanel.expand")}
         >
           <ChevronLeft className="w-4 h-4" />
-          <span className="font-mono text-[12px] uppercase tracking-wider [writing-mode:vertical-rl] rotate-180">
+          <span className="font-mono text-[10px] uppercase tracking-wider [writing-mode:vertical-rl] rotate-180">
             {t("rightPanel.title")}
           </span>
         </button>
@@ -573,7 +573,7 @@ function SectionTitle({
   icon?: React.ReactNode;
 }) {
   return (
-    <p className="flex items-center gap-1.5 text-[12px] font-mono uppercase tracking-wider text-muted-foreground">
+    <p className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
       {icon}
       {children}
     </p>
@@ -591,7 +591,7 @@ function StatCell({
 }) {
   return (
     <div className="rounded border border-input bg-background/40 px-1.5 py-1">
-      <div className="text-[12px] text-muted-foreground">{label}</div>
+      <div className="text-[9px] text-muted-foreground">{label}</div>
       <div className={cn("tabular-nums", accent && "text-primary")}>{value}</div>
     </div>
   );

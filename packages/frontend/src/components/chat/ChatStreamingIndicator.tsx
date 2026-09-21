@@ -61,7 +61,7 @@ export function ChatStreamingIndicator({
           <span className="chat-cursor" aria-hidden="true" />
           <span
             className={cn(
-              "absolute bottom-0 right-1 text-[12px] font-mono text-muted-foreground",
+              "absolute bottom-0 right-1 text-[10px] font-mono text-muted-foreground",
               "bg-[var(--chat-code-bg)] px-1.5 py-0.5 rounded border border-[var(--chat-border)]",
             )}
             aria-hidden="true"

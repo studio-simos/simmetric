@@ -13,9 +13,6 @@
  * RBAC gating the sidebar had — same `menuSections` filter, same `isAdmin`
  * gates, same enterprise lock indicators — only the surface changed.
  *
- * R-6: the group model lives in `sidebar/navModel.tsx` (shared with the
- * persistent AppSidebarNav) and the lock indicator is the shared `LockBadge`.
- *
  * The dialog covers most of the viewport (the CommandDialog className
  * override) so every entry is visible without scrolling.
  */
@@ -23,7 +20,23 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ChevronRight } from "lucide-react";
+import {
+  LayoutGrid,
+  MessageSquare,
+  FileText,
+  BookOpen,
+  Layers,
+  FolderKanban,
+  Store,
+  BarChart3,
+  ScrollText,
+  Shield,
+  Upload,
+  Settings,
+  Lock,
+  ChevronRight,
+  Wrench,
+} from "lucide-react";
 import {
   CommandDialog,
   Command,
@@ -39,8 +52,6 @@ import * as SheetPrimitive from "@radix-ui/react-dialog";
 import { useIsMobile } from "../hooks/use-mobile";
 import type { SidebarDropdownItem } from "./sidebar";
 import SidebarDropdown from "./sidebar/SidebarDropdown";
-import { buildNavGroups, LockBadge, isActiveNavPath } from "./sidebar/navModel";
-import type { NavGroup } from "./sidebar/navModel";
 import { cn } from "@/lib/utils";
 
 export interface AppNavOverlayProps {
@@ -59,6 +70,20 @@ export interface AppNavOverlayProps {
   setWorkspaceId: (id: string) => void;
   projects: SidebarDropdownItem[];
   workspaces: SidebarDropdownItem[];
+}
+
+/** Small monochrome lock indicator (replaces the 🔒 emoji in labels). */
+function LockBadge() {
+  return <Lock className="w-3 h-3 text-muted-foreground flex-none" aria-hidden="true" />;
+}
+
+interface NavEntry {
+  id: string;
+  labelKey: string;
+  keywords: string;
+  icon: React.ReactNode;
+  path: string;
+  locked?: boolean;
 }
 
 export default function AppNavOverlay({
@@ -88,7 +113,8 @@ export default function AppNavOverlay({
     navigate(path);
   };
 
-  const isActivePath = (path: string) => isActiveNavPath(location.pathname, path);
+  const isActivePath = (path: string) =>
+    location.pathname === path || location.pathname.startsWith(path + "/");
 
   const handleWorkspaceSelect = (workspaceId: string) => {
     if (workspaceId === "__add__") {
@@ -116,12 +142,170 @@ export default function AppNavOverlay({
     `${i18n.t(labelKey)} ${keywords}`.toLowerCase();
 
   // ── Group model (desktop pane layout + mobile command groups) ─────
-  // R-6: extracted to sidebar/navModel.tsx — byte-identical RBAC semantics,
-  // shared with the persistent AppSidebarNav so the surfaces cannot drift.
-  const groups: NavGroup[] = useMemo(
-    () => buildNavGroups({ menuSections, isAdmin, isEnterprise }),
-    [menuSections, isAdmin, isEnterprise],
-  );
+  type NavGroup = {
+    id: string;
+    labelKey: string;
+    entries: NavEntry[];
+  };
+
+  const groups: NavGroup[] = useMemo(() => {
+    const list: NavGroup[] = [];
+    if (menuSections.includes("dashboard")) {
+      list.push({
+        id: "overview",
+        labelKey: "sidebar.group.overview",
+        entries: [
+          {
+            id: "dashboard",
+            labelKey: "sidebar.dashboard",
+            keywords: "dashboard home overview",
+            icon: <LayoutGrid className="w-4 h-4" />,
+            path: "/dashboard",
+          },
+        ],
+      });
+    }
+    const chatEntries: NavEntry[] = [
+      {
+        id: "chat",
+        labelKey: "sidebar.chat",
+        keywords: "chat conversations messages",
+        icon: <MessageSquare className="w-4 h-4" />,
+        path: "/",
+      },
+    ];
+    if (menuSections.includes("projects")) {
+      chatEntries.push({
+        id: "projects",
+        labelKey: "sidebar.projects",
+        keywords: "projects management",
+        icon: <FolderKanban className="w-4 h-4" />,
+        path: "/projects",
+      });
+    }
+    if (menuSections.includes("workspaces")) {
+      chatEntries.push({
+        id: "workspaces",
+        labelKey: "sidebar.workspaces",
+        keywords: "workspaces management",
+        icon: <Layers className="w-4 h-4" />,
+        path: "/workspaces",
+      });
+    }
+    // Phase 190 (SKIL-01, D-19) — skills entry in the chatTools group AFTER
+    // workspaces; gated by the "skills" menu section (Plan 01 addition).
+    if (menuSections.includes("skills")) {
+      chatEntries.push({
+        id: "skills",
+        labelKey: "sidebar.skills",
+        keywords: "skills commands prompts templates",
+        icon: <Wrench className="w-4 h-4" />,
+        path: "/skills",
+      });
+    }
+    list.push({ id: "chatTools", labelKey: "sidebar.group.chatTools", entries: chatEntries });
+
+    const knowledgeEntries: NavEntry[] = [];
+    if (menuSections.includes("documents")) {
+      knowledgeEntries.push({
+        id: "documents",
+        labelKey: "sidebar.documents",
+        keywords: "documents files viewer",
+        icon: <FileText className="w-4 h-4" />,
+        path: "/documents",
+      });
+    }
+    if (menuSections.includes("knowledgeBase")) {
+      knowledgeEntries.push({
+        id: "knowledgeBase",
+        labelKey: "sidebar.knowledgeBase",
+        keywords: "knowledge base wiki archives",
+        icon: <BookOpen className="w-4 h-4" />,
+        path: "/knowledge-base",
+      });
+    }
+    if (menuSections.includes("uploads")) {
+      knowledgeEntries.push({
+        id: "uploads",
+        labelKey: "sidebar.uploads",
+        keywords: "uploads files ocr",
+        icon: <Upload className="w-4 h-4" />,
+        path: "/uploads",
+      });
+    }
+    if (knowledgeEntries.length > 0) {
+      list.push({ id: "knowledge", labelKey: "sidebar.group.knowledge", entries: knowledgeEntries });
+    }
+
+    const platformEntries: NavEntry[] = [];
+    if (menuSections.includes("widget")) {
+      platformEntries.push({
+        id: "widget",
+        labelKey: "sidebar.widget",
+        keywords: "widgets embed chat",
+        icon: <LayoutGrid className="w-4 h-4" />,
+        path: "/widgets",
+        locked: !isEnterprise,
+      });
+    }
+    if (menuSections.includes("marketplace")) {
+      platformEntries.push({
+        id: "marketplace",
+        labelKey: "sidebar.marketplace",
+        keywords: "marketplace mcp servers catalog",
+        icon: <Store className="w-4 h-4" />,
+        path: "/mcp-marketplace",
+      });
+    }
+    if (menuSections.includes("analytics")) {
+      platformEntries.push({
+        id: "analytics",
+        labelKey: "sidebar.analytics",
+        keywords: "analytics stats usage charts",
+        icon: <BarChart3 className="w-4 h-4" />,
+        path: "/analytics",
+        locked: !isEnterprise,
+      });
+    }
+    if (platformEntries.length > 0) {
+      list.push({ id: "platform", labelKey: "sidebar.group.platform", entries: platformEntries });
+    }
+
+    const systemEntries: NavEntry[] = [];
+    if (menuSections.includes("eventLog")) {
+      systemEntries.push({
+        id: "eventLog",
+        labelKey: "sidebar.eventLog",
+        keywords: "event log audit logs",
+        icon: <ScrollText className="w-4 h-4" />,
+        path: "/logs",
+        locked: !isEnterprise,
+      });
+    }
+    if (isAdmin) {
+      systemEntries.push({
+        id: "sso",
+        labelKey: "sidebar.sso",
+        keywords: "sso saml oidc authentication",
+        icon: <Shield className="w-4 h-4" />,
+        path: "/sso",
+        locked: !isEnterprise,
+      });
+    }
+    if (menuSections.includes("settings")) {
+      systemEntries.push({
+        id: "settings",
+        labelKey: "sidebar.settings",
+        keywords: "settings preferences configuration",
+        icon: <Settings className="w-4 h-4" />,
+        path: "/settings",
+      });
+    }
+    if (systemEntries.length > 0) {
+      list.push({ id: "system", labelKey: "sidebar.group.system", entries: systemEntries });
+    }
+    return list;
+  }, [menuSections, isAdmin, isEnterprise, i18n]);
 
   // Default pane = the group containing the active path, else the first group.
   // `isActivePath` reads `location` only, so this recomputes on navigation.

@@ -318,7 +318,7 @@ export default function SettingsAppearance() {
                 )}
               >
                 <span className="block text-sm font-medium">{t(opt.labelKey)}</span>
-                <span className="block text-[12px] text-muted-foreground mt-0.5">
+                <span className="block text-[11px] text-muted-foreground mt-0.5">
                   {t(opt.hintKey)}
                 </span>
               </button>

@@ -333,7 +333,7 @@ export default function SkillFormDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[640px]">
           <DialogHeader>
-            <DialogTitle className="text-[16px] font-semibold">
+            <DialogTitle className="text-[20px] font-semibold">
               {isEdit ? t("skills.form.editTitle") : t("skills.form.createTitle")}
             </DialogTitle>
           </DialogHeader>

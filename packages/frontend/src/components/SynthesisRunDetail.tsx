@@ -227,7 +227,7 @@ export default function SynthesisRunDetail() {
     return (
       <div className="h-full overflow-auto p-6 flex items-center justify-center">
         <div className="text-center max-w-md">
-          <h2 style={{ fontSize: "24px", fontWeight: 600, lineHeight: 1.1 }}>
+          <h2 style={{ fontSize: "28px", fontWeight: 600, lineHeight: 1.1 }}>
             {t("synthesis.dashboard.error.heading")}
           </h2>
           <p
@@ -253,7 +253,7 @@ export default function SynthesisRunDetail() {
     return (
       <div className="h-full overflow-auto p-6 flex items-center justify-center">
         <div className="text-center max-w-md">
-          <h2 style={{ fontSize: "24px", fontWeight: 600, lineHeight: 1.1 }}>
+          <h2 style={{ fontSize: "28px", fontWeight: 600, lineHeight: 1.1 }}>
             Synthesis run not found
           </h2>
           <Button
@@ -300,7 +300,7 @@ export default function SynthesisRunDetail() {
                   type="text"
                   value={renameInput}
                   onChange={(e) => setRenameInput(e.target.value)}
-                  className="flex-1 min-w-0 px-1 py-0.5 h-auto text-[16px] font-semibold leading-[1.2]"
+                  className="flex-1 min-w-0 px-1 py-0.5 h-auto text-[20px] font-semibold leading-[1.2]"
                   autoFocus
                   aria-label={t("synthesis.rename.ariaLabel")}
                   placeholder={selectedRun.name}
@@ -314,7 +314,7 @@ export default function SynthesisRunDetail() {
               </form>
             ) : (
               <h1
-                style={{ fontSize: "16px", fontWeight: 600, lineHeight: 1.2 }}
+                style={{ fontSize: "20px", fontWeight: 600, lineHeight: 1.2 }}
                 onDoubleClick={() => { setRenaming(selectedRun.id); setRenameInput(selectedRun.name); }}
               >
                 {selectedRun.name || t("synthesis.detail.title", { archiveName })}
@@ -463,7 +463,7 @@ export default function SynthesisRunDetail() {
       {/* Changes section */}
       {preview?.changes && preview.changes.length > 0 && (
         <div className="mb-8">
-          <h2 className="mb-4" style={{ fontSize: "16px", fontWeight: 600, lineHeight: 1.2 }}>
+          <h2 className="mb-4" style={{ fontSize: "20px", fontWeight: 600, lineHeight: 1.2 }}>
             Changes
           </h2>
           <div className="flex flex-col gap-6">
@@ -484,7 +484,7 @@ export default function SynthesisRunDetail() {
       {/* Contradictions section */}
       {preview?.contradictions !== undefined && (
         <div className="mb-8">
-          <h2 className="mb-4" style={{ fontSize: "16px", fontWeight: 600, lineHeight: 1.2 }}>
+          <h2 className="mb-4" style={{ fontSize: "20px", fontWeight: 600, lineHeight: 1.2 }}>
             {t("synthesis.contradictions.title")}
           </h2>
           {preview.contradictions.length === 0 ? (

@@ -43,7 +43,7 @@ export default function ArchivesPage() {
             className="h-12 w-12 text-muted-foreground/50 mb-4"
             strokeWidth={1.5}
           />
-          <h2 className="text-[24px] font-semibold text-foreground mb-2">
+          <h2 className="text-[28px] font-semibold text-foreground mb-2">
             {t("archives.empty.heading")}
           </h2>
           <p className="text-base text-muted-foreground mb-6">
@@ -75,7 +75,7 @@ export default function ArchivesPage() {
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-[24px] font-semibold leading-[1.2] text-foreground">
+        <h1 className="text-[28px] font-semibold leading-[1.2] text-foreground">
           {t("archives.title")}
         </h1>
         {archives.length > 0 && (

@@ -172,7 +172,7 @@ Playwright boots three web servers automatically (all `reuseExistingServer: true
 - Creates or reuses the "E2E Test Widget" and persists its id as `E2E_WIDGET_ID`; seeds the matching `api_keys` row (HMAC-SHA256 digest keyed by `API_KEY_HMAC_SECRET`).
 - Clears the admin's `mustChangePassword` flag so the force-change modal never blocks navigation.
 
-`e2e/fixtures.ts` extends the base Playwright test with `adminPage` (auto-login as admin/admin123) and `widgetPage` (host page with the real widget loader, session seeded via `POST http://localhost:3211/api/sessions`). Existing specs cover admin flows, chat send/stream, chat edit/regenerate, upload → RAG, unified upload destinations, widget embed, synthesis runs, marketplace lifecycle, MCP pin/use, theme switching, settings navigation, project creation, cross-tenant isolation, the DLP document pipeline, custom skills, and schema-prompt flows.
+`e2e/fixtures.ts` extends the base Playwright test with `adminPage` (auto-login as admin/admin123) and `widgetPage` (host page with the real widget loader, session seeded via `POST http://localhost:3211/api/sessions`). Existing specs cover admin flows, chat send/stream, chat edit/regenerate, upload → RAG, unified upload destinations, widget embed, synthesis runs, marketplace lifecycle, MCP pin/use, theme switching, settings navigation, and project creation.
 
 ## Coverage requirements
 
@@ -188,7 +188,7 @@ The closest quality gate is the CI **test-count guard**: the community suite (to
 
 ## CI integration
 
-`.github/workflows/ci.yml` runs on every push to `main` and every PR targeting it. Docs-only pushes are skipped via `paths-ignore` (markdown and `docs/**` changes cannot affect build/tests); mixed commits always run CI. Testing-relevant jobs:
+`.github/workflows/ci.yml` runs on every push to `main` and every PR. Testing-relevant jobs:
 
 1. **test-unit** — runs `pnpm test` (all five suites via Turborepo) after `pnpm db:generate` and a Prisma client resolvability check. Also runs the air-gap grep gate (zero outbound HTTP primitives in `licenseService.ts`), the FTS locale grep gate (no english-only tsquery literals outside `ftsService.ts`), and the test-count guard. No Postgres service is attached — the unit suite is proven DB-free.
 2. **test-airgap** — re-runs the shared/server/frontend unit suites with `NETWORK_EGRESS_BLOCKED=1` (runtime air-gap proof), building shared first because it invokes package test scripts directly, bypassing turbo's `^build` edge.

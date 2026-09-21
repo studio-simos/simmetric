@@ -80,9 +80,7 @@ export async function applyMaskedChunks(
     for (let i = 0; i < maskedChunks.length; i += FTS_BATCH_SIZE) {
       const batch = maskedChunks.slice(i, i + FTS_BATCH_SIZE);
       const ids = batch.map((c) => c.id);
-      // NUL-byte sanitize (SQLSTATE 22021 guard): masked text re-composed
-      // from the entity map could re-introduce 0x00 present in the original.
-      const texts = batch.map((c) => c.chunkText.replaceAll("\u0000", ""));
+      const texts = batch.map((c) => c.chunkText);
       await prisma.$executeRaw`
         UPDATE "document_chunks" AS dc
         SET "chunkText" = t.chunkText,

@@ -96,7 +96,7 @@ export default function SynthesisDiffView({
     <div className="flex flex-col gap-3">
       {/* Page title and metadata */}
       <div className="flex items-center gap-2">
-        <h3 style={{ fontSize: "16px", fontWeight: 600, lineHeight: 1.2 }}>
+        <h3 style={{ fontSize: "20px", fontWeight: 600, lineHeight: 1.2 }}>
           {t("synthesis.diff.title", { pageTitle: change.title })}
         </h3>
         {isApproved && (

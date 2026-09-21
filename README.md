@@ -3,7 +3,7 @@
 
 Enterprise-grade, local-first, privacy-first AI chat workspace with RAG, RBAC, and full air-gap capability — for teams that need strict data residency, offline operation, and fine-grained access control.
 
-[![Version](https://img.shields.io/badge/version-0.25.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.22.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D24-green)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-11.24-orange)](https://pnpm.io)
@@ -14,7 +14,7 @@ Simmetric Chat pairs a ReAct agent with hybrid RAG search, role-based access con
 ## Why Simmetric Chat?
 
 - **Privacy-first & air-gap ready** — runs fully offline with Ollama (local LLM), LanceDB (local vector store), and Xenova transformers (local embeddings). Zero cloud dependencies. A DLP filter redacts PII (email, credit cards, API keys, private keys) before it ever leaves your network.
-- **RAG with citations + RBAC** — hybrid vector + PostgreSQL full-text search fused with Reciprocal Rank Fusion (RRF), with source citations and relevance scores in every response. 36 permissions across 14 menu sections, workspace-level access grants, and IDOR prevention keep knowledge siloed by design.
+- **RAG with citations + RBAC** — hybrid vector + PostgreSQL full-text search fused with Reciprocal Rank Fusion (RRF), with source citations and relevance scores in every response. 31 permissions across 13 menu sections, workspace-level access grants, and IDOR prevention keep knowledge siloed by design.
 - **Embeddable widget** — iframe/script embeddable chat widgets for external websites, with isolated anonymous sessions, rate limiting, layered knowledge-base access, and lead capture. Powered by the same RAG pipeline and agent infrastructure as the internal chat. (Enterprise tier.)
 - **Multi-LLM + MCP** — Ollama, OpenAI, Anthropic, OpenRouter, Gemini, and 20 provider presets (DeepSeek, Mistral, Kimi/Moonshot, NVIDIA NIM, Qwen, xAI, Z.AI/GLM, MiniMax, LM Studio, GitHub Copilot, and more) with per-chat model selection, a Cmd+K quick-switch palette, side-by-side model comparison, and graceful fallback. Bidirectional MCP: expose RAG to IDEs, or connect external MCP servers as agent skills via the marketplace.
 
@@ -22,11 +22,8 @@ Simmetric Chat pairs a ReAct agent with hybrid RAG search, role-based access con
 
 - **Hybrid RAG** — vector + PostgreSQL FTS (RRF), source citations, document upload (PDF/MD/CSV/DOCX/XLSX/PPTX, YouTube transcripts)
 - **ReAct agent** — reason-then-act orchestrator with built-in skills (`rag_search`, `workspace_memory`, `document_temp_process`) and pluggable MCP tools
-- **RBAC** — 36 permissions, 14 menu sections, workspace + project access grants, IDOR prevention
+- **RBAC** — 31 permissions, 13 menu sections, workspace + project access grants, IDOR prevention
 - **Embeddable widget** — iframe/script embed, isolated sessions, lead capture, layered knowledge access (Enterprise)
-- **Wiki knowledge engine** — workspace-scoped multi-page archives with wikilinks, graph view, and AI-synthesized wiki pages with a per-archive schema prompt
-- **Custom skills** — `/slug-skill` invocable prompt skills with workspace scoping and a `max_skills` freemium limit (community 3, enterprise unlimited)
-- **Document DLP** — async per-workspace PII scan with numbered placeholders, AES-256-GCM encrypted originals, and permission-gated unmask (`dlp:unmask`)
 - **OCR** — server-side vision-model OCR for image-based PDFs and scanned documents
 - **Synthesis pipeline** — multi-document synthesis with contradiction detection, budget tracking, and selective approval
 - **Backups** — scheduled and on-demand, encrypted, with retention policies (Enterprise)
@@ -36,7 +33,7 @@ Simmetric Chat pairs a ReAct agent with hybrid RAG search, role-based access con
 - **HMAC API keys** — `sk-` prefixed keys verified with a dedicated HMAC-SHA256 secret (`API_KEY_HMAC_SECRET`), decoupled from JWT/encryption key rotation
 - **Job queue** — pg-boss (Postgres-backed) for 8 cron schedulers; OCR + synthesis pipelines stay as setInterval 10s pollers — works across instances, no extra infrastructure
 - **Multi-instance scaling** — horizontally scalable server behind a load balancer: Redis-backed rate limits, JWT revocation, SSE fan-out relay, and distributed locks (graceful in-memory fallback for single-instance setups)
-- **Enterprise license tiers** — Community vs Enterprise, feature-flagged (SSO, immutable audit logs, white-label, backups, widgets, custom agents + skills, numeric limits) with graceful degradation
+- **Enterprise license tiers** — Community vs Enterprise, feature-flagged (SSO, immutable audit logs, white-label, backups, custom agents, numeric limits) with graceful degradation
 
 Full feature guide: [docs/USAGE.md](docs/USAGE.md).
 
@@ -71,7 +68,7 @@ Open **http://localhost:5173** and log in with the seeded admin account:
 - User: `admin`
 - Password: `admin123`
 
-The seeded account carries `mustChangePassword=true`, so on first login you are required to set a new password before using the app (the setup-wizard path skips the forced rotation). Two admin paths exist: run `pnpm --filter server db:seed` — seeds RBAC roles + permissions, menu sections, the MCP marketplace catalog, provider presets, system config, the `admin` / `admin123` account and a demo `user` / `user123` account (templates are seeded at server boot) — or skip seeding and let the 4-step setup wizard create the admin on first launch (pick an LLM provider, pick a vector DB, confirm). If the wizard is not active and no admin exists yet, the server auto-seeds a bootstrap admin (`SEED_BOOTSTRAP_ADMIN=true` by default; credentials configurable via `SEED_ADMIN_USERNAME` / `SEED_ADMIN_PASSWORD` / `SEED_ADMIN_EMAIL`, defaults `admin` / `admin123` / `admin@example.com`). Self-service registration is closed by default (`ALLOW_REGISTRATION=false`); additional users are created by an admin from Settings.
+The seeded account carries `mustChangePassword=true`, so on first login you are required to set a new password before using the app. Two admin paths exist: run `pnpm --filter server db:seed` to seed roles, permissions, templates, and the `admin` / `admin123` account, or skip seeding and let the server auto-seed the bootstrap admin on startup (`SEED_BOOTSTRAP_ADMIN=true` by default; credentials configurable via `SEED_ADMIN_USERNAME` / `SEED_ADMIN_PASSWORD` / `SEED_ADMIN_EMAIL`, defaults `admin` / `admin123` / `admin@example.com`). Self-service registration is closed by default; additional users are created by an admin from Settings.
 
 > Services: frontend `:5173` · server `:3000` · collector `:3210` · widget `:3211`.
 
@@ -169,7 +166,7 @@ Interactive API docs (Swagger / OpenAPI 3.0) are served at `/api-docs` when the 
 docker compose -f docker/docker-compose.yml up --build -d
 ```
 
-Full guide (multi-container Compose, single-container all-in-one for air-gapped environments, Coolify stack, dev overrides): [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Full guide (multi-container Compose, single-container all-in-one for air-gapped environments, dev overrides): [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 Horizontal scaling (N server instances behind a load balancer with shared Postgres + Redis, SSE fan-out, pg-boss job queue): [docs/SCALING.md](docs/SCALING.md).
 

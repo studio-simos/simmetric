@@ -10,7 +10,7 @@ import { useFeature } from "../hooks/useFeature";
 import { showSuccess, showError } from "../lib/toast";
 import { useTranslation } from "react-i18next";
 import ThemeToggle from "./ThemeToggle";
-import { ALL_LANGUAGES, getEnabledLanguages } from "../i18n";
+import { getEnabledLanguages } from "../i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -106,14 +106,17 @@ export default function LoginPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {enabledLanguages.map((code) => {
-                  const lang = ALL_LANGUAGES.find((l) => l.code === code);
-                  return (
-                    <SelectItem key={code} value={code}>
-                      {lang?.name ?? code}
-                    </SelectItem>
-                  );
-                })}
+                {enabledLanguages.map((code) => (
+                  <SelectItem key={code} value={code}>
+                    {code === "en" && "English"}
+                    {code === "de" && "Deutsch"}
+                    {code === "es" && "Español"}
+                    {code === "fr" && "Français"}
+                    {code === "it" && "Italiano"}
+                    {code === "ru" && "Русский"}
+                    {code === "zh" && "中文"}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           )}

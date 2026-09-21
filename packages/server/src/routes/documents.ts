@@ -42,21 +42,6 @@ import { isAdmin } from "../utils/auth";
 import { Prisma } from "@prisma/client";
 import { MULTI_CONFIG_TSVECTOR } from "../services/ftsService";
 
-/**
- * Strip NUL bytes from text destined for a Postgres text/tsvector column
- * (2026-09-21 AI-ACT.pdf incident). pdfjs/pdf-parse emit U+0000 for glyphs
- * certain PDF font encodings cannot map; PostgreSQL rejects 0x00 with
- * SQLSTATE 22021 (`invalid byte sequence for encoding "UTF8": 0x00`) and the
- * non-blocking FTS insert failure left the document "completed" with ZERO
- * document_chunks rows → viewer "No extracted text" + FTS silently blind.
- * The collector now strips at parse time (parser.ts stripNulCharacters);
- * these server-side call sites are defense-in-depth for the precheck text
- * path (writeTempTextFile) and any chunk text crossing raw SQL.
- */
-function stripNul(text: string): string {
-  return text.replaceAll("\u0000", "");
-}
-
 const UPLOADS_DIR = "storage/uploads/";
 
 /**
@@ -1261,9 +1246,6 @@ export async function forwardToCollector(
         } else {
           pdfText = await extractPdfTextFirstPass(filePath);
         }
-        // NUL-byte sanitize (0x00) before the text is written to the temp
-        // .txt file and forwarded to the collector (mirrors parser.ts).
-        pdfText = stripNul(pdfText);
         pdfTextLength = pdfText.length;
       } catch (precheckErr: unknown) {
         const msg = precheckErr instanceof Error ? precheckErr.message : String(precheckErr);
@@ -1490,7 +1472,7 @@ export async function forwardToCollector(
           const batch = result.chunks.slice(i, i + FTS_BATCH_SIZE);
           const ids = batch.map((c) => `${documentId}-${c.chunkIndex}`);
           const docIds = batch.map(() => documentId);
-          const texts = batch.map((c) => stripNul(c.chunkText));
+          const texts = batch.map((c) => c.chunkText);
           const metas = batch.map((c) =>
             JSON.stringify({ paragraph: c.paragraph, charStart: c.charStart, charEnd: c.charEnd }),
           );

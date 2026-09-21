@@ -598,7 +598,7 @@ export default function DocumentsPage() {
       <Dialog open={copyDialogOpen} onOpenChange={setCopyDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-[16px] font-semibold">
+            <DialogTitle className="text-[20px] font-semibold">
               {t("documents.bulkCopy.dialogTitle", {
                 count: selectedCount,
                 defaultValue: "Copy {{count}} documents to archive",

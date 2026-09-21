@@ -103,11 +103,13 @@ jest.mock("../utils/logger", () => ({
 
 const mockConnect = jest.fn();
 const mockClose = jest.fn();
-jest.mock("@modelcontextprotocol/client", () => ({
+jest.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   Client: jest.fn().mockImplementation(() => ({
     connect: mockConnect,
     close: mockClose,
   })),
+}));
+jest.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
   SSEClientTransport: jest.fn().mockImplementation(() => ({})),
 }));
 

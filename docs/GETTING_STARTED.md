@@ -163,7 +163,7 @@ For host-native development, set `OLLAMA_BASE_URL=http://localhost:11434` in the
 
 ## Docker alternative
 
-To run the entire stack containerized in one network (frontend, server, collector, widget, PostgreSQL 16 with pgvector, Redis 7, and Ollama — plus optional MinIO and searXNG services):
+To run the entire stack containerized (frontend, server, collector, widget, PostgreSQL 16 with pgvector, Redis 7) in one network:
 
 ```bash
 docker compose -f docker/docker-compose.yml up --build -d
@@ -171,8 +171,8 @@ docker compose -f docker/docker-compose.yml up --build -d
 
 - The root `.env` is injected into every container via `env_file`; inside the compose network the server reaches Postgres as `postgres:5432`.
 - Migrations and the seed run automatically on server-container startup via `docker/entrypoint-server.sh` (`prisma generate` → `prisma migrate deploy` → `prisma db seed`), so the manual `db:generate` / `db:migrate` / `db:seed` steps are not needed on this path.
-- Ollama **is** containerized in the default compose file (`simmetric-chat-ollama`, activated 2026-09-08 — the provider "fetch failed" recovery and the Ollama Cloud login both require a real Ollama container on the compose network; the host daemon binds 127.0.0.1 and is unreachable from containers). The container has its own model volume — host-downloaded models do not appear there; pull via the app UI or `docker exec simmetric-chat-ollama ollama pull <model>`.
-- Redis starts automatically and is wired into the server and widget containers via `REDIS_URL=redis://redis:6379` (it enables the horizontal-scaling layer; host-native `pnpm dev` runs fine without Redis). MinIO and searXNG are pure optional infrastructure — nothing depends on them and they are not on the default startup path (MinIO serves the `STORAGE_PROVIDER=s3` storage arm; searXNG is an optional self-hosted web-search backend enabled via `SEARXNG_URL`).
+- Ollama is intentionally **not** containerized in the default compose file — point `OLLAMA_BASE_URL` at a host-native daemon (or uncomment the `ollama:` block in the compose file).
+- Redis starts automatically and is wired into the server and widget containers via `REDIS_URL=redis://redis:6379` (it enables the horizontal-scaling layer; host-native `pnpm dev` runs fine without Redis).
 
 For the full deployment guide (including air-gap and single-container setups), see [DEPLOYMENT.md](DEPLOYMENT.md).
 

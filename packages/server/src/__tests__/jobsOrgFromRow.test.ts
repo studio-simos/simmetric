@@ -116,8 +116,10 @@ jest.mock("../agent/mcpClient", () => ({
 }));
 
 // mcpHealthCheck's SDK seam — no real SSE transport must be constructed.
-jest.mock("@modelcontextprotocol/client", () => ({
+jest.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   Client: jest.fn().mockImplementation(() => ({ connect: jest.fn(), close: jest.fn() })),
+}));
+jest.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
   SSEClientTransport: jest.fn().mockImplementation(() => ({})),
 }));
 

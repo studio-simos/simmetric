@@ -205,6 +205,7 @@ drift-gates the committed copy so a stale notices file fails the build.
 | BSD-2-Clause | entities | 4.5.0, 8.0.0 | https://github.com/fb55/entities#readme |
 | BSD-2-Clause | esprima | 4.0.1 | http://esprima.org |
 | BSD-2-Clause | esutils | 2.0.3 | https://github.com/estools/esutils |
+| BSD-2-Clause | json-schema-typed | 8.0.2 | https://github.com/RemyRylan/json-schema-typed/tree/main/dist/node |
 | BSD-2-Clause | lop | 0.4.2 | https://github.com/mwilliamson/lop#readme |
 | BSD-2-Clause | mammoth | 1.12.2 | https://github.com/mwilliamson/mammoth.js#readme |
 | BSD-2-Clause | option | 0.2.4 | https://github.com/mwilliamson/node-options#readme |
@@ -298,6 +299,7 @@ drift-gates the committed copy so a stale notices file fails the build.
 | ISC | y18n | 5.0.8 | https://github.com/yargs/y18n |
 | ISC | yaml | 2.0.0-1 | https://eemeli.org/yaml/ |
 | ISC | yargs-parser | 22.0.0 | https://github.com/yargs/yargs-parser#readme |
+| ISC | zod-to-json-schema | 3.25.2 | https://github.com/StefanTerdell/zod-to-json-schema#readme |
 | LGPL-3.0-or-later | @img/sharp-libvips-linux-x64 | 1.0.4, 1.2.4, 1.3.3 | https://sharp.pixelplumbing.com |
 | MIT | @apidevtools/json-schema-ref-parser | 14.0.1 | https://apidevtools.com/json-schema-ref-parser/ |
 | MIT | @apidevtools/openapi-schemas | 2.1.0 | https://apitools.dev/openapi-schemas |
@@ -326,7 +328,7 @@ drift-gates the committed copy so a stale notices file fails the build.
 | MIT | @floating-ui/dom | 1.8.0 | https://floating-ui.com |
 | MIT | @floating-ui/react-dom | 2.1.9 | https://floating-ui.com/docs/react-dom |
 | MIT | @floating-ui/utils | 0.2.12 | https://floating-ui.com |
-| MIT | @hono/node-server | 1.19.17 | https://github.com/honojs/node-server |
+| MIT | @hono/node-server | 2.1.1 | https://github.com/honojs/node-server |
 | MIT | @hookform/resolvers | 5.9.1 | https://react-hook-form.com |
 | MIT | @huggingface/jinja | 0.2.2, 0.3.4, 0.5.9 | https://github.com/huggingface/huggingface.js#readme |
 | MIT | @img/colour | 1.1.0 | https://github.com/lovell/colour#readme |
@@ -338,11 +340,7 @@ drift-gates the committed copy so a stale notices file fails the build.
 | MIT | @langchain/core | 1.2.9 | https://github.com/langchain-ai/langchainjs/tree/main/langchain-core/ |
 | MIT | @langchain/textsplitters | 1.0.1 | https://github.com/langchain-ai/langchainjs/tree/main/libs/langchain-textsplitters/ |
 | MIT | @microsoft/fetch-event-source | 2.0.1 | https://github.com/Azure/fetch-event-source#readme |
-| MIT | @modelcontextprotocol/client | 2.0.0 | https://modelcontextprotocol.io |
-| MIT | @modelcontextprotocol/core | 2.0.0 | https://modelcontextprotocol.io |
-| MIT | @modelcontextprotocol/node | 2.0.0 | https://modelcontextprotocol.io |
-| MIT | @modelcontextprotocol/server | 2.0.0 | https://modelcontextprotocol.io |
-| MIT | @modelcontextprotocol/server-legacy | 2.0.0 | https://modelcontextprotocol.io |
+| MIT | @modelcontextprotocol/sdk | 1.30.0 | https://modelcontextprotocol.io |
 | MIT | @napi-rs/canvas | 1.0.8 | https://github.com/Brooooooklyn/canvas#readme |
 | MIT | @napi-rs/canvas-linux-x64-gnu | 1.0.8 | https://github.com/Brooooooklyn/canvas#readme |
 | MIT | @noble/hashes | 1.8.0 | https://paulmillr.com/noble/ |
@@ -463,7 +461,7 @@ drift-gates the committed copy so a stale notices file fails the build.
 | MIT | agentkeepalive | 4.6.0 | https://github.com/node-modules/agentkeepalive#readme |
 | MIT | ajv | 8.20.0 | https://ajv.js.org |
 | MIT | ajv-draft-04 | 1.0.0 | https://github.com/ajv-validator/ajv-draft-04#readme |
-| MIT | ajv-formats | 2.1.1 | https://github.com/ajv-validator/ajv-formats#readme |
+| MIT | ajv-formats | 2.1.1, 3.0.1 | https://github.com/ajv-validator/ajv-formats#readme |
 | MIT | ansi-regex | 6.3.0 | https://github.com/chalk/ansi-regex#readme |
 | MIT | ansi-styles | 4.3.0, 6.2.3 | https://github.com/chalk/ansi-styles#readme |
 | MIT | append-field | 1.0.0 | https://github.com/LinusU/node-append-field#readme |

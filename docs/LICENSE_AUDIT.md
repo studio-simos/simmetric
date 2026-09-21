@@ -2,11 +2,7 @@
 
 **Generated:** 2026-09-19T22:39:11+02:00
 **Command:** `pnpm licenses list --json --prod`
-<<<<<<< Updated upstream
 **Total packages:** 793
-=======
-**Total packages:** 795
->>>>>>> Stashed changes
 
 > Full enumeration of every production dependency in the pnpm workspace,
 > grouped by license ID. A defensible audit names each dependency, not
@@ -135,6 +131,7 @@
 | BSD-2-Clause | entities | 4.5.0, 8.0.0 | https://github.com/fb55/entities#readme | Felix Boehm |
 | BSD-2-Clause | esprima | 4.0.1 | http://esprima.org | Ariya Hidayat |
 | BSD-2-Clause | esutils | 2.0.3 | https://github.com/estools/esutils | — |
+| BSD-2-Clause | json-schema-typed | 8.0.2 | https://github.com/RemyRylan/json-schema-typed/tree/main/dist/node | Remy Rylan |
 | BSD-2-Clause | lop | 0.4.2 | https://github.com/mwilliamson/lop#readme | Michael Williamson |
 | BSD-2-Clause | mammoth | 1.12.2 | https://github.com/mwilliamson/mammoth.js#readme | Michael Williamson |
 | BSD-2-Clause | option | 0.2.4 | https://github.com/mwilliamson/node-options#readme | Michael Williamson |
@@ -228,6 +225,7 @@
 | ISC | y18n | 5.0.8 | https://github.com/yargs/y18n | Ben Coe |
 | ISC | yaml | 2.0.0-1 | https://eemeli.org/yaml/ | Eemeli Aro |
 | ISC | yargs-parser | 22.0.0 | https://github.com/yargs/yargs-parser#readme | Ben Coe |
+| ISC | zod-to-json-schema | 3.25.2 | https://github.com/StefanTerdell/zod-to-json-schema#readme | Stefan Terdell |
 | LGPL-3.0-or-later | @img/sharp-libvips-linux-x64 | 1.0.4, 1.2.4, 1.3.3 | https://sharp.pixelplumbing.com | Lovell Fuller |
 | MIT | @apidevtools/json-schema-ref-parser | 14.0.1 | https://apidevtools.com/json-schema-ref-parser/ | James Messinger |
 | MIT | @apidevtools/openapi-schemas | 2.1.0 | https://apitools.dev/openapi-schemas | James Messinger |
@@ -256,7 +254,7 @@
 | MIT | @floating-ui/dom | 1.8.0 | https://floating-ui.com | atomiks |
 | MIT | @floating-ui/react-dom | 2.1.9 | https://floating-ui.com/docs/react-dom | atomiks |
 | MIT | @floating-ui/utils | 0.2.12 | https://floating-ui.com | atomiks |
-| MIT | @hono/node-server | 1.19.17 | https://github.com/honojs/node-server | Yusuke Wada |
+| MIT | @hono/node-server | 2.1.1 | https://github.com/honojs/node-server | Yusuke Wada |
 | MIT | @hookform/resolvers | 5.9.1 | https://react-hook-form.com | bluebill1049 |
 | MIT | @huggingface/jinja | 0.2.2, 0.3.4, 0.5.9 | https://github.com/huggingface/huggingface.js#readme | Hugging Face |
 | MIT | @img/colour | 1.1.0 | https://github.com/lovell/colour#readme | — |
@@ -268,11 +266,7 @@
 | MIT | @langchain/core | 1.2.9 | https://github.com/langchain-ai/langchainjs/tree/main/langchain-core/ | LangChain |
 | MIT | @langchain/textsplitters | 1.0.1 | https://github.com/langchain-ai/langchainjs/tree/main/libs/langchain-textsplitters/ | LangChain |
 | MIT | @microsoft/fetch-event-source | 2.0.1 | https://github.com/Azure/fetch-event-source#readme | Microsoft |
-| MIT | @modelcontextprotocol/client | 2.0.0 | https://modelcontextprotocol.io | Anthropic, PBC |
-| MIT | @modelcontextprotocol/core | 2.0.0 | https://modelcontextprotocol.io | Anthropic, PBC |
-| MIT | @modelcontextprotocol/node | 2.0.0 | https://modelcontextprotocol.io | Anthropic, PBC |
-| MIT | @modelcontextprotocol/server | 2.0.0 | https://modelcontextprotocol.io | Anthropic, PBC |
-| MIT | @modelcontextprotocol/server-legacy | 2.0.0 | https://modelcontextprotocol.io | Anthropic, PBC |
+| MIT | @modelcontextprotocol/sdk | 1.30.0 | https://modelcontextprotocol.io | Anthropic, PBC |
 | MIT | @napi-rs/canvas | 1.0.8 | https://github.com/Brooooooklyn/canvas#readme | — |
 | MIT | @napi-rs/canvas-linux-x64-gnu | 1.0.8 | https://github.com/Brooooooklyn/canvas#readme | — |
 | MIT | @noble/hashes | 1.8.0 | https://paulmillr.com/noble/ | Paul Miller |
@@ -393,7 +387,7 @@
 | MIT | agentkeepalive | 4.6.0 | https://github.com/node-modules/agentkeepalive#readme | fengmk2 |
 | MIT | ajv | 8.20.0 | https://ajv.js.org | Evgeny Poberezkin |
 | MIT | ajv-draft-04 | 1.0.0 | https://github.com/ajv-validator/ajv-draft-04#readme | Evgeny Poberezkin |
-| MIT | ajv-formats | 2.1.1 | https://github.com/ajv-validator/ajv-formats#readme | Evgeny Poberezkin |
+| MIT | ajv-formats | 2.1.1, 3.0.1 | https://github.com/ajv-validator/ajv-formats#readme | Evgeny Poberezkin |
 | MIT | ansi-regex | 6.3.0 | https://github.com/chalk/ansi-regex#readme | Sindre Sorhus |
 | MIT | ansi-styles | 4.3.0, 6.2.3 | https://github.com/chalk/ansi-styles#readme | Sindre Sorhus |
 | MIT | append-field | 1.0.0 | https://github.com/LinusU/node-append-field#readme | Linus Unnebäck |

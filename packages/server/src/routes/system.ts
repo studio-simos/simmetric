@@ -746,11 +746,7 @@ router.post("/reindex-documents", authMiddleware, tenantContextMiddleware, requi
         // Insert chunks into PostgreSQL with searchVector + searchVectorMulti
         // (Phase 151 RAG-01: both columns populated in the same statement —
         // chunks reindexed here must not leave searchVectorMulti NULL).
-        // NUL-byte sanitize: legacy vector-store rows ingested before the
-        // parser-side strip can still carry 0x00 (SQLSTATE 22021 hard-fails
-        // the whole reindex otherwise).
-        const sanitizedChunks = chunks.map((chunk) => ({ ...chunk, chunkText: chunk.chunkText.replaceAll("\u0000", "") }));
-        for (const chunk of sanitizedChunks) {
+        for (const chunk of chunks) {
           await prisma.$executeRaw`
             INSERT INTO "document_chunks" ("id", "documentId", "chunkText", "metadata", "embeddingId", "searchVector", "searchVectorMulti", "createdAt")
             VALUES (

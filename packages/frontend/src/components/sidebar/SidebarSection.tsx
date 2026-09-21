@@ -92,7 +92,7 @@ export default function SidebarSection({
         <CollapsibleTrigger asChild>
           <Button
             variant="ghost"
-            className="w-full flex items-center justify-between px-3 py-1 text-[12px] font-mono uppercase tracking-wider text-muted-foreground/70 hover:text-muted-foreground rounded-sm h-auto select-none"
+            className="w-full flex items-center justify-between px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70 hover:text-muted-foreground rounded-sm h-auto select-none"
           >
             <span>{label}</span>
             <ChevronDown

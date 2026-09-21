@@ -69,18 +69,8 @@
 import { test, expect, type Page } from "./fixtures";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import { makeE2ePrisma } from "./lib/prisma";
-
-/** Resolve simple-git from packages/server/node_modules (pnpm strict
- *  isolation does not hoist it to the root — the established e2e idiom,
- *  e2e/custom-skills.spec.ts loadBcrypt). A bare ESM import here breaks
- *  Playwright test DISCOVERY for the whole e2e dir (the resolver throws
- *  at spec-load, not inside the guarded seed block). */
-const requireFromServer = createRequire(new URL("../packages/server/package.json", import.meta.url));
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- simple-git types resolve only from packages/server; the call contract is simpleGit(dir) → SimpleGit (init/addConfig/add/commit used below)
-const simpleGit: (dir: string) => { init(): Promise<unknown>; addConfig(key: string, value: string): Promise<unknown>; add(paths: string | string[]): Promise<unknown>; commit(message: string): Promise<unknown> } =
-  requireFromServer("simple-git").simpleGit;
+import { simpleGit } from "simple-git";
 
 const SERVER_URL = "http://localhost:3000";
 const TEST_ARCHIVE_SLUG_PREFIX = "e2e-schema-prompt-";

@@ -96,13 +96,13 @@ export function PlanBanner({ plan, done = false, defaultExpanded = true, classNa
               const Icon = isTool ? Search : MessageSquare;
               return (
                 <li key={i} className="flex items-start gap-2 text-sm text-[var(--text-muted)]">
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[12px] font-mono text-primary">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-mono text-primary">
                     {i + 1}
                   </span>
                   <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" aria-hidden="true" />
                   <span className="min-w-0">
                     {s.action}
-                    {isTool && <span className="ml-1 text-[12px] font-mono text-[var(--text-subtle)]">[{s.tool}]</span>}
+                    {isTool && <span className="ml-1 text-[10px] font-mono text-[var(--text-subtle)]">[{s.tool}]</span>}
                   </span>
                 </li>
               );

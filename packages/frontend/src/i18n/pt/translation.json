@@ -143,11 +143,6 @@
     },
     "ldap": {
       "hint": "Entre com as suas credenciais do diretório corporativo."
-    },
-    "offline": {
-      "title": "Não foi possível contactar {{appName}}",
-      "body": "Certifique-se de que o servidor está em execução e acessível a partir deste dispositivo, e tente novamente.",
-      "retry": "Tentar novamente"
     }
   },
   "chat": {

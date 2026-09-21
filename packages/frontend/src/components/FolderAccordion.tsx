@@ -55,7 +55,7 @@ export default function FolderAccordion({
       className={cn(
         "border rounded-lg transition-colors",
         isOver
-          ? "border-2 border-primary/50 bg-primary/10"
+          ? "border-2 border-primary/50 bg-primary/50/10"
           : "border-border",
       )}
     >

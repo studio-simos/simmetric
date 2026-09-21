@@ -77,7 +77,7 @@ export default function ArchiveRenameDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <DialogHeader>
-          <DialogTitle className="text-[16px] font-semibold">
+          <DialogTitle className="text-[20px] font-semibold">
             {t("archives.renameDialog.title")}
           </DialogTitle>
         </DialogHeader>

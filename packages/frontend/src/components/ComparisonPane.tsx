@@ -75,7 +75,7 @@ export default function ComparisonPane({
           isStale={isStale}
         />
         {paneModel?.capabilities?.map((tag) => (
-          <Badge key={tag} variant="outline" className="text-[12px] px-1.5 py-0.5">
+          <Badge key={tag} variant="outline" className="text-[10px] px-1.5 py-0.5">
             {t(capabilityKeyMap[tag] || tag)}
           </Badge>
         ))}

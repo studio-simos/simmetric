@@ -143,11 +143,6 @@
     },
     "ldap": {
       "hint": "Sign in with your corporate directory credentials."
-    },
-    "offline": {
-      "title": "Can't reach {{appName}}",
-      "body": "Make sure the server is running and reachable from this device, then try again.",
-      "retry": "Retry"
     }
   },
   "chat": {

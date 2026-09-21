@@ -77,7 +77,7 @@ export default function OcrModelSelector({
                         <Badge
                           key={mode}
                           variant="outline"
-                          className={`text-[12px] px-1 py-0 ${CAPABILITY_COLORS[mode] ?? ""}`}
+                          className={`text-[10px] px-1 py-0 ${CAPABILITY_COLORS[mode] ?? ""}`}
                         >
                           {t(`ocr.capabilities.${mode}`)}
                         </Badge>

@@ -43,7 +43,7 @@ export default function ChatWordmark({ appName, statusLine, className }: ChatWor
       </p>
       {statusLine && (
         <p
-          className="text-[12px] font-mono uppercase tracking-widest text-muted-foreground/80"
+          className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground/80"
           aria-hidden="true"
         >
           {statusLine}

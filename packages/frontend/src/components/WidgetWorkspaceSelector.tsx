@@ -71,7 +71,7 @@ export default function WidgetWorkspaceSelector({ selectedIds, onChange }: Widge
           </option>
         ))}
       </select>
-      <p className="text-[12px] text-secondary-foreground">
+      <p className="text-[10px] text-secondary-foreground">
         {t("settings.widget.workspacesPlaceholder")}
       </p>
 

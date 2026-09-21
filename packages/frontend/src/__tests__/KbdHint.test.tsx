@@ -17,7 +17,7 @@ describe("KbdHint", () => {
     expect(el.tagName).toBe("P");
     expect(el.className).toContain("chat-kbd-hint");
     expect(el.className).toContain("mt-1.5");
-    expect(el.className).toContain("text-[12px]");
+    expect(el.className).toContain("text-[11px]");
     expect(el.className).toContain("font-mono");
     expect(el.className).toContain("text-muted-foreground");
     expect(el.className).toContain("transition-opacity");

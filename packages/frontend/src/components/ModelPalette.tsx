@@ -119,7 +119,7 @@ export default function ModelPalette({ open, onClose, onSelect, currentValue, in
               }}
             >
               <span className={cn("flex items-center gap-1.5", !currentValue?.providerId && "font-medium text-primary")}>
-                <span className="text-primary text-[12px]">★</span>
+                <span className="text-primary text-[10px]">★</span>
                 {defaultModel
                   ? t("chat.modelSelector.defaultWithModel", "Default ({{model}} — {{provider}})", {
                       model: defaultModel.displayName || defaultModel.name,
@@ -147,16 +147,16 @@ export default function ModelPalette({ open, onClose, onSelect, currentValue, in
                       {model.displayName || model.name}
                     </span>
                     <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
-                      <Badge variant="secondary" className="text-[12px] px-1.5 py-0.5 rounded">
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0.5 rounded">
                         {model.isLocal ? "Local" : "Cloud"}
                       </Badge>
                       {model.capabilities?.map((tag) => (
-                        <Badge key={tag} variant="outline" className="text-[12px] px-1.5 py-0.5 rounded">
+                        <Badge key={tag} variant="outline" className="text-[10px] px-1.5 py-0.5 rounded">
                           {t(capabilityKeyMap[tag] || tag)}
                         </Badge>
                       ))}
                       {model.isDefault && (
-                        <span className="text-[12px] text-primary">★</span>
+                        <span className="text-[10px] text-primary">★</span>
                       )}
                     </div>
                   </CommandItem>

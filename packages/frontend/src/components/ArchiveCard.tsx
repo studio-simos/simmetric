@@ -110,7 +110,7 @@ export default function ArchiveCard({ archive }: ArchiveCardProps) {
       )}
 
       <CardHeader>
-        <CardTitle className="text-[16px] font-semibold">{archive.name}</CardTitle>
+        <CardTitle className="text-[20px] font-semibold">{archive.name}</CardTitle>
         <CardDescription className="line-clamp-2">
           {archive.description || " "}
         </CardDescription>

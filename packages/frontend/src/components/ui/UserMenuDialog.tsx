@@ -207,7 +207,7 @@ function RailContent({
             {user?.username && user.username !== displayName && (
               <span>{user.username}</span>
             )}
-            <span className="text-[12px] uppercase tracking-wider border border-border rounded px-1 py-0.5 text-primary">
+            <span className="text-[9px] uppercase tracking-wider border border-border rounded px-1 py-0.5 text-primary">
               {roleLabel}
             </span>
           </div>
@@ -266,7 +266,7 @@ function PanelContent({
       {panel === "main" && (
         <>
           {/* Footer: license tier (primary-colored) + app version */}
-          <div className="mt-auto px-3 pt-2 flex items-center justify-between text-[12px] font-mono text-muted-foreground">
+          <div className="mt-auto px-3 pt-2 flex items-center justify-between text-[10px] font-mono text-muted-foreground">
             {licenseTier && (
               <span className="uppercase tracking-wider rounded px-1.5 py-0.5 text-primary">
                 {t("user-dropdown.license")}: {licenseTier.toUpperCase()}

@@ -2,7 +2,7 @@
 
 # @simmetric-chat/shared
 
-Shared kernel for the Simmetric Chat monorepo. Contains TypeScript types, Zod validation schemas, constants, and zero-dependency config loaders used by the server, collector, frontend, and widget packages. Only runtime dependency: `zod`.
+Shared kernel for the Simmetric Chat monorepo. Contains TypeScript types, Zod validation schemas, and constants used by the server, collector, frontend, and widget packages. Only runtime dependency: `zod`.
 
 Part of the [Simmetric Chat](../../README.md) monorepo.
 
@@ -12,10 +12,9 @@ Part of the [Simmetric Chat](../../README.md) monorepo.
 src/
 ├── types/          # Shared TypeScript interfaces and type aliases
 ├── schemas/        # Zod validation schemas and inferred input types
-├── constants/      # RBAC permissions, license feature flags, provider presets, org constants, config defaults
-├── config/         # Zero-dependency root .env loader (Node-consumers only)
+├── constants/      # RBAC permissions, license feature flags, provider presets, config defaults
 ├── utils/          # Pure read-side helpers (sanitizeFileName)
-└── index.ts        # Barrel export: re-exports types, schemas, constants, config loaders, and utils
+└── index.ts        # Barrel export: re-exports types, schemas, constants, and utils
 ```
 
 ### Types (`src/types/`)
@@ -27,7 +26,7 @@ Domain interfaces for entities used across the monorepo. Defined in `src/types/i
 - `Chat`, `ChatMessage`, `ChatMessageMetadata`, `SourceCitation`, `MessageRole`
 - `Document`, `DocumentChunk`, `ChunkMetadata`, `DocumentType`, `DocumentStatus`
 - `SystemConfigEntry`, `SettingsEntry`
-- `EventLog`, `EntityType` (20 entity types: chat, project, workspace, document, user, mcp_connection, mcp_catalog_entry, dlp, archive, archive_page, archive_import, ocr_job, synthesis_run, wiki_edit, backup_destination, backup_job, provider, memory, skill, upload_draft)
+- `EventLog`, `EntityType` (17 entity types: chat, project, workspace, document, user, mcp_connection, dlp, archive, archive_page, archive_import, ocr_job, synthesis_run, wiki_edit, backup_destination, backup_job, provider, memory)
 - `LicenseInfo`
 - `ApiKey`
 - `Widget`, `WidgetWorkspace`, `WidgetSession`, `WidgetLead`
@@ -41,55 +40,44 @@ Domain interfaces for entities used across the monorepo. Defined in `src/types/i
 
 ### Schemas (`src/schemas/`)
 
-Zod schemas for request/response validation. Many schema files export both the `z.object()` schema and an inferred `*Input` type (some define their inferred types — and occasionally helper schemas — privately without exporting them). 36 schema files total:
+Zod schemas for request/response validation. Many schema files export both the `z.object()` schema and an inferred `*Input` type (some define their inferred types privately without exporting them). 30 schema files total:
 
-- `archive.schema.ts` — `createArchiveSchema`, `updateArchiveSchema`, `createPageSchema`, `updatePageSchema`, `archiveSearchQuerySchema`, `archiveConfigSchema` (with a file-private `.partial()` variant `updateArchiveConfigSchema`), `archiveSchemaTemplateSchema`, `copyToArchiveRequestSchema`, `copyToArchiveBatchRequestSchema`, plus a file-private `archiveLocalLLMConfigSchema` (its `ArchiveLocalLLMConfig` type is exported)
-- `auth.schema.ts` — `loginSchema`, `registerSchema`, `adminRegisterSchema`, `adminResetPasswordSchema`, `changePasswordSchema`, `setInitialPasswordSchema`, `updateUserSchema`
-- `backup.schema.ts` — Backup destination config schemas (local, s3, s3_compatible, google_drive, dropbox, sftp, ftp, email — most file-private), `createBackupDestinationSchema`, `updateBackupDestinationSchema`, `backupDestinationIdParamSchema`, restore schemas (`restoreRequestSchema` with a `selective: "db" | "files" | "complete"` enum, `restoreDryRunResponseSchema`, `restoreResponseSchema` — some file-private), and backup-log schemas (`backupLogIdParamSchema`, `backupLogStatusSchema`, `backupLogListQuerySchema`, `backupLogsResponseSchema`)
-- `backupJob.schema.ts` — Backup job CRUD split out of `backup.schema.ts`: `frequencySchema` (daily/weekly/monthly/manual), `createBackupJobSchema`, `updateBackupJobSchema`, `toggleBackupJobSchema`, `backupJobIdParamSchema`
-- `chat.schema.ts` — `chatRequestSchema`, `renameChatSchema`, `updateChatModelSchema`, `linkArchiveSchema`, `createFolderSchema`, `updateFolderSchema`, `moveChatSchema`, `editMessageSchema`, plus the `AgentPlan` type. Also defines file-private helpers (`sendMessageSchema`, `createChatSchema`, `updateChatSchema`, `updateWorkspaceAgentConfigSchema`, `agentPlanStepSchema`, `chatExportQuerySchema`, `chatImportPreviewSchema`) consumed server-side via direct file imports
+- `auth.schema.ts` — `loginSchema`, `registerSchema`, `adminRegisterSchema`, `changePasswordSchema`, `setInitialPasswordSchema`, `updateUserSchema`
+- `archive.schema.ts` — `createArchiveSchema`, `updateArchiveSchema`, `createPageSchema`, `updatePageSchema`, `archiveSearchQuerySchema`, `archiveConfigSchema`, `archiveSchemaTemplateSchema`, `updateArchiveConfigSchema`, `copyToArchiveRequestSchema`, `copyToArchiveBatchRequestSchema`, `archiveLocalLLMConfigSchema`
+- `backup.schema.ts` — `createBackupDestinationSchema`, `updateBackupDestinationSchema`, `backupDestinationIdParamSchema`, `restoreSelectiveSchema`, `restoreRequestSchema`, `restoreDryRunResponseSchema`, `restoreResponseSchema`, `backupLogIdParamSchema`, `backupLogStatusSchema`, `backupLogListQuerySchema`, `backupLogsResponseSchema`, plus per-destination config schemas (local, s3, s3_compatible, google_drive, dropbox, sftp, ftp, email) and backup-job schemas
+- `chat.schema.ts` — `sendMessageSchema`, `createChatSchema`, `updateChatSchema`, `renameChatSchema`, `updateChatModelSchema`, `linkArchiveSchema`, `updateWorkspaceAgentConfigSchema`, `agentPlanStepSchema`, `agentPlanSchema`, `createFolderSchema`, `updateFolderSchema`, `moveChatSchema`, `chatExportQuerySchema`, `chatImportPreviewSchema`, `editMessageSchema`, `chatRequestSchema`
 - `chatRetention.schema.ts` — `chatRetentionSchema` (requires `confirmDataLoss: true` for the chat retention write contract)
-- `config.schema.ts` — `configKeySchema` (the settings-key enum), `bulkSetConfigSchema`, `ConfigKey`/`SetConfigInput` types (`setConfigSchema` is defined in-file but not re-exported through the barrel)
+- `config.schema.ts` — `setConfigSchema`, `bulkSetConfigSchema`, `configKeySchema`
+- `document.schema.ts` — `uploadDocumentSchema`, `processDocumentSchema`, `youtubeTranscriptSchema`, `documentTypeSchema`
 - `dlp.schema.ts` — DLP pattern configuration: `createDlpPatternSchema`, `updateDlpPatternSchema`, `testPatternSchema`, `dlpPatternIdParamSchema`
-- `dlpDocumentScan.schema.ts` — Document-PII scan/unmask pipeline (Phase 189/192): `DLP_ENTITY_CLASSES`, `dlpEntityClassSchema`, `dlpScanJobPayloadSchema`, eval result schemas (`dlpEvalResultSchema`, `dlpEvalRunResponseSchema`, `dlpEvalNoRunArmSchema`), `dlpBackfillRequestSchema`/`dlpBackfillResponseSchema`, `dlpUnmaskQuerySchema`, `nerResponseSchema`
-- `document.schema.ts` — `documentTypeSchema`, `uploadDocumentSchema`, `processDocumentSchema`, `youtubeTranscriptSchema`, `bulkDeleteDocumentsSchema`
 - `env.schema.ts` — Shared env-config surface (server + collector): `embeddingProviderSchema`, `vectorDbProviderSchema`, `ollamaKeepAliveSchema`, plus `EMBEDDING_PROVIDERS` / `VECTOR_DB_PROVIDERS` constant lists
 - `filter.schema.ts` — `updateFilterSchema` (filter plugin admin API, Phase 100)
 - `graphWiki.schema.ts` — `graphWikiTriggerSchema` (POST /api/synthesis/trigger-graph-wiki request shape)
-- `ingest.schema.ts` — Collector↔server ingestion contract: `IngestChunkSchema`, `IngestResponseSchema`, `IngestStatusCallbackSchema`, `ReembedRequestSchema`, `WikiPagesIngestSchema`, `RagMetadataFilterSchema` (+ `ragFilterDocumentTypeSchema`, `HybridSearchFilters` type), `IngestQueryRequestSchema`, `RerankRequestSchema`, `IngestDeleteRequestSchema`, `IngestUploadBodySchema`, `archivePageParseRequestSchema`, `archivePageParseCallbackSchema`; the `safeIdSchema` allowlist regex (`A-Za-z0-9_:-`) and `ReembedChunkSchema` are file-private
+- `ingest.schema.ts` — Collector↔server ingestion contract: `IngestChunkSchema`, `IngestResponseSchema`, `IngestStatusCallbackSchema`, `ReembedChunkSchema`, `ReembedRequestSchema`, `WikiPagesIngestSchema`, `IngestQueryRequestSchema`, `IngestDeleteRequestSchema`, `IngestUploadBodySchema`, `RerankRequestSchema`, `archivePageParseRequestSchema`, `archivePageParseCallbackSchema`, `safeIdSchema`
 - `license.schema.ts` — `licensePayloadSchema` (JWT payload shape inside a license token)
-- `mcpConnection.schema.ts` — `createMcpConnectionSchema`, `updateMcpConnectionSchema`, `toggleMcpConnectionSchema`, `mcpConnectionIdParamSchema`, `mcpCatalogEntryIdParamSchema`, `installMcpServerSchema`, `uninstallMcpServerSchema`, `mcpHeadersSchema` (file-private `healthStatusSchema` / `verificationTierSchema` enums)
+- `mcpConnection.schema.ts` — `createMcpConnectionSchema`, `updateMcpConnectionSchema`, `toggleMcpConnectionSchema`, `mcpConnectionIdParamSchema`, `mcpCatalogEntryIdParamSchema`, `installMcpServerSchema`, `uninstallMcpServerSchema`, `mcpHeadersSchema`, `healthStatusSchema`, `verificationTierSchema`
 - `mcpPins.schema.ts` — `createMcpPinSchema`, `chatIdParamSchema`, `mcpPinIdParamSchema`
-- `memory.schema.ts` — Per-user-per-workspace memory (Phase 97): `createMemorySchema`, `updateMemorySchema`, `memoryIdParamSchema`, `memoryExportQuerySchema`, `memoryListQuerySchema`, plus the auto-extraction JSON ops gate `memoryOpsSchema` / `validateMemoryOperations` and the `MemoryOp` type. `memoryTypeSchema` (`user` | `context`), `memorySensitivitySchema`, `dottedPathSchema`, and `memoryOpSchema` are file-private
-- `ocr.schema.ts` — `ocrJobRequestSchema`, `urlIngestionRequestSchema`, `ocrJobApproveSchema`, `ocrJobRejectSchema`, `ocrPageResultSchema`, `ocrJobResultSchema`, `ocrPreviewRequestSchema`, `ocrPreferencesSchema`, `ocrPageRetryRequestSchema` (file-private: `batchOcrJobRequestSchema`, `ocrModelConfigSchema`, `ocrModelCatalogSchema`, `ocrUnknownModelErrorSchema`)
-- `organization.schema.ts` — Org membership (Phase 182 tenancy model): `roleInOrgSchema` (owner/admin/member, enum-as-string from `ROLE_IN_ORG_VALUES`) and the `RoleInOrgInput` type
-- `personalWorkspace.schema.ts` — `createPersonalWorkspaceSchema` (Phase 183 personal workspace provisioning)
-- `plugin.schema.ts` — Enterprise + SaaS plugin contracts (structural interfaces only — no express/prisma imports, per the zero-dep rule): `PluginContext`, `EnterprisePlugin`, `SaaSPluginContext extends PluginContext` and `SaaSPlugin` (Phase 186 SAAS-05, contract v2 — `API_VERSION = 2` is the SAAS loader gate; `enterpriseLoader` keeps accepting v1), `AuditLog`, `AuditLogEvent`, `ConfigKeyValidator`, `MinimalPrismaClient`, `MinimalExpressApp`, `MinimalLogger`, `PluginScheduler`, plus placeholder hook interfaces (`BillingProvider`, `QuotaEnforcer`, `PlanResolver`, `TenantProvisioner`)
-- `postProcessing.schema.ts` — `autoTagsSchema` (LLM JSON output validation for auto tags + follow-up suggestions), `batchedPostProcessingSchema`
+- `memory.schema.ts` — Per-user-per-workspace memory (Phase 97): `memoryTypeSchema`, `memorySensitivitySchema`, `dottedPathSchema`, `createMemorySchema`, `updateMemorySchema`, `memoryIdParamSchema`, `memoryExportQuerySchema`, `memoryListQuerySchema`, plus the auto-extraction JSON ops gate `memoryOpSchema`, `memoryOpsSchema`, `validateMemoryOperations`
+- `ocr.schema.ts` — `ocrJobRequestSchema`, `batchOcrJobRequestSchema`, `urlIngestionRequestSchema`, `ocrJobApproveSchema`, `ocrJobRejectSchema`, `ocrPageResultSchema`, `ocrJobResultSchema`, `ocrModelConfigSchema`, `ocrModelCatalogSchema`, `ocrUnknownModelErrorSchema`, `ocrPreviewRequestSchema`, `ocrPreferencesSchema`
+- `plugin.schema.ts` — Enterprise plugin contract (Phase 140): `PluginContext`, `EnterprisePlugin`, `AuditLog`, `AuditLogEvent`, `ConfigKeyValidator`, `MinimalPrismaClient`, `MinimalExpressApp`, `MinimalLogger`, `PluginScheduler`, `API_VERSION` (structural interfaces only — no express/prisma imports, per the zero-dep rule)
+- `postProcessing.schema.ts` — `autoTagsSchema` (LLM JSON output validation for auto tags + follow-up suggestions)
 - `project.schema.ts` — `createProjectSchema`, `updateProjectSchema`
-- `provider.schema.ts` — `providerTypeSchema`, `createProviderSchema`, `updateProviderSchema`, `updateProviderModelSchema`, `providerPresetIdParamSchema`, `installProviderPresetSchema` (file-private `chatModelOverrideSchema`)
-- `role.schema.ts` — `createRoleSchema`, `updateRoleSchema`, `roleIdParamSchema`, plus file-private `assignRoleSchema`, `grantWorkspaceAccessSchema`, `grantProjectAccessSchema`
-- `skill.schema.ts` — Custom prompt skills (Phase 190): `createSkillSchema`, `updateSkillSchema`, `testSkillSchema`, `skillCallSchema`, `skillIdParamSchema`, `RESERVED_SLUGS` (slug regex, prompt-template placeholder validation, and tool-call/syntax-marker guards are file-private)
-- `sso.schema.ts` — Enterprise SSO (Phase 113, widened by Phase 193 LDAP): `saveSsoConfigSchema`, `ssoConfigResponseSchema` (client secret is plaintext on input only; the response exposes `clientSecretConfigured: boolean`), plus the LDAP additions `ldapLoginSchema`, `ldapMapRowSchema`, `ldapMapPutSchema`
-- `synthesis.schema.ts` — `synthesisApproveRejectSchema`, `synthesisTriggerSchema`, `renameSynthesisRunSchema` and the exported types `SynthesisPreview` / `SynthesisConfidence` (the status/confidence enums are file-private)
+- `provider.schema.ts` — `createProviderSchema`, `updateProviderSchema`, `updateProviderModelSchema`, `chatModelOverrideSchema`, `providerTypeSchema`, `providerPresetIdParamSchema`, `installProviderPresetSchema`
+- `role.schema.ts` — `createRoleSchema`, `updateRoleSchema`, `assignRoleSchema`, `grantWorkspaceAccessSchema`, `grantProjectAccessSchema`, `roleIdParamSchema`
+- `sso.schema.ts` — Enterprise SSO (Phase 113): `saveSsoConfigSchema`, `ssoConfigResponseSchema` (client secret is plaintext on input only; the response exposes `clientSecretConfigured: boolean`)
+- `synthesis.schema.ts` — `synthesisPreviewSchema`, `synthesisApproveRejectSchema`, `synthesisTriggerSchema`, `synthesisRunStatusSchema`, `synthesisConfidenceSchema`, `renameSynthesisRunSchema`
 - `system.schema.ts` — `initializeSchema`
 - `toolCall.schema.ts` — `nativeToolCallSchema` (normalized ollama-js `tool_calls[]` dispatch shape)
-- `uploadDraft.schema.ts` — Upload draft pipeline (Phase 68): `createUploadDraftSchema`, `createUploadDraftUrlSchema`, `assignDraftSchema`, `cancelDraftLegSchema`, `renameUploadSchema` (file-private: `draftDestinationSchema`, `draftMimeTypeSchema`, `UPLOAD_DRAFT_STATUSES`, `uploadDraftStatusSchema`)
-- `widget.schema.ts` — `createWidgetSchema`, `updateWidgetSchema`, `widgetChatRequestSchema`, `widgetSessionCreateSchema`, `widgetConfigResponseSchema`, `widgetSessionResponseSchema`, `widgetSessionIncrementSchema`, `widgetSearchRequestSchema`, `widgetLeadSubmitSchema`, `widgetAnalyticsQuerySchema`, `widgetWorkspaceArchiveFilterSchema`, `widgetCreditsSchema`, `widgetContactOptionsSchema`, `isHttpUrl`, `WIDGET_LOCALES` (8 locales: en, de, es, fr, it, ru, zh, pt — mirroring the frontend `ALL_LANGUAGES`) and the pure read-side helpers `resolveWidgetTexts()` / `resolveSuggestedQuestions()` (merge order is `{ ...texts.en, ...texts[fallbackLocale], ...texts[locale] }`, then legacy scalar defaults are applied after the blob — so exact locale > fallbackLocale > en > legacy scalars). `widgetLocaleSchema`, `widgetTriggerConfigSchema`, `widgetLeadCaptureSchema`, `widgetLeadExportQuerySchema` are file-private
-- `wiki.schema.ts` — `wikiWritePreviewSchema`, `wikiWriteApproveRejectSchema`, `wikilinkResolveSchema`, `wikiDistillSchema`, `mergePagesSchema` (file-private `wikiQueryParamsSchema`)
+- `uploadDraft.schema.ts` — Upload draft pipeline (Phase 68): `createUploadDraftSchema`, `createUploadDraftUrlSchema`, `assignDraftSchema`, `renameUploadSchema`, `draftDestinationSchema`, `draftMimeTypeSchema`, `UPLOAD_DRAFT_STATUSES`, `uploadDraftStatusSchema`
+- `widget.schema.ts` — `createWidgetSchema`, `updateWidgetSchema`, `widgetChatRequestSchema`, `widgetSessionCreateSchema`, `widgetConfigResponseSchema`, `widgetSessionResponseSchema`, `widgetSessionIncrementSchema`, `widgetSearchRequestSchema`, `widgetTriggerConfigSchema`, `widgetLeadCaptureSchema`, `widgetLeadSubmitSchema`, `widgetLeadExportQuerySchema`, `widgetAnalyticsQuerySchema`; also `WIDGET_LOCALES` / `widgetLocaleSchema` (8 locales: en, de, es, fr, it, ru, zh, pt — mirroring the frontend `ALL_LANGUAGES`) and the pure read-side helpers `resolveWidgetTexts()` / `resolveSuggestedQuestions()` (merge order is `{ ...texts.en, ...texts[fallbackLocale], ...texts[locale] }`, then legacy scalar defaults are applied after the blob — so exact locale > fallbackLocale > en > legacy scalars)
+- `wiki.schema.ts` — `wikiQueryParamsSchema`, `wikiWritePreviewSchema`, `wikiWriteApproveRejectSchema`, `wikilinkResolveSchema`, `wikiDistillSchema`, `mergePagesSchema`
 - `workspace.schema.ts` — `createWorkspaceSchema`, `updateWorkspaceSchema`, `permanentDeleteWorkspacesSchema`
-- `workspaceAccess.schema.ts` — Workspace access grants (Phase 189): `grantWorkspaceAccessRouteSchema`, `bulkGrantWorkspaceAccessSchema`, `workspaceAccessListEntrySchema`, `workspaceAccessParamsSchema`
 
 ### Constants (`src/constants/`)
 
-- `permissions.ts` — `PERMISSION_NAMES` (36 RBAC permission strings, last added: `dlp:unmask` — Phase 192), `permissionNameSchema`, `PermissionName` type, `MENU_SECTIONS` (14 sections, last added: `skills` — Phase 190), `menuSectionSchema`, `MenuSection` type, `DEFAULT_ROLE_MENU_SECTIONS`, `DEFAULT_ADMIN_ROLE`, `DEFAULT_USER_ROLE`, `DEFAULT_ROLES`, `CONFIG_DEFAULTS` (DB-configurable setting defaults), `SETTINGS_TAB_PERMISSIONS`
-- `license.ts` — `FEATURE_FLAGS` (12 feature flags: enterprise-only flags + numeric limits including `max_skills` — commodity flags were removed in Phase 140), `FeatureFlag` type, `COMMUNITY_FEATURE_DEFAULTS`, `ENTERPRISE_FEATURE_DEFAULTS`, `LICENSE_TIERS`, `LicenseTier` type
-- `organization.ts` — Default-org tenancy constants (Phase 182): `DEFAULT_ORG_ID` (fixed all-zero UUID, the air-gap tenancy root), `ROLE_IN_ORG_VALUES` (owner/admin/member), `RoleInOrg` type. `DEFAULT_ORG_ID` is re-exported through `constants/index.ts`; `ROLE_IN_ORG_VALUES` is consumed only by `schemas/organization.schema.ts` and is deliberately not in the barrel
-- `providerPresets.ts` — `PROVIDER_PRESETS` (21 one-click LLM provider catalog entries: 13 OpenAI-compatible, 2 Native, 1 Local, 4 OAuth (manual)), `PROVIDER_PRESET_CATEGORIES`, `ProviderPresetCategory` types
-
-### Config loaders (`src/config/`)
-
-- `loadEnv.ts` — Zero-dependency root `.env` loader: `loadRootEnv()`, `findRepoRoot()`, `resolveRootEnvPath()`, `RootEnvResult`. Walks up from the calling directory to the repo root (marker: `pnpm-workspace.yaml`), reads the root `.env` and fills keys absent from `process.env` (precedence: `process.env` > root `.env` > Zod default; presence — never truthiness — defines a key). Uses only `node:fs` + `node:path` — the frontend aliases this barrel's SOURCE into the browser bundle, so a third-party parser import would drag `node:fs` into the browser graph (pinned by a guard test in `loadEnv.test.ts`). Never throws, never exits; a missing marker is a graceful no-op (Tauri packaged layout, containers via compose `env_file`)
+- `permissions.ts` — `PERMISSION_NAMES` (31 RBAC permission strings), `permissionNameSchema`, `PermissionName` type, `MENU_SECTIONS` (13 sections), `menuSectionSchema`, `MenuSection` type, `DEFAULT_ROLE_MENU_SECTIONS`, `DEFAULT_ADMIN_ROLE`, `DEFAULT_USER_ROLE`, `DEFAULT_ROLES`, `CONFIG_DEFAULTS`, `SETTINGS_TAB_PERMISSIONS`
+- `license.ts` — `FEATURE_FLAGS` (11 feature flags: enterprise-only flags + numeric limits — commodity flags were removed in Phase 140), `FeatureFlag` type, `COMMUNITY_FEATURE_DEFAULTS`, `ENTERPRISE_FEATURE_DEFAULTS`, `LICENSE_TIERS`, `LicenseTier` type
+- `providerPresets.ts` — `PROVIDER_PRESETS` (one-click LLM provider catalog entries), `PROVIDER_PRESET_CATEGORIES`, `ProviderPresetConstant`, `ProviderPresetCategory` types
 
 ### Utils (`src/utils/`)
 
@@ -97,14 +85,13 @@ Zod schemas for request/response validation. Many schema files export both the `
 
 ## Usage
 
-Import from the package barrel — types, schemas, most constants, and the config loaders are re-exported from `src/index.ts`. Exception: `FEATURE_FLAGS` and `LICENSE_TIERS` are NOT re-exported through `constants/index.ts`, and the package `exports` map exposes only the `"."` entry (no subpath exports) — import them via a relative path to the source file within the monorepo:
+Import from the package barrel — types, schemas, and most constants are re-exported from `src/index.ts` (note: `FEATURE_FLAGS` and `LICENSE_TIERS` are NOT re-exported through `constants/index.ts`; import them from `@simmetric-chat/shared/constants/license` directly):
 
 ```ts
 import { z } from "zod";
 import { loginSchema, type LoginInput } from "@simmetric-chat/shared";
 import { PERMISSION_NAMES } from "@simmetric-chat/shared";
-import { FEATURE_FLAGS } from "../shared/src/constants/license"; // relative path — no subpath export
-import { loadRootEnv } from "@simmetric-chat/shared";
+import { FEATURE_FLAGS } from "@simmetric-chat/shared/constants/license";
 import { sanitizeFileName } from "@simmetric-chat/shared";
 
 // Validate with safeParse (never parse) so bad input returns 400, not 500
@@ -114,13 +101,11 @@ if (result.success) {
 }
 ```
 
-`loadRootEnv` / `findRepoRoot` are for Node consumers only (server, collector, widget) — the browser bundle must never value-import them or `node:fs` enters the graph (pinned by a guard test).
-
 ## Key Conventions
 
-- **No business logic** — This package contains only types, schemas, constants, and pure helpers. It must never import runtime dependencies other than `zod` (the config loader's `node:fs`/`node:path` are Node builtins, allowed for the `config/` directory only).
+- **No business logic** — This package contains only types, schemas, and constants. It must never import runtime dependencies other than `zod`.
 - **No circular dependencies** — `shared` is the leaf node in the monorepo dependency graph. It must not import from `server`, `collector`, `frontend`, or `widget`.
-- **Barrel exports** — `src/index.ts` re-exports from `types`, `schemas`, `constants`, `config/loadEnv` (explicit named exports), and `utils/fileName`. The `types/`, `schemas/`, and `constants/` subdirectories maintain their own `index.ts` barrel files (`src/utils/` and `src/config/` have none).
+- **Barrel exports** — `src/index.ts` re-exports from `types`, `schemas`, `constants`, and `utils`. The `types/`, `schemas/`, and `constants/` subdirectories maintain their own `index.ts` barrel files (`src/utils/` has none — the top-level barrel exports `./utils/fileName` directly).
 - **Schema naming** — Files use `camelCase.schema.ts` (e.g., `auth.schema.ts`). Inferred types use the schema name without "Schema" plus an `Input` suffix (e.g., `loginSchema` -> `LoginInput`).
 
 ## How to Add New Shared Types or Schemas
@@ -133,7 +118,6 @@ if (result.success) {
    ```
 3. Re-export from the subdirectory `index.ts` (e.g., `src/schemas/index.ts`).
 4. Run `pnpm typecheck` and `pnpm test` from the monorepo root to ensure downstream packages compile.
-5. If the shared package gained a NEW file, note that sibling `file:` snapshots (simmetric-enterprise, simmetric-saas) can go stale — see the shared `AGENTS.md` gotcha (run `pnpm install` there before starting docker).
 
 ## Monorepo Dependency Graph
 
@@ -155,23 +139,19 @@ The Turborepo build pipeline enforces this: `shared` must build before any consu
 pnpm --filter @simmetric-chat/shared test
 ```
 
-Tests are co-located in `src/__tests__/` (20 test files):
+Tests are co-located in `src/__tests__/` (16 test files):
+- `schemas.test.ts` — Core schema validation and shared type assertions
 - `archiveSchemas.test.ts` — Archive schema validation
-- `chatSchemaAttachedArchives.test.ts` — `chatRequestSchema.attachedArchiveIds` additive-optional transport boundary + the widget structural strip (Phase 191)
-- `dlpDocumentScanSchemas.test.ts` — DLP document-scan/unmask schema validation
 - `envSchema.test.ts` — Env schema validation per package
 - `featureFlags.test.ts` — `FEATURE_FLAGS` regression guard (removed commodity flags must not reappear)
 - `fileName.test.ts` — `sanitizeFileName` contract (traversal neutralization, extension preservation, 255-char cap)
 - `ingestSchemas.test.ts` — Ingest contract schema validation (incl. `chunkText` Bug B regression guard)
-- `loadEnv.test.ts` — `loadRootEnv()` marker-walk resolution, merge behavior, and the browser-barrel guard
+- `loadEnv.test.ts` — `loadRootEnv()` marker-walk resolution and merge behavior
 - `mcp-connection-schema.test.ts` — MCP connection schema validation
 - `mcpHeadersSchema.test.ts` — MCP headers schema validation
 - `ocrSchemas.test.ts` — OCR schema validation
-- `pluginSchema.test.ts` — Plugin contracts (`API_VERSION`, `PluginContext` / `EnterprisePlugin` structural interfaces)
-- `schemas.test.ts` — Core schema validation and shared type assertions
-- `skillSchemas.test.ts` — Skill schema validation (slug/prompt-template guards)
+- `pluginSchema.test.ts` — Enterprise plugin contract (`API_VERSION`, `PluginContext` / `EnterprisePlugin` structural interfaces)
 - `sourceCitation.test.ts` — `SourceCitation.source` 6-value union + `normalizeSource()` behavior
-- `ssoSchemasLdap.test.ts` — SSO schema additive-widening invariant for the LDAP provider additions (Phase 193)
 - `widget-flags.test.ts` — Widget feature flag validation
 - `widget-schemas.test.ts` — Widget schema validation
 - `widgetLocalization.test.ts` — `resolveWidgetTexts()` / `resolveSuggestedQuestions()` resolution chain behavior

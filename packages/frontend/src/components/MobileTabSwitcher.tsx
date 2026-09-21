@@ -44,7 +44,7 @@ export default function MobileTabSwitcher({
         aria-selected={activeTab === "A"}
         onClick={() => onTabChange("A")}
         className={cn("flex-1 px-3 py-2 text-sm flex items-center justify-center gap-1.5 rounded-none", activeTab === "A"
-            ? "bg-accent text-primary font-medium"
+            ? "border-b-2 border-primary text-primary font-medium"
             : "text-muted-foreground")}
       >
         <ProviderIcon type={providerTypeFromModel(paneAModel)} />
@@ -58,7 +58,7 @@ export default function MobileTabSwitcher({
         aria-selected={activeTab === "B"}
         onClick={() => onTabChange("B")}
         className={cn("flex-1 px-3 py-2 text-sm flex items-center justify-center gap-1.5 rounded-none", activeTab === "B"
-            ? "bg-accent text-primary font-medium"
+            ? "border-b-2 border-primary text-primary font-medium"
             : "text-muted-foreground")}
       >
         <ProviderIcon type={providerTypeFromModel(paneBModel)} />
