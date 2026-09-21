@@ -24,7 +24,13 @@ import { seedServiceAccount } from "../services/seedService";
 const WEAK_PASSWORDS = ["testpassword123", "widget123"] as const;
 const WEAK_PASSWORD = WEAK_PASSWORDS[0];
 
+// Every arm runs genSalt(12)+bcrypt.hash twice plus a bcrypt.compare — under
+// turbo-parallel load (6 jest workers on the machine) the 4 bcrypt ops can
+// exceed the 5s default timeout. 30s keeps the tests deterministic under load
+// (quick 260921: local full-suite run flaked exactly here).
 describe("seedServiceAccount", () => {
+  jest.setTimeout(30_000);
+
   beforeEach(() => {
     jest.clearAllMocks();
   });

@@ -87,10 +87,11 @@
         "jest",
         // e2e specs resolve these via `createRequire(requireFromServer("…"))`
         // STRING seams (e2e/globalSetup.ts:62, custom-skills.spec.ts:127,
-        // workspace-access.spec.ts:143, schema-prompt.spec.ts) — knip cannot
-        // follow createRequire, established idiom (pnpm strict isolation).
-        "bcryptjs",
-        "simple-git"
+        // workspace-access.spec.ts:143) — knip cannot follow createRequire,
+        // established idiom (pnpm strict isolation). simple-git left this
+        // list in quick 260921: schema-prompt.spec.ts imports it statically,
+        // so it moved to a declared root devDependency instead.
+        "bcryptjs"
       ]
     },
     "packages/shared": {},
