@@ -33,8 +33,16 @@ jest.mock("../lib/toast", () => ({
 }));
 
 const useDocumentTextMock = jest.fn();
+// Phase 192-08 (D-10): the viewer now consumes the DLP placeholder helper +
+// useMe for the unmask gate; the mock must carry both seams.
 jest.mock("../queries/useDocuments", () => ({
   useDocumentText: (...args: unknown[]) => useDocumentTextMock(...args),
+  hasDlpPlaceholders: (text: string | undefined) =>
+    typeof text === "string" && /\[\s*[A-Z][A-Z_]*\s*_\s*\d+\s*\]/.test(text),
+}));
+
+jest.mock("../queries/useAuth", () => ({
+  useMe: () => ({ data: { permissions: ["dlp:unmask"] }, isLoading: false, error: null }),
 }));
 
 // ── Imports ──────────────────────────────────────────────────────

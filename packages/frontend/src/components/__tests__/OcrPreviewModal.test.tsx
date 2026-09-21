@@ -34,10 +34,13 @@ jest.mock("../../lib/toast", () => ({
 
 const approveMutate = jest.fn().mockResolvedValue(undefined);
 const rejectMutate = jest.fn().mockResolvedValue(undefined);
+// 260919-kvm: single-page re-OCR from the preview modal (useRepairOcrPages).
+const repairMutate = jest.fn().mockResolvedValue({ repaired: [], failedPages: 0, qualityScore: null });
 
 jest.mock("../../queries/useOcrJobs", () => ({
   useApproveOcrJob: () => ({ mutateAsync: approveMutate }),
   useRejectOcrJob: () => ({ mutateAsync: rejectMutate }),
+  useRepairOcrPages: () => ({ mutateAsync: repairMutate, isPending: false }),
 }));
 
 jest.mock("../../queries/keys", () => ({

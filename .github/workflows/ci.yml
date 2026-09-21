@@ -77,6 +77,13 @@ jobs:
         # even for :latest) while quay.io — MinIO's documented primary
         # registry — served the same tag anonymously. Same tag, mirrored.
         image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+        # quay.io mirror Cmd defect (run 35633896713): the mirror's image Cmd
+        # is ["minio"] (bare, no args) — the entrypoint skips its prepend
+        # check and execs bare `minio`, which prints usage and exits 0, so
+        # the healthcheck can never pass. GH services DO support `command`
+        # (docs: "Customize service container command") — restore the
+        # intended default (server /data) explicitly.
+        command: server /data
         env:
           MINIO_ROOT_USER: simmetricchat
           MINIO_ROOT_PASSWORD: simmetricchat
