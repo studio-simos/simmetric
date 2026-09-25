@@ -657,6 +657,9 @@ export async function resolveProviderConfig(
           presetNativeTools,
         ).includes("nativeTools");
         return {
+          // Phase 203 (MCC-02): the resolved provider id — the usage-write
+          // cost seam keys pricing on it (spec §2.3 assumed this field).
+          providerId: provider.id,
           type: provider.type as ProviderConfig["type"],
           baseUrl: provider.type === "ollama" ? resolveOllamaEndpoint(provider.baseUrl, resolvedModel.isLocal) : provider.baseUrl,
           apiKey,
@@ -695,6 +698,7 @@ export async function resolveProviderConfig(
         presetNativeTools,
       ).includes("nativeTools");
       return {
+        providerId: defaultProvider.id,
         type: defaultProvider.type as ProviderConfig["type"],
         baseUrl: defaultProvider.type === "ollama" ? resolveOllamaEndpoint(defaultProvider.baseUrl, resolvedModel.isLocal) : defaultProvider.baseUrl,
         apiKey,

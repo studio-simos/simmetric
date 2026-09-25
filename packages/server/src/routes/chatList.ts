@@ -9,6 +9,14 @@ import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireWorkspaceAccess } from "../middleware/rbac";
 import prisma from "../utils/prisma";
 import { parseMetadata } from "../utils/parseMetadata";
+import { chatListQuerySchema } from "@simmetric-chat/shared";
+import {
+  sendError,
+  sendInternalServerError,
+  encodeCursor,
+  decodeCursor,
+  keysetWhere,
+} from "../utils/httpError";
 
 const router = Router();
 router.use(authMiddleware);
@@ -18,26 +26,102 @@ router.use(authMiddleware);
 router.use(tenantContextMiddleware);
 
 // GET /api/workspaces/:workspaceId/chats — list chats in workspace
+/**
+ * @openapi
+ * /workspaces/{workspaceId}/chats:
+ *   get:
+ *     tags: [Chat]
+ *     summary: List chats in a workspace (workspace-access gated)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - name: workspaceId
+ *         in: path
+ *         required: true
+ *         schema: { type: string }
+ *       - name: limit
+ *         in: query
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+ *       - name: cursor
+ *         in: query
+ *         schema: { type: string }
+ *         description: "Opaque keyset cursor (base64url v1|updatedAt|id)"
+ *     responses:
+ *       200: { description: "Legacy bare array OR the items/nextCursor envelope in cursor mode" }
+ *       400: { description: Invalid query parameters or cursor }
+ *       403: { description: Not a workspace member }
+ */
 router.get("/:workspaceId/chats", requireWorkspaceAccess, async (req: Request, res: Response) => {
   const workspaceId = req.params.workspaceId as string;
 
   try {
+    // api-design sweep (2026-09-24): opt-in keyset pagination (documents.list
+    // twin). No query params → legacy bare array (byte-identical); `cursor`
+    // or `limit` → {items, nextCursor} envelope. Keyset on (updatedAt DESC,
+    // id DESC) — the id tiebreaker makes the order total.
+    const listQuery = chatListQuerySchema.safeParse(req.query);
+    if (!listQuery.success) {
+      sendError(res, 400, "invalid_query", "Invalid query parameters", listQuery.error.flatten().fieldErrors);
+      return;
+    }
+    const { cursor, limit: rawLimit } = listQuery.data;
+    const envelopeMode = cursor !== undefined || rawLimit !== undefined;
+    const limit = rawLimit ?? 50;
+
+    const where: Record<string, unknown> = { workspaceId, deletedAt: null };
+    let cursorWhere: Record<string, unknown> | null = null;
+    if (cursor) {
+      const decoded = decodeCursor(cursor);
+      if (!decoded) {
+        sendError(res, 400, "invalid_cursor", "Invalid cursor");
+        return;
+      }
+      cursorWhere = keysetWhere("updatedAt", decoded);
+    }
+
     const chats = await prisma.chat.findMany({
-      where: { workspaceId, deletedAt: null },
-      orderBy: { updatedAt: "desc" } as const,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- cursor-mode AND-composition over the typed base where
+      where: cursorWhere ? ({ AND: [cursorWhere, where] } as any) : (where as any),
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }] as const,
+      take: envelopeMode ? limit : undefined,
       include: {
         _count: { select: { messages: true } },
         pins: { where: { userId: req.userId! } },
+        // Phase 199 (ECCO-05 §7.9-1, D-10): zero-migration platform badge join —
+        // the include is transitive and tenant-safe (the route sits behind
+        // requireWorkspaceAccess) and the select narrows to `platform` only, so
+        // no connector secret column is reachable through the projection
+        // (T-199-12 mitigation).
+        connectorSessions: {
+          include: { connector: { select: { platform: true } } },
+        },
       },
     });
-    const result = chats.map((c: { _count: { messages: number }; pins: unknown[] }) => ({
-      ...c,
-      isPinned: c.pins.length > 0,
-      messageCount: c._count.messages,
-    }));
-    res.json(result);
+    const rows = chats.map(
+      (c: {
+        _count: { messages: number };
+        pins: unknown[];
+        connectorSessions?: { connector?: { platform: string | null } }[];
+      }) => ({
+        ...c,
+        isPinned: c.pins.length > 0,
+        messageCount: c._count.messages,
+        // D-10 nullable mapping: a chat with zero connector sessions (every
+        // human-created chat) serializes null — the response shape stays
+        // byte-identical for non-connector chats apart from the additive
+        // null field, and nothing rides the row that can't render.
+        connectorPlatform:
+          c.connectorSessions?.[0]?.connector?.platform ?? null,
+      }),
+    );
+    if (!envelopeMode) {
+      res.json(rows);
+      return;
+    }
+    const last = chats[chats.length - 1];
+    const nextCursor = chats.length === limit && last ? encodeCursor(last.updatedAt, last.id) : null;
+    res.json({ items: rows, nextCursor });
   } catch (err: unknown) {
-    res.status(500).json({ error: (err instanceof Error ? err.message : String(err)) });
+    sendInternalServerError(res, err);
   }
 });
 

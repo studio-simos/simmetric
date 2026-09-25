@@ -12,6 +12,8 @@ import { tenantContextMiddleware } from "../middleware/tenantContext";
 // requireWorkspaceAccess (D-11 read half, v1.5 debt unchanged).
 import { requireWorkspaceWriteAccess } from "../middleware/rbac";
 import { runAgent, runAgentStreaming } from "../agent/orchestrator";
+// Phase 207 (D-04): quota breach family — mapped 1:1 in both chat catches.
+import { QuotaError, resolveWidgetQuotaPrincipal } from "../services/quotaService";
 import prisma from "../utils/prisma";
 import { logEvent } from "../services/eventLogService";
 import { scanContentAsync, progressiveDLPFlush } from "../services/dlpFilter";
@@ -518,6 +520,9 @@ router.post("/:workspaceId/chat", requireWorkspaceWriteAccess(), async (req: Req
           toolCalls: result.toolCalls,
           iterations: result.iterations,
           tokenUsage: result.tokenUsage ?? null,
+          // Phase 203 (MCC-02, D4): additive cost snapshot on the done
+          // payload — JSON-safe, null = pricing unset (N/A, never "free").
+          cost: result.cost ?? null,
           modelUsed: result.resolvedModel ?? null,
           modelProvider: result.providerType ?? null,
         }),
@@ -568,11 +573,20 @@ router.post("/:workspaceId/chat", requireWorkspaceWriteAccess(), async (req: Req
       toolCalls: result.toolCalls,
       iterations: result.iterations,
       tokenUsage: result.tokenUsage,
+      // Phase 203 (MCC-02, D4): additive cost snapshot.
+      cost: result.cost ?? null,
       model: result.resolvedModel,
       providerType: result.providerType,
       resolvedWikilinks: resolvedWikilinksNs,
     });
   } catch (err: unknown) {
+    // Phase 207 (D-04): quota breaches map 1:1 onto the HTTP contract —
+    // 409 { error, quota: "tokens" } (+ advisory fields) — BEFORE the generic
+    // 500 arm. The frontend keys on the `quota` field (206 D-12 family).
+    if (err instanceof QuotaError) {
+      res.status(err.status).json(err.payload);
+      return;
+    }
     logger.error("[agent] Error:", { error: (err instanceof Error ? err.message : String(err)) });
     res.status(500).json({ error: "Agent execution failed", details: (err instanceof Error ? err.message : String(err)) });
   }
@@ -970,10 +984,22 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
     };
 
     // Run the streaming agent
+    // Phase 207 (CLOUD-03 D-03 site 2 / D-05): quota principal — JWT chat =
+    // the acting user; the widget proxy authenticates as widget-service@system
+    // (NEVER a quota principal, P2) — resolve the widget org's admin owner so
+    // anonymous-surface consumption draws the ORG OWNER's quota. The
+    // orchestrator's pre-turn gate checks this principal and the usage ledger
+    // attributes to it (one principal, both sides). Unresolvable → fail-loud
+    // Error (500 — fail-closed beats mis-attribution).
+    const quotaPrincipal = isWidgetSource
+      ? await resolveWidgetQuotaPrincipal(workspaceId)
+      : undefined;
+
     const result = await runAgentStreaming(
       {
         workspaceId,
         userId: req.userId!,
+        ...(quotaPrincipal ? { quotaPrincipal } : {}),
         message: processedMessage,
         chatId: chat.id,
         history,
@@ -1170,6 +1196,9 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
               iterations: result.iterations,
               mcpSources,
               tokenUsage: result.tokenUsage ?? null,
+          // Phase 203 (MCC-02, D4): additive cost snapshot on the done
+          // payload — JSON-safe, null = pricing unset (N/A, never "free").
+          cost: result.cost ?? null,
               modelUsed: result.resolvedModel ?? null,
               modelProvider: result.providerType ?? null,
               dlpMatches: finalDlpMatches.length > 0 ? finalDlpMatches : undefined,
@@ -1250,6 +1279,8 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
       messageId: assistantMessage?.id ?? null,
       iterations: result.iterations,
       tokenUsage: result.tokenUsage,
+      // Phase 203 (MCC-02, D4): additive cost snapshot.
+      cost: result.cost ?? null,
       model: result.resolvedModel,
       providerType: result.providerType,
       mcpSources,
@@ -1305,8 +1336,17 @@ export async function handleChatStream(req: Request, res: Response, workspaceId:
     // Try to send error event if client is still connected
     if (!clientDisconnected) {
       try {
-        sendSSE("error", { error: (err instanceof Error ? err.message : String(err)) || "Agent execution failed" });
-        res.end();
+        // Phase 207 (D-04): quota breaches ride the structured family on the
+        // SSE error event — the client keys on the `quota` field; advisory
+        // fields (resetAt/limit/used) pass through for the breach message
+        // (UI-SPEC E6). HTTP status is already committed on SSE paths.
+        if (err instanceof QuotaError) {
+          sendSSE("error", err.payload);
+          res.end();
+        } else {
+          sendSSE("error", { error: (err instanceof Error ? err.message : String(err)) || "Agent execution failed" });
+          res.end();
+        }
       } catch {
         // Client already disconnected
       }

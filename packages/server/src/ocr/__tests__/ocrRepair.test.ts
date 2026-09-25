@@ -60,6 +60,9 @@ jest.mock("../../services/systemConfigService", () => ({
 const mockRenderPageToPng = jest.fn();
 jest.mock("../pdfRenderer", () => ({
   renderPageToPng: (...args: any[]) => mockRenderPageToPng(...args),
+  // Phase 205 D-03: the render-scale constant mirrors the real module value
+  // (3.0) — asserted via the shared constant instead of a literal.
+  PAGE_RENDER_SCALE: 3.0,
 }));
 
 const mockOcrPage = jest.fn();
@@ -124,6 +127,7 @@ jest.mock("fs/promises", () => ({
 }));
 
 import { repairOcrPages } from "../ocrRepair";
+import { PAGE_RENDER_SCALE } from "../pdfRenderer";
 
 const prisma = require("../../utils/prisma").default;
 
@@ -298,7 +302,7 @@ describe("ocrRepair — repairOcrPages", () => {
     expect(mockRenderPageToPng).toHaveBeenCalledWith(
       expect.stringContaining("test-doc.pdf"),
       1,
-      2.0,
+      PAGE_RENDER_SCALE,
     );
     expect(outcome.repaired[0]!.stillFailed).toBe(false);
   });

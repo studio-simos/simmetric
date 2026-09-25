@@ -13,6 +13,10 @@ export const licensePayloadSchema = z.object({
   iat: z.number(), // issued at
   exp: z.number(), // expiry (unix epoch)
   features: z.record(z.string(), z.union([z.boolean(), z.number()])).optional(),
+  // Phase 202 (PLGM-03, D-07): additive optional plugin claim — the package
+  // name a per-plugin license is bound to. Old instance JWTs (no plugin
+  // claim) parse unchanged.
+  plugin: z.string().min(1).optional(),
 });
 
 export type LicensePayload = z.infer<typeof licensePayloadSchema>;

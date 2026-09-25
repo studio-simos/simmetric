@@ -9,12 +9,15 @@
  * Provides deterministic tools (echo, list_files) so the E2E test can predict
  * exactly which MCP sources appear in SSE done events.
  *
- * Uses the same SSEServerTransport pattern as mcpServer.ts.
+ * Uses the MCP v2 stateless Streamable HTTP transport (POST /mcp) as primary,
+ * with a legacy SSE surface (GET /sse + POST /message) for the SSE-declared
+ * connections still under test.
  */
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { Server } from "@modelcontextprotocol/server";
+import type { ListToolsResult } from "@modelcontextprotocol/server";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { SSEServerTransport } from "@modelcontextprotocol/server-legacy";
 import express from "express";
 import type { Server as HttpServer } from "http";
 
@@ -28,7 +31,7 @@ export function createEchoServer(): Server {
     { capabilities: { tools: {} } },
   );
 
-  srv.setRequestHandler(ListToolsRequestSchema, async () => {
+  srv.setRequestHandler("tools/list", async (): Promise<ListToolsResult> => {
     return {
       tools: [
         {
@@ -54,7 +57,7 @@ export function createEchoServer(): Server {
     };
   });
 
-  srv.setRequestHandler(CallToolRequestSchema, async (request: any) => {
+  srv.setRequestHandler("tools/call", async (request: any) => {
     const { name, arguments: args } = request.params;
 
     switch (name) {
@@ -84,8 +87,24 @@ export function createEchoServer(): Server {
 export function start(port?: number): Promise<number> {
   return new Promise((resolve, reject) => {
     const app = express();
+    app.use(express.json());
     server = createEchoServer();
 
+    // v2 stateless Streamable HTTP (primary).
+    app.post("/mcp", async (req, res) => {
+      const srv = createEchoServer();
+      const t = new NodeStreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // stateless (v2)
+        enableJsonResponse: true,
+      });
+      res.on("close", () => {
+        srv.close().catch(() => {});
+      });
+      await srv.connect(t);
+      await t.handleRequest(req, res, req.body);
+    });
+
+    // Legacy SSE (grace period).
     app.get("/sse", (_req, res) => {
       transport = new SSEServerTransport("/message", res);
       server!.connect(transport);

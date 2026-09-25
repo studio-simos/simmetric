@@ -112,6 +112,59 @@ need bounded locks should set `SET LOCAL lock_timeout` and use
 `NOT VALID`/`VALIDATE CONSTRAINT` for FK additions on populated tables — and
 only claim them in comments once the SQL implements them.
 
+### Editing an Already-Applied Migration — Checksum Reconciliation (Phase 204, WR-04)
+
+Prisma records every applied migration's `migration.sql` checksum in
+`_prisma_migrations`. `prisma migrate deploy` / `migrate dev` verify the
+on-disk file against the recorded checksum and **fail loud** on any
+previously-migrated environment when the file was edited post-apply
+(`P3006`-family "migration was modified after it was applied" — precedent:
+`.planning/debug/migration-checksum-drift.md` and the Phase 182 comment-drift
+note above). Fresh chains (CI e2e, new workers) are unaffected — they apply
+the current file directly.
+
+Phase 204-03 removed the spurious `memories.embedding SET NOT NULL` arm from
+`20260922085410_20260922000000_mcp_connection_oauth_columns/migration.sql`
+(a drift-repair statement that RE-TIGHTENED a column a prior migration had
+already relaxed — verified live 2026-09-23 on a freshly migrated worker DB).
+The migration dir was **already applied** (recorded 2026-09-22 per
+`docs/MIGRATION_AUDIT.md:25`), so every environment that applied the ORIGINAL
+file must reconcile the recorded checksum before the next
+`migrate deploy`/`migrate dev` will proceed. Do NOT regenerate the migration;
+do NOT re-run its SQL (its statements are already applied — re-running would
+fail on duplicate columns).
+
+**Reconciliation runbook (per previously-migrated environment, verify on
+staging first):**
+
+```bash
+# 1. Confirm the drift is what you expect: migrate status reports the
+#    modified-migration error naming 20260922085410.
+npx prisma migrate status
+
+# 2. Metadata-only re-resolve — updates the recorded checksum to the
+#    current file WITHOUT executing any SQL (schema is already applied).
+npx prisma migrate resolve --applied 20260922085410_20260922000000_mcp_connection_oauth_columns
+
+# 3. Verify clean: no pending migrations, no drift.
+npx prisma migrate status
+```
+
+Equivalent raw-SQL alternative (when `migrate resolve` is unavailable):
+
+```sql
+UPDATE _prisma_migrations
+SET checksum = '<sha256-of-current-migration.sql>'
+WHERE migration_name = '20260922085410_20260922000000_mcp_connection_oauth_columns';
+```
+
+Environments that are FRESH (CI template, new workers, newly provisioned
+databases) need nothing — they never recorded the original checksum. The
+preferred long-term tool remains the additive-only policy's normal tool:
+restore the file byte-identically and ship a corrective ADDITIVE migration
+(`ALTER TABLE "memories" ALTER COLUMN "embedding" DROP NOT NULL;`) instead of
+editing an applied file at all.
+
 ## When Destructive is OK
 
 Destructive Prisma migrations are acceptable only in the 4 cases below. All

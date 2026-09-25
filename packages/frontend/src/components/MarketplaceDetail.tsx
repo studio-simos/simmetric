@@ -44,7 +44,7 @@ import {
   CardContent,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ShieldCheck, Check, ChevronLeft } from "lucide-react";
+import { ShieldCheck, Check, ChevronLeft, KeyRound } from "lucide-react";
 import type { CatalogEntry } from "../queries/useMarketplace";
 import { getErrorMessage } from "../utils/errorUtils";
 
@@ -60,6 +60,12 @@ function formatRelativeTime(dateStr: string | null | undefined): string {
   if (hours > 0) return rtf.format(-hours, "hour");
   if (minutes > 0) return rtf.format(-minutes, "minute");
   return rtf.format(-seconds, "second");
+}
+
+// Phase 197 (MCPO-03 D-06): display name for OAuth-provider copy interpolation
+// — never shown as a raw registry key.
+function oauthProviderDisplayName(provider: string | null | undefined): string {
+  return provider === "google" ? "Google" : "Microsoft";
 }
 
 interface InstalledTool {
@@ -150,7 +156,19 @@ export default function MarketplaceDetail() {
       await installMutation.mutateAsync({ entryId: entry.id, workspaceId: currentWorkspaceId, headers });
       // Update local entry state to reflect installed status
       setEntry({ ...entry, isInstalled: true });
-      showSuccess(t("marketplace.toast.installSuccess", { name: entry.name }));
+      // Phase 197 (MCPO-03 D-05/D-06, UI-SPEC §4): OAuth-entry installs get
+      // the completion-guidance toast; non-OAuth entries keep the existing
+      // copy byte-identically.
+      if (entry.authType === "oauth") {
+        showSuccess(
+          t("marketplace.toast.installSuccessOAuth", {
+            name: entry.name,
+            provider: oauthProviderDisplayName(entry.oauthProvider),
+          })
+        );
+      } else {
+        showSuccess(t("marketplace.toast.installSuccess", { name: entry.name }));
+      }
       setShowInstallDialog(false);
     } catch (err: unknown) {
       const status = (err as { status?: number }).status;
@@ -304,7 +322,46 @@ export default function MarketplaceDetail() {
                 {t("mcp.badges.verifiedCommunity")}
               </Badge>
             )}
+            {/* Phase 197 (MCPO-03 D-06/UI-SPEC §3): OAuth indicator after the
+                verification-tier badges — outline neutral, accent reserved. */}
+            {entry.authType === "oauth" && (
+              <Badge
+                variant="outline"
+                className="inline-flex items-center gap-1 text-xs font-medium cursor-default"
+                title={t("marketplace.card.oauthBadgeTooltip", {
+                  provider: oauthProviderDisplayName(entry.oauthProvider),
+                })}
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                {t("marketplace.card.oauthBadge", {
+                  provider: oauthProviderDisplayName(entry.oauthProvider),
+                })}
+              </Badge>
+            )}
           </div>
+          {/* Phase 197 (MCPO-03 D-05/D-06, UI-SPEC §4): pending-connection
+              guidance — the entry is installed, OAuth-capable, and the
+              matching connection still sits in oauthStatus=pending. The admin
+              completes it in MCP Settings via the existing Connect flow. */}
+          {entry.isInstalled &&
+            entry.authType === "oauth" &&
+            matchingConnection?.oauthStatus === "pending" && (
+              <div className="flex items-center gap-2 mt-[8px]">
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  {t("marketplace.detail.pendingConnect", {
+                    provider: oauthProviderDisplayName(entry.oauthProvider),
+                  })}
+                </p>
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0 text-primary"
+                  onClick={() => navigate("/settings?tab=mcpConnections")}
+                >
+                  {t("marketplace.detail.openMcpSettings")}
+                </Button>
+              </div>
+            )}
           <div className="flex items-center gap-2 mt-[8px]">
             {/* Health status badge */}
             {entry.healthStatus === "healthy" ? (
@@ -423,7 +480,12 @@ export default function MarketplaceDetail() {
               {t("common.uninstall", "Uninstall")} {entry.name}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {t("mcp.uninstallConfirm", "This will disconnect and remove the MCP server from this workspace. This action cannot be undone.")}
+              {/* Phase 197 (D-08/SC-3, UI-SPEC §6): OAuth entries surface the
+                  revoke+wipe confirm body; non-OAuth entries keep the existing
+                  copy byte-identically. */}
+              {entry.authType === "oauth"
+                ? t("marketplace.uninstallConfirmOAuth")
+                : t("mcp.uninstallConfirm", "This will disconnect and remove the MCP server from this workspace. This action cannot be undone.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

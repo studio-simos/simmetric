@@ -73,6 +73,9 @@ model Organization {
   archiveImportJobs    ArchiveImportJob[]
   synthesisRuns        SynthesisRun[]
   dlpPatterns          DlpPattern[]
+  // Phase 198 (ECCO-01, D-01): chat-inbound connectors are org-owned rows
+  // (SAAS-01b sentinel below) — additive back-relation.
+  connectors           ChatConnector[]
   // Cross-fragment back-relation (schema-enterprise.prisma BackupDestination
   // organizationId — resolves via the prismaSchemaFolder merge, Phase 141
   // verdict; mirrors User.backupDestinations)
@@ -126,6 +129,28 @@ model User {
   // Phase 189 (WSIS-01 D-03): onboarding state — distinguishes the two empty
   // states (guided first-workspace wizard vs "no access, ask admin").
   hasOnboarded Boolean         @default(false)
+  // Phase 206 (D-05): agency lifecycle — fail-closed disable. Login rejects
+  // (401, account.disabled) and the auth chain fails closed while set; the
+  // agency (or admin) can clear it to restore access. Data untouched; the
+  // UserSponsorship row survives a disable (ceiling counts it until delete).
+  disabledAt    DateTime?
+  // Phase 206 (D-11): sub-user creation ceiling — admin-only edit. NULL
+  // resolves to 0 (fail-closed): a user cannot sponsor until an admin sets
+  // the ceiling. Breach arm returns { error, quota: "users" } (D-12).
+  maxSponsoredUsers Int?
+  // Phase 207 (D-07): per-user quota settings — additive nullable columns
+  // (206 D-11 idiom). Resolution chain per D-08: per-user override >
+  // install preset (systemConfigService DB > ENV > default) > unlimited
+  // (fail-open — unset means zero behavior change for existing installs).
+  // The *Unlimited booleans exempt a user from a live preset without
+  // sentinel values (D-07). resetAnchorDate is the admin-set start date for
+  // the recurring 30-day token-quota reset (CLOUD-06, D-11); NULL = manual
+  // reset only.
+  tokenQuotaLimit Int?
+  storageQuotaGb Decimal? @db.Decimal(12, 2)
+  tokenQuotaUnlimited Boolean @default(false)
+  storageQuotaUnlimited Boolean @default(false)
+  resetAnchorDate DateTime?
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
@@ -164,8 +189,53 @@ model User {
   // skills this user created (owner track for the D-07 owner/admin gate).
   skills        AgentSkill[]   @relation("AgentSkillUser")
   createdSkills AgentSkill[]   @relation("AgentSkillCreator")
+  // Phase 198 (ECCO-01, D-01): connectors this user created (creator track,
+  // mirrors createdProjects "ProjectCreator" — explicit relation name because
+  // ChatConnector.createdBy resolves to User).
+  connectorsCreated ChatConnector[] @relation("ConnectorCreator")
+  // Phase 206 (D-01): sponsorship hierarchy — the ONLY owner link. User stays
+  // identity-pure (Phase 182 D-01): ownership lives in UserSponsorship, NOT a
+  // parent FK column and NOT OrganizationMember.roleInOrg.
+  sponsoredBy   UserSponsorship[] @relation("SponsorshipSponsor")
+  sponsoredUsers UserSponsorship[] @relation("SponsorshipSubUser")
+  // Phase 206 (D-09): per-user delegation grants (lattice: ⊆ sponsor's
+  // effective permissions, validated server-side).
+  permissionOverrides UserPermissionOverride[]
+  // Phase 207 (D-02): reset ledger — anchor rows bound each rolling quota
+  // window; usage/cost history is NEVER deleted or zeroed (203 doctrine).
+  quotaResets QuotaReset[]
 
   @@map("users")
+}
+
+// Phase 207 (CLOUD-06, D-02): quota reset ledger. A reset writes an anchor
+// row; the rolling window for a user/kind = ledger rows with createdAt > the
+// latest anchor. Manual (admin/sponsor) and cron sweeps write the SAME row
+// shape. Partial-unique backstop makes concurrent double-inserts impossible
+// (cron idempotency, D-11); the latest-anchor re-check inside the inserting
+// transaction is the primary guard (agencyUserService ceiling pattern).
+model QuotaReset {
+  id          String   @id @default(uuid())
+  userId      String
+  // "tokens" | "storage" — string, NOT a Prisma enum (repo A4 idiom; kinds
+  // extend additively). Only "tokens" resets today — storage is a cap, not a
+  // rolling allowance (D-12).
+  kind        String
+  at          DateTime @default(now())
+  // "manual" (admin/sponsor route) | "cron" (quotaResetJob sweep).
+  triggeredBy String
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Idempotency backstop (D-11): one anchor per user/kind/timestamp. The
+  // partial-index preview feature is enabled in the generator; a plain
+  // unique on (userId, kind, at) is equivalent here because `at` is always
+  // set by the writer (now() at insert time — two writers in the same
+  // instant are exactly the race this index must break).
+  @@unique([userId, kind, at])
+  @@index([userId, kind, at])
+  @@map("quota_resets")
 }
 
 model Role {
@@ -184,6 +254,9 @@ model Role {
   // LdapGroupRoleMap model (cross-fragment relation resolves at generate
   // time per the Phase 141 verdict — prismaSchemaFolder merge).
   ldapGroupRoleMaps LdapGroupRoleMap[]
+  // Phase 206 (D-14): DB-driven per-role settings-section visibility rows
+  // (admin-managed); menu sections continue to ride RoleMenuSection.
+  sectionVisibilities RoleSectionVisibility[]
 
   @@map("roles")
 }
@@ -194,6 +267,8 @@ model Permission {
   name        String           @id
     description String? @db.Text
   roles       RolePermission[]
+  // Phase 206 (D-09): per-user delegation grants referencing this permission.
+  userOverrides UserPermissionOverride[]
 
   @@map("permissions")
 }
@@ -234,6 +309,66 @@ model RoleMenuSection {
 
   @@id([roleId, menuSection])
   @@map("role_menu_sections")
+}
+
+// Phase 206 (D-01): the ONLY ownership link for the 2-level web-agency
+// hierarchy (sponsor → sub-user). Join table, not a parent FK on User —
+// keeps User identity-pure (Phase 182 D-01) and is queryable both
+// directions (list-my-sub-users AND find-my-sponsor). D-03: a row here
+// marks the subUserId as structurally unable to sponsor (3rd-level guard,
+// enforced again at the create route).
+model UserSponsorship {
+  id        String    @id @default(uuid())
+  sponsorId String
+  subUserId String
+  // D-05 soft-delete norm: removal tombstones the row (mirrors
+  // OrganizationMember D-04) — disable keeps the row; only a future delete
+  // frees the ceiling slot.
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  sponsor User @relation("SponsorshipSponsor", fields: [sponsorId], references: [id], onDelete: Cascade)
+  subUser User @relation("SponsorshipSubUser", fields: [subUserId], references: [id], onDelete: Cascade)
+
+  // Active-ownership unique (tombstoned rows free the slot) — also the
+  // P2002 arm for the ceiling TOCTOU defense (Plan 04).
+  @@unique([sponsorId, subUserId], where: { deletedAt: null })
+  @@index([subUserId])
+  @@map("user_sponsorships")
+}
+
+// Phase 206 (D-09): per-user delegation grants. A sub-user's effective
+// permissions = role defaults ∪ grants, always validated ⊆ the SPONSOR's
+// effective set at submit time (server-side, D-08/D-10). Deleting a grant
+// row = revoking it (no role churn).
+model UserPermissionOverride {
+  userId         String
+  permissionName String
+  grantedBy      String
+  createdAt      DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionName], references: [name], onDelete: Cascade)
+
+  @@id([userId, permissionName])
+  @@map("user_permission_overrides")
+}
+
+// Phase 206 (D-14): DB-driven per-role settings-section visibility.
+// menu sections keep riding RoleMenuSection (string-keyed, additive);
+// THIS table covers the settings sections (SETTINGS_TAB_PERMISSIONS keys).
+// Absent row = permission-OR default (fail-open to CURRENT behavior —
+// byte-identical fallback, VIS-01 default clause).
+model RoleSectionVisibility {
+  roleId     String
+  sectionKey String
+  visible    Boolean
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, sectionKey])
+  @@map("role_section_visibilities")
 }
 
 model ProjectAccess {
@@ -360,6 +495,11 @@ model Workspace {
   // Phase 190 (SKIL-01 D-02): workspace-scoped skills.
   // onDelete: Cascade via AgentSkill.workspaceId FK — workspace deletion cascades them.
   skills AgentSkill[]
+  // Phase 198 (ECCO-01, D-01): connectors bound to this workspace (hard FK,
+  // KB binding mirror of the widget's primary workspace binding). Sessions
+  // hang off the connector (no workspaceId FK on ConnectorSession) — reachable
+  // via connector.workspace; no direct back-relation.
+  connectors ChatConnector[]
 
   // D-01 (quick 260809-wte): unique per-project name, partial index WHERE "deletedAt" IS NULL (soft-deleted rows free the name).
   @@unique([projectId, name])
@@ -405,6 +545,11 @@ model Chat {
   archive   Archive?     @relation(fields: [archiveId], references: [id], onDelete: SetNull)
   pins      ChatPin[]
   mcpPins   ChatMCPPin[]
+  // Phase 198 (ECCO-01, D-01/D-08): persistent chat continuity for external
+  // connector sessions — nullable FK (session starts chat-less; the
+  // sessionResolver attaches a Chat on the first message), onDelete: SetNull
+  // so deleting a chat never cascades into connector session rows.
+  connectorSessions ConnectorSession[] @relation("ConnectorChat")
 
   // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
   // the project_access note).
@@ -709,6 +854,14 @@ model ProviderModel {
   isDefault   Boolean  @default(false)
   temperature Float?
   maxTokens   Int?
+  // Phase 203 (MCC-01, D1): per-model pricing — PER-TOKEN Decimal in the DB
+  // (per-1M exists only in the UI input UX); null = not configured (N/A,
+  // never "free"). Audit columns stamp the admin write (T-203-03).
+  inputCostPerToken  Decimal? @db.Decimal(18, 10)
+  outputCostPerToken Decimal? @db.Decimal(18, 10)
+  currency           String?
+  lastCostUpdated    DateTime?
+  lastCostUpdatedBy  String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   provider    Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
@@ -848,6 +1001,12 @@ model McpCatalogEntry {
   category      String?
   version       String?
   author        String?
+  // Phase 197 (MCPO-03 D-04): additive OAuth columns mirroring MCPConnection
+  // (195 D-01). Entries are "none" | "oauth" — entries never carry "static":
+  // static auth rides the headers column. oauthProvider is the registry key
+  // ("google" | "microsoft"); validated at CONSUME time by resolveProvider.
+  authType      String   @default("none") // "none" | "oauth"
+  oauthProvider String?  // "google" | "microsoft" registry keys
   verificationTier   String    @default("unverified") // "official" | "verified_community" | "unverified"
   healthStatus        String    @default("healthy")    // "healthy" | "stale" | "down"
   lastHealthCheck     DateTime?
@@ -866,6 +1025,37 @@ model McpCatalogEntry {
   connections MCPConnection[]
 
   @@map("mcp_catalog_entries")
+}
+
+// ============================================================
+// Phase 202 (PLGM-01, spec §3.2 field list verbatim) — managed plugin
+// installs. Instance-scoped admin surface mirroring the McpCatalogEntry /
+// ProviderPreset documented class exemption: NOT in TENANT_READ_MODELS
+// (utils/scopedPrisma.ts — research Open Q 1; the admin who uploaded the
+// zip manages instance-wide, D6 trust model).
+// ============================================================
+
+model PluginInstall {
+  id            String   @id @default(uuid())
+  slug          String   @unique // packageName.replace("/", "+") — concurrency backstop (P2002 → 409)
+  packageName   String
+  displayName   String?
+  version       String?
+  apiVersion    Int
+  enabled       Boolean  @default(false)
+  status        String   @default("installed") // "installed" | "loaded" | "failed" | "disabled"
+  lastError     String?  @db.Text
+  packageJson   Json
+  licenseKeyEncrypted String? @db.Text // AES-256-GCM blob (encryptionService) — never serialized (P4)
+  licenseMode   String   @default("none") // none | platform | self (D6)
+  licenseStatus String? // "verified" | "invalid" | "expired" | "missing" | "plugin_mismatch"
+  licenseCheckedAt DateTime?
+  organizationId String? // seam column, null = instance-scoped (spec §3.2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("plugin_installs")
 }
 
 // ============================================================
@@ -911,6 +1101,16 @@ model MCPConnection {
   lastSyncAt    DateTime?
   catalogEntryId String?        // FK to McpCatalogEntry — set when installed from marketplace
   source        String          @default("manual") // "manual" | "marketplace"
+  // Phase 195 (MCPO-01 D-01): OAuth 2.0 authorization-code columns — additive.
+  // Decrypted blob shape: { accessToken, refreshToken?, scope, obtainedAt }.
+  authType String @default("none") // "none" | "static" | "oauth"
+  oauthProvider String? // "google" | "microsoft" | custom (registry key)
+  oauthScopes String? @db.Text // requested scopes, space-separated
+  credentialsEncrypted String? @db.Text // AES-256-GCM blob JSON (encryptionService)
+  tokenExpiresAt DateTime? // cache for proactive refresh
+  oauthStatus String @default("none") // "none" | "pending" | "authorized" | "error"
+  oauthError String? @db.Text // last authorize/refresh error
+  oauthClientId String? // dormant in v1 — BYO-org credentials Phase 196+ (spec §3.1 note)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -992,6 +1192,13 @@ model WorkspaceTokenUsage {
   promptTokens    Int      @default(0)
   completionTokens Int     @default(0)
   totalTokens     Int      @default(0)
+  // Phase 203 (MCC-01, D1/D2): cost snapshot — frozen AT RUN TIME (later rate
+  // edits never rewrite history). Null = pricing unset at run time (N/A
+  // semantics — never backfilled, never recalculated).
+  promptCost      Decimal? @db.Decimal(18, 6)
+  completionCost  Decimal? @db.Decimal(18, 6)
+  totalCost       Decimal? @db.Decimal(18, 6)
+  currency        String?
   createdAt       DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
@@ -1671,3 +1878,111 @@ model DlpEntity {
 // / `prisma.scimGroup` delegates. The `User.identityProviders` back-relation
 // (above, in the User model) stays here — the cross-fragment relation is
 // resolved by the prismaSchemaFolder merge (Phase 141 spike verified).
+// ============================================================
+// External Chat Connectors (Phase 198, ECCO-01 D-01 — spec §7.3 v2)
+// ============================================================
+
+// Chat-inbound connectors: one row per external bot (Telegram v1; the enum
+// union widens in Phases 199/200 — adapter registry fails closed for
+// unimplemented platforms). Secrets live ONLY in the two AES-256-GCM blobs
+// (encryptionService): botTokenEncrypted (the platform bot token) and
+// configEncrypted (per-platform JSON config INCL. signing/app secrets).
+// pollOffset BigInt (TV-2: Telegram update_id tends to int32 overflow on a
+// multi-year horizon — the repo's first BigInt column). healthStatus follows
+// the enum-as-string precedent (MCPConnection.healthStatus).
+model ChatConnector {
+  id                 String   @id @default(uuid())
+  // Phase 182 (SAAS-01b): org resolution point for connector sessions
+  // (sentinel default mirrors Widget) — webhooks are PUBLIC routes that
+  // resolve the row from the DB by its id (never from the body) and stash
+  // req.tenantConnector fail-closed (WR-05 slot).
+  organizationId     String   @default("00000000-0000-0000-0000-000000000000")
+  platform           String   // "telegram" | "discord" | "slack" | "whatsapp"
+  name               String
+  botTokenEncrypted  String?  // AES-256-GCM (encryptionService)
+  configEncrypted    String?  // platform config INCL. signing/app secret (JSON cifrato)
+  workspaceId        String   // KB binding (hard FK, come widget primary)
+  archiveId          String?  // opzionale, pseudo-workspace "archive:<id>" come widget
+  responseProviderId String?  // model pin, mirror Widget (server-resolved, mai client)
+  responseModel      String?
+  botUsername        String?
+  botDisplayName     String?
+  welcomeMessage     String?  @db.Text
+  fallbackMessage    String?  @db.Text  @default("I don't have an answer for that. Please contact us for more help.")
+  fallbackLocale     String   @default("en")
+  localizedTexts     Json?    // mirror Widget v0.20
+  isEnabled          Boolean  @default(true)
+  pollMode           String   @default("polling") // "polling" | "webhook" (Telegram-only semantics in Phase 198)
+  pollOffset         BigInt   @default(0) // Telegram update_id cursor — BigInt per spec §7.2-5 (int32 overflow horizon)
+  rateLimitPerMinute Int?     // override, null = default globale
+  sessionLimitPerDay Int?     // mirror Widget G-151-1b
+  healthStatus       String   @default("unknown") // "unknown" | "healthy" | "error"
+  lastWebhookAt      DateTime?
+  lastPollAt         DateTime?
+  lastError          String?  @db.Text
+  createdBy          String
+  deletedAt          DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  creator      User             @relation("ConnectorCreator", fields: [createdBy], references: [id])
+  sessions     ConnectorSession[]
+  messages     ConnectorMessage[]
+
+  // Phase 182 (SAAS-01b): org-lookup index on the M2 column (drift-locked, see
+  // the project_access note).
+  @@index([organizationId])
+  @@index([workspaceId, isEnabled])
+  @@index([platform, isEnabled])
+  @@map("chat_connectors")
+}
+
+// External chat session per (connector, platformUserId) — resolved server-side
+// from the unique pair (NO sessionToken: no iframe carries it, unlike
+// WidgetSession). A persistent Chat (service-account owned) is attached on the
+// first message via chatId (D-08); expiresAt TTL refreshes on activity
+// (WidgetSession precedent). Sessions hard-expire — never soft-deleted.
+model ConnectorSession {
+  id                String    @id @default(uuid())
+  connectorId       String
+  platformUserId    String
+  platformUserName  String?
+  chatId            String?   // Chat persistente (service account owner)
+  messageCount      Int       @default(0)
+  lastMessageAt     DateTime?
+  lastResetAt       DateTime  @default(now())
+  expiresAt         DateTime
+  createdAt         DateTime  @default(now())
+
+  connector ChatConnector      @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  chat      Chat?              @relation("ConnectorChat", fields: [chatId], references: [id], onDelete: SetNull)
+  messages  ConnectorMessage[]
+
+  @@unique([connectorId, platformUserId])
+  @@index([expiresAt])
+  @@map("connector_sessions")
+}
+
+// Append-only connector message log — the DB dedup arbiter AND the analytics
+// instrument (spec §7.2-3: the @@unique constraint + the audit trail are the
+// same instrument). A NULL platformMessageId row skips dedup semantics
+// naturally in Postgres (NULLs never collide in a unique index). Never
+// soft-deleted.
+model ConnectorMessage {
+  id                String   @id @default(uuid())
+  connectorId       String
+  sessionId         String
+  direction         String   // "in" | "out"
+  platformMessageId String?
+  charCount         Int      @default(0)
+  createdAt         DateTime @default(now())
+
+  connector ChatConnector      @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  session   ConnectorSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectorId, platformMessageId]) // dedup (null platformMessageId = skip dedup)
+  @@index([connectorId, createdAt])
+  @@map("connector_messages")
+}

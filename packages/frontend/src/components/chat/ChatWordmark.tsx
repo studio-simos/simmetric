@@ -35,7 +35,9 @@ export default function ChatWordmark({ appName, statusLine, className }: ChatWor
   return (
     <div className={cn("flex flex-col items-center gap-3 select-none", className)}>
       <Monogram size={56} color="var(--foreground)" className="opacity-90" />
-      <h2 className="text-2xl font-medium tracking-wide text-foreground/90">
+      {/* Display serif (2026-09): the one brand-voice moment in the chat —
+          `--font-display` (Source Serif 4), tracking-tight like LoginPage. */}
+      <h2 className="font-display text-2xl font-medium tracking-tight text-foreground/90">
         {appName || t("app.name")}
       </h2>
       <p className="text-xs text-muted-foreground tracking-wide">

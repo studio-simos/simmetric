@@ -15,7 +15,9 @@ import prisma from "../utils/prisma";
 // Phase-182 D-01/D-04 verdict (User is identity-pure, Role is global;
 // getEffectivePermissions intact). None are in TENANT_READ_MODELS — exempt
 // from the org-assertion gate by design.
-import { createRoleSchema, updateRoleSchema, menuSectionSchema, roleIdParamSchema } from "@simmetric-chat/shared";
+import { createRoleSchema, updateRoleSchema, menuSectionSchema, roleIdParamSchema, roleSectionVisibilitySchema } from "@simmetric-chat/shared";
+import { resolveRoleSections, resolveUserSections } from "../services/visibilityService";
+import { logEvent } from "../services/eventLogService";
 
 const router = Router();
 
@@ -26,21 +28,16 @@ router.use(authMiddleware);
 // the ALS tenant run before any rbac/license gate.
 router.use(tenantContextMiddleware);
 
-// GET /api/roles/me/menu-sections — get menu sections for current user (any authenticated user)
+// GET /api/roles/me/menu-sections — resolve per-user visibility (any authenticated user).
+// Phase 206 (VIS-01, D-15): the response widens to { menuSections,
+// settingsSections } — per-role RoleSectionVisibility rows WIN; absent rows
+// fall back to the permission-OR defaults (byte-identical for untouched
+// installs). Frontend consumers rewire in the SAME plan (atomic shape change).
 router.get("/me/menu-sections", async (req, res) => {
   try {
     const userId = req.userId!;
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      include: {
-        roles: {
-          include: {
-            role: {
-              include: { menuSections: true },
-            },
-          },
-        },
-      },
     });
 
     if (!user) {
@@ -54,15 +51,78 @@ router.get("/me/menu-sections", async (req, res) => {
       return;
     }
 
-    // Collect unique menu sections from all roles
-    const sectionSet = new Set<string>();
-    for (const userRole of user.roles) {
-      for (const ms of userRole.role.menuSections) {
-        sectionSet.add(ms.menuSection);
-      }
+    // Phase 206 (VIS-01, D-15): the per-role DB override + permission-OR
+    // default resolution lives in visibilityService (union across roles).
+    const resolved = await resolveUserSections(userId);
+    res.json(resolved);
+  } catch (err: unknown) {
+    res.status(500).json({ error: (err instanceof Error ? err.message : String(err)) });
+  }
+});
+
+// GET /api/roles/:roleId/visibility — admin view of a role's resolved
+// visibility (menu + settings sections, tagged override|default).
+router.get("/:roleId/visibility", requireAdmin, async (req, res) => {
+  try {
+    const parsedId = roleIdParamSchema.safeParse(req.params.roleId);
+    if (!parsedId.success) {
+      res.status(400).json({ error: "Invalid role ID" });
+      return;
+    }
+    const resolved = await resolveRoleSections(parsedId.data);
+    if (!resolved) {
+      res.status(404).json({ error: "Role not found" });
+      return;
+    }
+    res.json(resolved);
+  } catch (err: unknown) {
+    res.status(500).json({ error: (err instanceof Error ? err.message : String(err)) });
+  }
+});
+
+// PUT /api/roles/:roleId/visibility — admin per-section visible/hidden toggles
+// (VIS-01 D-14/D-16). Explicit rows only (absent row = permission-OR default);
+// writes audit-log + invalidates the auth cache of every user holding the role
+// (Pitfall 3 — stale resolution kill).
+router.put("/:roleId/visibility", requireAdmin, async (req, res) => {
+  try {
+    const parsedId = roleIdParamSchema.safeParse(req.params.roleId);
+    if (!parsedId.success) {
+      res.status(400).json({ error: "Invalid role ID" });
+      return;
+    }
+    const parsed = roleSectionVisibilitySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid request body", details: parsed.error.flatten().fieldErrors });
+      return;
+    }
+    const roleId = parsedId.data;
+    const role = await prisma.role.findUnique({ where: { id: roleId } });
+    if (!role) {
+      res.status(404).json({ error: "Role not found" });
+      return;
     }
 
-    res.json([...sectionSet]);
+    for (const entry of parsed.data.sections) {
+      await prisma.roleSectionVisibility.upsert({
+        where: { roleId_sectionKey: { roleId, sectionKey: entry.sectionKey } },
+        update: { visible: entry.visible },
+        create: { roleId, sectionKey: entry.sectionKey, visible: entry.visible },
+      });
+    }
+
+    logEvent("role", roleId, "visibility.updated", req.userId!, {
+      sections: parsed.data.sections.length,
+    }).catch(() => {});
+
+    // Pitfall 3: kill the auth cache for every holder so the next request
+    // re-resolves with the new visibility.
+    const holders = await prisma.userRole.findMany({ where: { roleId }, select: { userId: true } });
+    for (const holder of holders) {
+      invalidateAuthCache(holder.userId).catch(() => {});
+    }
+
+    res.json({ updated: parsed.data.sections.length });
   } catch (err: unknown) {
     res.status(500).json({ error: (err instanceof Error ? err.message : String(err)) });
   }

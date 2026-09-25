@@ -32,6 +32,13 @@ jest.mock("../utils/prisma", () => ({
     organizationMember: {
       findFirst: jest.fn().mockResolvedValue({ organizationId: "org-default" }),
     },
+    // Phase 207 (CLOUD-04/D-15): storage gate seams — unlimited owner +
+    // empty sums; the draft persist runs inside a passthrough $transaction.
+    user: {
+      findUnique: jest.fn(),
+    },
+    quotaReset: { findFirst: jest.fn(), create: jest.fn() },
+    workspaceTokenUsage: { aggregate: jest.fn() },
     workspace: {
       findFirst: jest.fn(),
     },
@@ -43,7 +50,13 @@ jest.mock("../utils/prisma", () => ({
     },
     uploadDraft: {
       create: jest.fn(),
+      aggregate: jest.fn(),
+      findMany: jest.fn(),
     },
+    document: {
+      aggregate: jest.fn(),
+    },
+    $transaction: undefined as unknown,
   },
   withSoftDelete: (where: unknown) => where,
 }));
@@ -131,6 +144,16 @@ app.use("/api/uploads", uploadRoutes);
 beforeEach(() => {
   jest.clearAllMocks();
   enforcementFlag.value = "true";
+  // Phase 207 (CLOUD-04/D-15): storage gate defaults + in-tx passthrough.
+  const __pm = require("../utils/prisma").default as any;
+  __pm.$transaction = async (fn: (tx: any) => Promise<unknown>) => fn(__pm);
+  __pm.user.findUnique.mockResolvedValue({
+    tokenQuotaLimit: null, tokenQuotaUnlimited: true,
+    storageQuotaGb: null, storageQuotaUnlimited: true,
+  });
+  __pm.uploadDraft.aggregate.mockResolvedValue({ _sum: { fileSize: 0 } });
+  __pm.uploadDraft.findMany.mockResolvedValue([]);
+  __pm.document.aggregate.mockResolvedValue({ _sum: { fileSize: 0 } });
   (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
     organizationId: "org-default",
   });

@@ -61,7 +61,8 @@ router.post("/:widgetId/stream", async (req: Request<{ widgetId: string }>, res:
 
   // Check DB-tracked rate limits from session
   if (session.hourlyRemaining !== undefined && session.hourlyRemaining <= 0) {
-    res.status(429).json({ error: "Rate limit exceeded", retryAfter: "3600" });
+    res.set("Retry-After", "3600");
+      res.status(429).json({ error: "Rate limit exceeded", retryAfter: "3600" });
     return;
   }
 

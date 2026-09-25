@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AppInput } from "@/components/ui/app";
+import Monogram from "./Monogram";
 import { Eye, EyeOff } from "lucide-react";
 import { getErrorMessage } from "../utils/errorUtils";
 import { navigateTo } from "../utils/navigation";
@@ -91,10 +92,10 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+    <div className="min-h-[100dvh] flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-md">
         {/* Controls bar — theme toggle + language selector */}
-        <div className="flex items-center justify-end gap-2 mb-4">
+        <div className="auth-enter flex items-center justify-end gap-2 mb-4">
           <ThemeToggle />
           {enabledLanguages.length > 1 && (
             <Select
@@ -120,9 +121,16 @@ export default function LoginPage() {
         </div>
 
         {/* Card */}
-        <Card>
+        <Card className="auth-enter auth-enter-1">
           <CardHeader className="text-center">
-            <CardTitle className="text-2xl font-bold">Simmetric Chat</CardTitle>
+            {/* Brand block (2026-09) — Monogram + display-serif title, mirroring
+                the ChatWordmark treatment. Geist/serif pairing, no font-bold. */}
+            <div className="flex flex-col items-center gap-2.5">
+              <Monogram size={48} color="var(--foreground)" />
+              <CardTitle className="font-display text-2xl font-medium tracking-tight">
+                Simmetric Chat
+              </CardTitle>
+            </div>
             <CardDescription>{t("app.subtitle")}</CardDescription>
             {/* Phase 193 (D-18) — LDAP hint renders ONLY in the ldap arm,
                 directly under CardDescription per the UI-SPEC. */}

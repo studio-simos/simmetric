@@ -5,7 +5,7 @@
 
 import path from "path";
 import fs from "fs";
-import express, { type Express, type Request, type Response } from "express";
+import express, { json, type Express, type Request, type Response } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
@@ -17,20 +17,34 @@ import { apiRateLimiter } from "./middleware/rateLimit";
 import { getEnv } from "./config/env";
 import { swaggerSpec } from "./config/swagger";
 import { logger } from "./utils/logger";
+import { requestIdMiddleware, sendError } from "./utils/httpError";
 import prisma from "./utils/prisma";
 
 // Phase 140 (EPA-01) — enterprise plugin loader + shutdown seam.
-import { loadEnterprisePlugin, shutdownEnterprisePlugin } from "./services/enterpriseLoader";
-// Phase 186 (SAAS-05, D-08): SaaS plugin loader + shutdown seam — shares the
+import { loadEnterprisePlugin } from "./services/enterpriseLoader";// Phase 186 (SAAS-05, D-08): SaaS plugin loader + shutdown seam — shares the
 // pluginLoaderCore machinery (fail-loud semantics verbatim, D-09).
-import { loadSaaSPlugin, shutdownSaaSPlugin } from "./services/saasLoader";
+import { loadSaaSPlugin } from "./services/saasLoader";
+// Phase 202 (PLGM-02): the managed plugin loader wired into REAL boot
+// (the 202-01 tracer skeleton now runs in the actual boot sequence).
+import { loadManagedPlugins } from "./services/managedLoader";
+import pluginsRoutes from "./routes/plugins";
+// Phase 202 (PLGM-03, D-07/Pitfall 1): the enterprise DB→env instance-license
+// fallback — an additive ASYNC boot step between initLicense() and the
+// enterprise plugin load. NEVER re-declared here — the service is owned
+// by 202-05.
+import { resolveInstanceLicenseFromDB } from "./services/pluginLicenseService";
+// Phase 202 (PLGM-04, D-06): the ONE graceful-shutdown path — extracted to
+// shutdownSequence.ts; SIGTERM/SIGINT AND the restart route all call the
+// same import (never a second restart-specific variant, T-202-10).
+import { gracefulShutdown } from "./services/shutdownSequence";
+import { PLUGINS_STORAGE_DIR } from "./services/pluginManagerService";
 
 // Phase 164 (SCALE-04, Q-01/Q-04): pg-boss job-queue singleton lifecycle.
 // startJobQueue has its own internal try/catch (D-05 graceful degradation) and
 // never throws — it is safe to call unguarded at boot. stopJobQueue is
 // null-safe. Only the start/stop functions are imported here; getBoss /
 // schedule / createQueue are Phase 165 concerns.
-import { startJobQueue, stopJobQueue } from "./services/jobQueue";
+import { startJobQueue } from "./services/jobQueue";
 // pg-boss queue-table self-heal guard (debug session pgboss-queue-pkey-duplicate):
 // detects + repairs index/heap-diverged duplicate rows in pgboss.queue BEFORE the
 // schedulers register. No-op (single aggregate query) on a healthy table. Has its
@@ -50,6 +64,8 @@ import authRoutes from "./routes/auth";
 import { createAuthLdapCompositeRouter } from "./routes/authLdapComposite";
 import userRoutes from "./routes/users";
 import roleRoutes from "./routes/roles";
+import agencyRoutes from "./routes/agency";
+import quotaRoutes from "./routes/quota";
 import projectRoutes from "./routes/projects";
 import workspaceRoutes from "./routes/workspaces";
 import documentRoutes from "./routes/documents";
@@ -68,7 +84,18 @@ import skillsRoutes from "./routes/skills";
 // own /api/skills mount; GET /api/agent/skills stays byte-identical.
 import { skillsCrudRouter } from "./routes/skills";
 import mcpRoutes from "./routes/mcp";
+// Phase 195 (MCPO-01 D-07): the PUBLIC OAuth callback router — mounted at the
+// same path BEFORE mcpRoutes (Pitfall 2 mount-order landmine: inside
+// mcpRoutes the router-level requireAdmin would 401 the IdP browser redirect
+// before any handler ran). Carries NO auth middleware; its ONLY route is
+// GET /oauth/callback — everything else falls through to mcpRoutes per-path.
+import mcpOAuthCallbackRouter from "./routes/mcpOAuthCallback";
 import mcpPinRoutes from "./routes/mcpPins";
+import { connectorsRoutes, connectorsWebhookRouter } from "./routes/connectors";
+// Phase 200 (ECCO-06, Option A): the public CONNECTOR OAuth callback router —
+// the "Add to Slack" install completing arm. Same public-mount doctrine as
+// mcpOAuthCallbackRouter (NO auth middleware; ONLY GET /oauth/callback).
+import connectorOAuthCallbackRouter from "./routes/connectorOAuthCallback";
 import marketplaceRoutes from "./routes/marketplace";
 import providerPresetRoutes from "./routes/providerPresets";
 import e2eHelperRoutes from "./routes/e2eHelpers";
@@ -124,8 +151,16 @@ import { mountMCPServer } from "./agent/mcpServer";
 // MCP Health-Check
 import { initMCPHealthCheckScheduler } from "./services/mcpHealthCheckJob";
 
+// Phase 200 (ECCO-06, D-09): connector health-check — daily pg-boss cron
+// sweeping all four platforms via validateBotToken (health flip ONLY, no
+// auto-disable per 198 D-20).
+import { initConnectorHealthCheckScheduler } from "./services/connectorHealthCheckJob";
+
 // MCP Reaper (D-05/D-07 lifecycle) + MCP connection init/shutdown (D-08/D-18)
 import { initMCPReaperScheduler } from "./services/mcpReaperJob";
+// Phase 195 (MCPO-01 D-12): proactive OAuth token refresh — 5-min pg-boss
+// cron, mcpReaperJob idiom, every refresh wrapped in withConnectionLock.
+import { initMCPOAuthRefreshScheduler } from "./services/mcpOAuthRefreshJob";
 // D-14: synthesis reaper (pg-boss cron, mirrors mcpReaperJob)
 import { initSynthesisReaperScheduler } from "./services/synthesisReaperJob";
 // Phase 69 (DST-05, D-69-07): UploadDraft reaper — daily 03:00 soft-delete + best-effort unlink
@@ -136,7 +171,9 @@ import { initUploadDraftReaperScheduler } from "./services/uploadDraftReaperJob"
 // Phase 165 (Q-02/Q-03): migrated to pg-boss cron — pg-boss stopJobQueue drains the worker
 // (no per-scheduler shutdown).
 import { initChatMessageReaperScheduler } from "./services/chatMessageReaperJob";
-import { initializeMCPConnections, shutdownMCPConnections } from "./agent/mcpClient";
+// Phase 207 (CLOUD-06, D-11): hourly recurring token-quota reset sweep.
+import { initQuotaResetScheduler } from "./services/quotaResetJob";
+import { initializeMCPConnections } from "./agent/mcpClient";
 import { initFilters } from "./filters/initFilters";
 
 // Vector Cleanup (D-08)
@@ -146,6 +183,36 @@ import { initVectorCleanupScheduler } from "./services/vectorCleanupJob";
 // (was inline in index.ts:260-288). Phase 165 (Q-02/Q-03): migrated to pg-boss
 // cron — pg-boss stopJobQueue drains the worker (no per-scheduler shutdown).
 import { initWikiConsistencyScheduler } from "./services/archiveConsistencyService";
+// Phase 198 (198-03, D-15/P-10): the connector poll scheduler — ONE shared
+// interval ticker for all enabled polling-mode telegram connectors. Init is
+// in the dev+prod scheduler cluster below (OUTSIDE the production-only
+// pg-boss block); the stop handle rides graceful shutdown (25s long-poll
+// safety).
+import { initConnectorPollScheduler } from "./services/connectors/connectorPoller";
+// Phase 198 (198-04, Rule 3 blocking fix): side-effect import that registers
+// the TelegramAdapter in the platform registry at boot — 198-03 shipped the
+// module-load registerAdapter("telegram") but NO production module imported
+// the file, so the boot registry stayed EMPTY (create/validate/test all
+// 400'd "Platform not implemented yet"; the webhook/polling pipelines failed
+// closed on getAdapter). The import runs for its registration side effect —
+// no symbols are consumed here.
+import "./services/connectors/telegram";
+// Phase 199 (199-03, Pitfall 5 / D-05): the DISCORD side of the 198-04
+// boot-registry lesson — BOTH side-effect imports. discord.ts registers
+// the DiscordAdapter (REST outbound) at module load; discordGateway.ts is
+// the WS inbound manager whose initDiscordGateway()/closeDiscordGateway()
+// are wired in the scheduler cluster + graceful shutdown below.
+import "./services/connectors/discord";
+// Phase 200 (200-01, Pitfall 5 doctrine — the 198-04 boot-registry lesson
+// applies to every adapter): slack.ts registers the SlackAdapter at module
+// load; the import runs for its registration side effect — no symbols
+// consumed here.
+import "./services/connectors/slack";
+// Phase 200 (200-02, same doctrine): whatsapp.ts registers the
+// WhatsappAdapter at module load — the GET/POST /whatsapp/:connectorId/
+// webhook subpaths + the admin create/validate/test routes flip live.
+import "./services/connectors/whatsapp";
+import { initDiscordGateway } from "./services/connectors/discordGateway";
 
 // Phase 192 (DLP-01/D-12, D-01/D-12): document PII scan + legacy backfill —
 // the first one-shot send/work pg-boss consumers in the repo (plan 02).
@@ -553,6 +620,12 @@ export function createApp(): Express {
   app.set("trust proxy", 1); // Trust Nginx reverse proxy for X-Forwarded-For
 
   app.use(helmet());
+  // api-design sweep (2026-09-24): per-request correlation id — honors an
+  // inbound X-Request-Id from proxies, mints a UUID otherwise, echoes it as
+  // a response header, and stamps req.requestId for sendError() envelopes
+  // (utils/httpError.ts). Mounted FIRST so every handler (and the catch-alls)
+  // sees it.
+  app.use(requestIdMiddleware);
   // CORS for internal/frontend API routes (same-origin or known origins).
   // SEC-01: replace the echo-any-origin footgun (previously a boolean `origin`)
   // with an ALLOWED_ORIGINS env allowlist. The cors package's origin callback
@@ -576,6 +649,32 @@ export function createApp(): Express {
   app.use((req, res, next) => {
     if (req.path.startsWith("/api/internal/widget")) return next();
     corsHandler(req, res, next);
+  });
+  // Phase 200 (P1 correction, T-200-01b): path-filtered raw-body parser for
+  // the platform webhook subpaths. WHY the wrapper and not a route-scoped
+  // parser variant: body-parser 2.3.0 (bundled with express 5) short-circuits
+  // via `onFinished.isFinished(req)` — "body already parsed" — so a
+  // route-scoped `json({ verify })` mounted AFTER the global 100mb parser
+  // below NEVER RUNS (verified empirically: rawBody stays undefined and the
+  // 256kb limit never trips). Slack/WhatsApp HMAC signs the RAW bytes, so
+  // these requests must be parsed HERE with the verify capture, before the
+  // global parser can consume the stream. The wrapper covers EVERY
+  // /api/connectors/*/webhook path including telegram's (its per-route
+  // webhookJson becomes a harmless short-circuit under this parser —
+  // behavior byte-identical, defense in depth; the telegram route is NOT
+  // exempted). WR-07: the 256kb webhook limit is only real because this
+  // parser runs FIRST — >256kb webhook bodies 413 here, before the global
+  // 100mb parser and every gate could pay for them.
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api/connectors/") && req.path.endsWith("/webhook")) {
+      return json({
+        limit: "256kb",
+        verify: (rq: express.Request, _r: express.Response, buf: Buffer) => {
+          (rq as express.Request & { rawBody?: Buffer }).rawBody = buf;
+        },
+      })(req, res, next);
+    }
+    next();
   });
   // D-09 — aligned to 100mb for coherence with multer (100MB) and nginx (100m).
   // NOTE: express.json does NOT gate multipart uploads (multer does) — Pitfall 7.
@@ -660,6 +759,10 @@ export function createApp(): Express {
   // register(ctx). scimRoutes moved too (ctx.mountPublic("/scim/v2", ...)).
   app.use("/api/users", userRoutes);
   app.use("/api/roles", roleRoutes);
+  // Phase 206 (AGENCY-01, D-07): web-agency sub-user management — gated on
+  // agency:users:manage (NOT requireAdmin) inside the router.
+  app.use("/api/agency", agencyRoutes);
+  app.use("/api/quota", quotaRoutes); // Phase 207 (CLOUD-06): reset + usage read
   app.use("/api/projects", projectRoutes);
   app.use("/api/workspaces", workspaceRoutes);
   app.use("/api/documents", documentRoutes);
@@ -676,8 +779,31 @@ export function createApp(): Express {
   app.use("/api/agent", skillsRoutes);
   // Phase 190 (SKIL-01 D-21): the custom-skill CRUD + test-preview mount.
   app.use("/api/skills", skillsCrudRouter);
+  // Phase 195 (MCPO-01 D-07/Pitfall 2): the public OAuth callback router MUST
+  // precede the admin-gated mcpRoutes — Express matches app.use in registration
+  // order, and mcpRoutes' router-level authMiddleware+tenant+requireAdmin
+  // would 401 the browser redirect. The callback router contains ONLY
+  // GET /oauth/callback (no auth); every other /api/mcp-connections path
+  // falls through to the admin router below.
+  // Phase 202 (PLGM-05): the plugin-manager admin surface — mounted with
+  // the other createApp() routes, BEFORE the catch-alls (route registration,
+  // not boot wiring: loadManagedPlugins already lives in the boot block).
+  app.use("/api/plugins", pluginsRoutes);
+  app.use("/api/mcp-connections", mcpOAuthCallbackRouter);
   app.use("/api/mcp-connections", mcpRoutes);
   app.use("/api/mcp-marketplace", marketplaceRoutes);
+  // Phase 198 (198-01b, D-06): chat-connector surface — the PUBLIC webhook
+  // mini-router mounts FIRST (platform signature is its only auth, NO RBAC),
+  // then the admin CRUD router (JWT + tenant + admin + connector:* gates).
+  // Both precede the JWT catch-all (widget mount precedent :721).
+  // Phase 200 (ECCO-06, Option A): the public CONNECTOR OAuth callback router
+  // mounts BEFORE the webhook router — the Slack browser redirect carries no
+  // JWT, and only GET /oauth/callback lives there (everything else falls
+  // through per-path to the webhook/admin routers below — mcpOAuthCallback
+  // mount-order precedent :757).
+  app.use("/api/connectors", connectorOAuthCallbackRouter);
+  app.use("/api/connectors", connectorsWebhookRouter);
+  app.use("/api/connectors", connectorsRoutes);
   // T-DRD-01: the e2eHelpers router is an unauthenticated process-spawn
   // surface (start/stop echo MCP server) — its own doc comment promises
   // dev/test-only, and this gate enforces it. Production boots 404 here.
@@ -752,15 +878,24 @@ export function createApp(): Express {
  * need the catch-all (e.g. the enterprise integration test).
  */
 export function mountCatchAlls(app: Express): void {
-  // 404 handler
+  // 404 handler — canonical envelope (utils/httpError.ts contract).
   app.use((_req, res) => {
-    res.status(404).json({ error: "Not found" });
+    sendError(res, 404, "not_found", "Not found");
   });
 
-  // Error handler
-  app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    logger.error("Unhandled error", { error: err.message, stack: err.stack });
-    res.status(500).json({ error: "Internal server error" });
+  // Error handler — logs the real error server-side WITH the requestId and
+  // returns the generic envelope; internal err.message never reaches clients
+  // (api-design sweep: never 500-with-leak, never prose-only).
+  app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const requestId = req.requestId;
+    logger.error("Unhandled error", { requestId, error: err.message, stack: err.stack });
+    res.status(500).json({
+      error: {
+        code: "internal_error",
+        message: "Internal server error",
+        requestId,
+      },
+    });
   });
 }
 
@@ -823,6 +958,18 @@ if (isMainModule) {
       // Initialize license system
       initLicense();
 
+      // Phase 202 (PLGM-03, D-07/Pitfall 1): enterprise DB→env instance-license
+      // fallback — an ADDITIVE async boot step between initLicense() and
+      // the enterprise plugin load. Without a verified enterprise row the
+      // LICENSE_KEY env path is untouched (the cached license stays whatever
+      // initLicense() derived); a verified enterprise DB row overrides it via
+      // the additive setCachedLicense setter. initLicense() and every sync
+      // getLicenseInfo()/getFeatureLimit() call site stay byte-identical —
+      // making initLicense async would break the lazy sync call sites
+      // (Pitfall 1 warning sign). DB hiccups never kill boot (fail-open to the
+      // env fallback, T-202-08).
+      await resolveInstanceLicenseFromDB();
+
       // Seed built-in workspace templates
       await seedTemplates();
 
@@ -840,6 +987,32 @@ if (isMainModule) {
         fs.mkdirSync(path.resolve("storage/branding"), { recursive: true });
       } catch {
         // ignore — the /branding download handler's fs arm will 404 if missing
+      }
+
+      // Phase 202 (PLGM-01/02, Edge E6): ensure the managed plugin storage
+      // dir exists (idempotent, mirrors the branding mkdir precedent) and
+      // sweep orphan `.tmp-*` install dirs — an install interrupted by a
+      // crash/restart leaves `.tmp-*` staging dirs behind; the boot sweep
+      // recovers them (rm dirs older than 10 minutes — a live install is
+      // shorter than the cap and the install mutex serializes concurrent
+      // installs, so a younger dir is in-flight work, not an orphan).
+      try {
+        fs.mkdirSync(PLUGINS_STORAGE_DIR, { recursive: true });
+        const ORPHAN_TMP_MAX_AGE_MS = 10 * 60 * 1000;
+        for (const entry of fs.readdirSync(PLUGINS_STORAGE_DIR)) {
+          if (!entry.startsWith(".tmp-")) continue;
+          try {
+            const stat = fs.statSync(path.join(PLUGINS_STORAGE_DIR, entry));
+            if (Date.now() - stat.mtimeMs > ORPHAN_TMP_MAX_AGE_MS) {
+              fs.rmSync(path.join(PLUGINS_STORAGE_DIR, entry), { recursive: true, force: true });
+              logger.info(`[boot] swept orphan plugin tmp dir: ${entry}`, {});
+            }
+          } catch {
+            // ignore per-entry stat/rm failures — the sweep is best-effort
+          }
+        }
+      } catch {
+        // ignore — same fs-arm idiom as the branding mkdir above
       }
 
       // Seed MCP marketplace catalog entries
@@ -934,6 +1107,17 @@ if (isMainModule) {
     // info-level no-op and continue (SC-4).
     await loadSaaSPlugin(app);
 
+    // Phase 202 (PLGM-02, D-09): managed plugins load AFTER SaaS — the
+    // pinned chain is loadEnterprisePlugin → loadSaaSPlugin →
+    // loadManagedPlugins → authLdapComposite → mountCatchAlls (research
+    // Open Q 2). Fail-soft (D-03): a managed register throw records
+    // status=failed + lastError and boot CONTINUES to the catch-alls —
+    // never process.exit on the managed path. License gate: ONLY
+    // licenseMode=platform rows are license-gated (P3 — none/self rows
+    // never consult the license service, D6); a platform row without a
+    // verified license stays status=installed (never loaded, D4).
+    await loadManagedPlugins(app);
+
     // Phase 193 (LDAP-01, D-13): the community composite login route — the
     // SOLE local-auth fallback arm. Mounted AFTER both plugin loads and
     // BEFORE mountCatchAlls so it receives (a) requests the enterprise LDAP
@@ -994,6 +1178,7 @@ if (isMainModule) {
       // natively (Pattern 2 — no msUntilNext3AM initial-delay timer).
       await initUploadDraftReaperScheduler(); // Phase 69 D-69-07: daily 03:00 reaper for expired UploadDrafts
       await initChatMessageReaperScheduler(); // Phase 84: daily 03:00 chat-message retention reaper (D-10/D-12)
+      await initQuotaResetScheduler(); // Phase 207 (CLOUD-06, D-11): hourly recurring token-quota reset sweep
       // Phase 192 (DLP-01/D-12): document PII scan + legacy backfill consumers
       // (the first one-shot send/work queues). Registered AFTER the cron
       // consumers, mirroring the existing registration order. Each init
@@ -1001,6 +1186,16 @@ if (isMainModule) {
       // logged at warn — never blocks boot).
       await initDlpDocumentScanScheduler();
       await initDlpBackfillScheduler();
+      // Phase 195 (MCPO-01 D-12): proactive OAuth token refresh — 5-min cron
+      // AFTER initDlpBackfillScheduler() and BEFORE the
+      // initializeMCPConnections() fire-and-forget (boot-order invariant,
+      // pinned by bootOrder.test.ts). Every refresh is withConnectionLock-
+      // wrapped; pg-boss unavailable → warn + no fallback timer (D-12).
+      await initMCPOAuthRefreshScheduler();
+      // Phase 200 (ECCO-06, D-09): the connector health-check cron — daily
+      // sweep of all four platforms (health flip only, NO auto-disable).
+      // Awaits inside the PRODUCTION-ONLY block (mcpHealthCheck precedent).
+      await initConnectorHealthCheckScheduler();
       // D-18 (Pitfall 1): wire initializeMCPConnections so enabled MCP servers
       // connect at boot. Fire-and-forget so a failing external MCP server does
       // not block server startup.
@@ -1021,46 +1216,25 @@ if (isMainModule) {
     initOcrPipelineScheduler();
     initSynthesisPipelineScheduler();
     await initWikiConsistencyScheduler();
+    // Phase 198 (198-03, D-15/P-10): the connector poll scheduler — dev+prod
+    // (P-10: the poller must be alive in dev too — outside the pg-boss block
+    // above). Long-polls run behind per-connector isRunning guards.
+    initConnectorPollScheduler();
+    // Phase 199 (199-03, D-05): connect the Discord Gateway clients for every
+    // enabled discord connector — dev+prod cluster (beside the poller).
+    // FIRE-AND-FORGET with a logged catch: a failing external gateway (or a
+    // DB hiccup) must not block server boot — the reconnect ladder owns
+    // recovery (the initializeMCPConnections shape above).
+    initDiscordGateway().catch((err: unknown) => {
+      logger.warn("[server] Discord gateway init failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
     // Graceful shutdown — stop backup jobs before disconnecting.
-    // WR-02: race the shutdown sequence against a 5s hard timeout so a hanging
-    // `client.close()` on an unresponsive external MCP server cannot keep the
-    // process alive past the container runtime's grace period. On timeout we
-    // force-exit rather than waiting indefinitely for the SDK to settle.
-    const gracefulShutdown = async (signal: string): Promise<void> => {
-      logger.info(`[server] ${signal} received — shutting down gracefully`);
-      const shutdownSequence = (async () => {
-        // Phase 146 (EPA-06): the backup scheduler stop moved to the enterprise
-        // plugin — invoked via shutdownEnterprisePlugin()'s schedulers.stop().
-        // Phase 165 (Q-02/Q-03): all 7 per-scheduler shutdown calls (mcpReaper
-        // + synthesisReaper + vectorCleanup + mcpHealthCheck + wikiConsistency
-        // + uploadDraftReaper + chatMessageReaper) were removed — pg-boss
-        // stopJobQueue (called below) drains all workers across the 7 cron
-        // queues.
-        await shutdownMCPConnections(); // D-08: close all activeConnections delete-first
-        // Phase 164 (SCALE-04, Q-04, D-04): drain pg-boss in-flight jobs (4.5s
-        // cap) AFTER the scheduler shutdowns and BEFORE
-        // shutdownEnterprisePlugin() + prisma.$disconnect() so the queue can
-        // drain while the DB is still up. stopJobQueue is null-safe (no-op when
-        // the queue never started / already stopped). Phase 165 (Q-02/Q-03)
-        // removed all 7 per-scheduler shutdowns (mcpReaper + 4 interval
-        // schedulers + 2 daily reapers) — pg-boss stopJobQueue drains all their
-        // workers. Boot-order invariant enforced by src/__tests__/bootOrder.test.ts.
-        await stopJobQueue();
-        // Phase 140 (EPA-01): stop plugin schedulers + invoke onShutdown
-        // callbacks BEFORE prisma.$disconnect() so plugin teardown can
-        // still hit the DB. Enforced by bootOrder.test.ts.
-        // Phase 186 (SAAS-05, D-10): REVERSE load order — SaaS stops BEFORE
-        // enterprise. Both before prisma.$disconnect().
-        await shutdownSaaSPlugin();
-        await shutdownEnterprisePlugin();
-        await prisma.$disconnect();
-      })();
-      const timeout = new Promise<void>((resolve) => setTimeout(() => resolve(), 5000));
-      await Promise.race([shutdownSequence, timeout]);
-      process.exit(0);
-    };
-
+    // Phase 202 (PLGM-04, D-06): the body lives in services/shutdownSequence.ts
+    // (extracted VERBATIM — a move, not a rewrite) so SIGTERM/SIGINT AND the
+    // POST /api/plugins/restart route (202-03) share the ONE shutdown path.
     process.on("SIGTERM", () => { void gracefulShutdown("SIGTERM"); });
     process.on("SIGINT", () => { void gracefulShutdown("SIGINT"); });
   });

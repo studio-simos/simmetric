@@ -42,7 +42,7 @@ export default function Monogram({ size, color, className }: MonogramProps) {
         x="16"
         y="22"
         textAnchor="middle"
-        fontFamily="system-ui, sans-serif"
+        fontFamily="'Geist Variable', system-ui, sans-serif"
         fontSize="20"
         fontWeight="700"
         fill={color}

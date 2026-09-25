@@ -21,8 +21,7 @@
  * returns early — there is NO fallback timer (D-02).
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { Client, SSEClientTransport } from "@modelcontextprotocol/client";
 import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
 import { getBoss, createQueue, schedule } from "./jobQueue";
@@ -164,9 +163,16 @@ export async function runHealthCheckCycle(): Promise<{
   let stale = 0;
   let down = 0;
 
-  // Only query installed+enabled connections that are linked to a catalog entry
+  // Only query installed+enabled connections that are linked to a catalog entry.
+  // Phase 197 (MCPO-03, research Pitfall 1 disposition (a)): authType="oauth"
+  // rows are EXCLUDED — oauth connections have no meaningful MCP-transport
+  // health (no MCP server to ping behind the placeholder URL), and their
+  // health signal is the token refresh job (mcpOAuthRefreshJob), which flips
+  // oauthStatus=error on token-lifecycle failures. Without the filter, a
+  // marketplace OAuth connection (enabled + catalogEntryId set, placeholder
+  // URL) flips the catalog entry's healthStatus stale→down on schedule.
   const connections = await prisma.mCPConnection.findMany({
-    where: { enabled: true, catalogEntryId: { not: null } },
+    where: { enabled: true, catalogEntryId: { not: null }, authType: { not: "oauth" } },
     select: {
       id: true,
       name: true,

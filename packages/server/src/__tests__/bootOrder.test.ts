@@ -30,6 +30,16 @@ function readIndexTsSource(): string {
   );
 }
 
+// Phase 202 (PLGM-04, D-06): gracefulShutdown moved VERBATIM to
+// services/shutdownSequence.ts — the teardown-order pins read BOTH sources
+// (the body's new home + index.ts handler lines).
+function readShutdownSequenceSource(): string {
+  return fs.readFileSync(
+    path.resolve(__dirname, "../services/shutdownSequence.ts"),
+    "utf8",
+  );
+}
+
 function lineNumberOfFirstMatch(lines: string[], pattern: RegExp): number {
   for (let i = 0; i < lines.length; i++) {
     if (pattern.test(lines[i]!)) return i + 1; // 1-based
@@ -79,12 +89,15 @@ describe("index.ts boot order (D-08)", () => {
   });
 
   test("shutdownEnterprisePlugin is called in gracefulShutdown BEFORE prisma.$disconnect()", () => {
+    // Phase 202 (D-06): the gracefulShutdown body lives in
+    // services/shutdownSequence.ts — the teardown pins read that source.
+    const seqLines = readShutdownSequenceSource().split(/\r?\n/);
     const shutdownPluginLine = lineNumberOfFirstMatch(
-      lines,
+      seqLines,
       /shutdownEnterprisePlugin\s*\(\s*\)/,
     );
     const prismaDisconnectLine = lineNumberOfFirstMatch(
-      lines,
+      seqLines,
       /await\s+prisma\.\$disconnect\s*\(\s*\)/,
     );
     expect(shutdownPluginLine).toBeGreaterThan(0);
@@ -322,25 +335,28 @@ describe("index.ts boot order — pg-boss (Phase 164, Q-01/Q-04)", () => {
     lines,
     /if\s*\(\s*env\.NODE_ENV\s*===\s*["']production["']\s*\)/,
   );
+  // Phase 202 (D-06): the shutdown body moved to services/shutdownSequence.ts —
+  // the teardown-order pins read THAT source (the `await\s+` prefix convention
+  // is preserved verbatim).
+  const seqLines = readShutdownSequenceSource().split(/\r?\n/);
   // `await shutdownMCPConnections();` — the `await` prefix excludes comment
   // lines that mention the function name in prose.
   const shutdownMCPConnectionsLine = lineNumberOfFirstMatch(
-    lines,
+    seqLines,
     /await\s+shutdownMCPConnections\s*\(\s*\)/,
   );
   const jobQueueStopLine = lineNumberOfFirstMatch(
-    lines,
+    seqLines,
     /await\s+stopJobQueue\s*\(\s*\)/,
   );
   // `await shutdownEnterprisePlugin();` — the `await` prefix excludes the
-  // comment at line ~635 (`shutdownEnterprisePlugin()'s schedulers.stop()`)
-  // which would otherwise match the bare-name regex.
+  // comment that mentions the function name in prose.
   const shutdownEnterpriseLine = lineNumberOfFirstMatch(
-    lines,
+    seqLines,
     /await\s+shutdownEnterprisePlugin\s*\(\s*\)/,
   );
   const prismaDisconnectLine = lineNumberOfFirstMatch(
-    lines,
+    seqLines,
     /await\s+prisma\.\$disconnect\s*\(\s*\)/,
   );
 
@@ -358,7 +374,7 @@ describe("index.ts boot order — pg-boss (Phase 164, Q-01/Q-04)", () => {
     expect(jobQueueStartLine).toBeLessThan(schedulerBlockLine);
   });
 
-  test("stopJobQueue() call site is present in index.ts", () => {
+  test("stopJobQueue() call site is present in the gracefulShutdown body (shutdownSequence.ts — Phase 202 D-06 extraction)", () => {
     expect(jobQueueStopLine).toBeGreaterThan(0);
   });
 
@@ -438,8 +454,10 @@ describe("index.ts boot order — scheduler init async (Phase 165, Q-02)", () =>
     lines,
     /await\s+startJobQueue\s*\(\s*\)/,
   );
+  // Phase 202 (D-06): the stopJobQueue call site lives in the extracted
+  // gracefulShutdown body (shutdownSequence.ts) — read that source.
   const jobQueueStopLine = lineNumberOfFirstMatch(
-    lines,
+    readShutdownSequenceSource().split(/\r?\n/),
     /await\s+stopJobQueue\s*\(\s*\)/,
   );
 
@@ -525,6 +543,107 @@ describe("index.ts boot order — scheduler init async (Phase 165, Q-02)", () =>
   });
 });
 
+// Phase 195 (MCPO-01 D-12): the OAuth refresh scheduler is awaited in the
+// production block AFTER initDlpBackfillScheduler() and BEFORE the
+// initializeMCPConnections() fire-and-forget. Source-string assertion —
+// fails the build if the insert position drifts (boot-order invariant).
+describe("index.ts boot order — mcp-oauth-refresh scheduler (Phase 195, D-12)", () => {
+  const src = readIndexTsSource();
+  const lines = src.split(/\r?\n/);
+
+  const dlpBackfillLine = lineNumberOfFirstMatch(lines, /await\s+initDlpBackfillScheduler\s*\(\s*\)/);
+  const oauthRefreshLine = lineNumberOfFirstMatch(lines, /await\s+initMCPOAuthRefreshScheduler\s*\(\s*\)/);
+  const initializeMCPLine = lineNumberOfFirstMatch(lines, /initializeMCPConnections\s*\(\s*\)\s*\.catch/);
+  const schedulerBlockLine = lineNumberOfFirstMatch(
+    lines,
+    /if\s*\(\s*env\.NODE_ENV\s*===\s*["']production["']\s*\)/,
+  );
+
+  test("initMCPOAuthRefreshScheduler is awaited (async pg-boss registration)", () => {
+    expect(oauthRefreshLine).toBeGreaterThan(0);
+  });
+
+  test("initMCPOAuthRefreshScheduler runs AFTER initDlpBackfillScheduler (D-12 insert position)", () => {
+    expect(dlpBackfillLine).toBeGreaterThan(0);
+    expect(oauthRefreshLine).toBeGreaterThan(dlpBackfillLine);
+  });
+
+  test("initMCPOAuthRefreshScheduler runs BEFORE the initializeMCPConnections fire-and-forget", () => {
+    expect(initializeMCPLine).toBeGreaterThan(0);
+    expect(oauthRefreshLine).toBeLessThan(initializeMCPLine);
+  });
+
+  test("initMCPOAuthRefreshScheduler is inside the production-only scheduler block", () => {
+    expect(schedulerBlockLine).toBeGreaterThan(0);
+    expect(oauthRefreshLine).toBeGreaterThan(schedulerBlockLine);
+  });
+});
+
+// Phase 200 (ECCO-06, D-09): the connector health-check scheduler is awaited
+// in the production block immediately after initMCPOAuthRefreshScheduler().
+// Source-string assertion — fails the build if the insert position drifts
+// (boot-order invariant, same shape as the mcp-oauth-refresh pins above).
+describe("index.ts boot order — connector-health scheduler (Phase 200, D-09)", () => {
+  const src = readIndexTsSource();
+  const lines = src.split(/\r?\n/);
+
+  const connectorHealthLine = lineNumberOfFirstMatch(lines, /await\s+initConnectorHealthCheckScheduler\s*\(\s*\)/);
+  const oauthRefreshLine = lineNumberOfFirstMatch(lines, /await\s+initMCPOAuthRefreshScheduler\s*\(\s*\)/);
+  const schedulerBlockLine = lineNumberOfFirstMatch(
+    lines,
+    /if\s*\(\s*env\.NODE_ENV\s*===\s*["']production["']\s*\)/,
+  );
+
+  test("initConnectorHealthCheckScheduler is awaited (async pg-boss registration)", () => {
+    expect(connectorHealthLine).toBeGreaterThan(0);
+  });
+
+  test("initConnectorHealthCheckScheduler runs AFTER initMCPOAuthRefreshScheduler (D-09 insert position)", () => {
+    expect(oauthRefreshLine).toBeGreaterThan(0);
+    expect(connectorHealthLine).toBeGreaterThan(oauthRefreshLine);
+  });
+
+  test("initConnectorHealthCheckScheduler is inside the production-only scheduler block (mcpHealthCheck precedent)", () => {
+    expect(schedulerBlockLine).toBeGreaterThan(0);
+    expect(connectorHealthLine).toBeGreaterThan(schedulerBlockLine);
+  });
+});
+
+// Phase 195 (MCPO-01 D-07/Pitfall 2): the PUBLIC OAuth callback router mounts
+// at /api/mcp-connections BEFORE the admin-gated mcpRoutes — Express matches
+// app.use in registration order, and mcpRoutes' router-level
+// authMiddleware+tenant+requireAdmin would 401 the IdP browser redirect
+// before any handler ran. Source-string assertion — fails the build if the
+// mount order drifts.
+describe("index.ts mount order — mcpOAuthCallbackRouter before mcpRoutes (Phase 195, D-07)", () => {
+  const src = readIndexTsSource();
+  const lines = src.split(/\r?\n/);
+
+  const callbackRouterLine = lineNumberOfFirstMatch(
+    lines,
+    /app\.use\s*\(\s*["']\/api\/mcp-connections["']\s*,\s*mcpOAuthCallbackRouter\s*\)/,
+  );
+  const adminRouterLine = lineNumberOfFirstMatch(
+    lines,
+    /app\.use\s*\(\s*["']\/api\/mcp-connections["']\s*,\s*mcpRoutes\s*\)/,
+  );
+
+  test("mcpOAuthCallbackRouter mount is present in createApp()", () => {
+    expect(callbackRouterLine).toBeGreaterThan(0);
+  });
+
+  test("mcpOAuthCallbackRouter mounts BEFORE mcpRoutes (Pitfall 2)", () => {
+    expect(adminRouterLine).toBeGreaterThan(0);
+    expect(callbackRouterLine).toBeLessThan(adminRouterLine);
+  });
+
+  test("mcpOAuthCallbackRouter is imported in index.ts", () => {
+    expect(
+      lineNumberOfFirstMatch(lines, /import\s+mcpOAuthCallbackRouter\s+from\s+["']\.\/routes\/mcpOAuthCallback["']/)
+    ).toBeGreaterThan(0);
+  });
+});
+
 // Phase 186 (SAAS-05, D-10): SaaS plugin boot-order + reverse-teardown
 // invariants. Source-string assertion — reads index.ts and asserts:
 //   - await loadSaaSPlugin(app) appears AFTER loadEnterprisePlugin and
@@ -569,16 +688,19 @@ describe("index.ts boot order — SaaS plugin (Phase 186, SAAS-05 D-10)", () => 
     lines,
     /if\s*\(\s*env\.NODE_ENV\s*===\s*["']production["']\s*\)/,
   );
+  // Phase 202 (D-06): the shutdown body moved to shutdownSequence.ts — the
+  // teardown pins read THAT source.
+  const seqLines = readShutdownSequenceSource().split(/\r?\n/);
   const shutdownSaaSLine = lineNumberOfFirstMatch(
-    lines,
+    seqLines,
     /await\s+shutdownSaaSPlugin\s*\(\s*\)/,
   );
   const shutdownEnterpriseLine = lineNumberOfFirstMatch(
-    lines,
+    seqLines,
     /await\s+shutdownEnterprisePlugin\s*\(\s*\)/,
   );
   const prismaDisconnectLine = lineNumberOfFirstMatch(
-    lines,
+    seqLines,
     /await\s+prisma\.\$disconnect\s*\(\s*\)/,
   );
 
@@ -676,5 +798,186 @@ describe("index.ts boot order — authLdapComposite mount (Phase 193, D-13)", ()
       /import\s*\{[^}]*createAuthLdapCompositeRouter[^}]*\}\s*from\s*["']\.\/routes\/authLdapComposite["']/,
     );
     expect(importLine).toBeGreaterThan(0);
+  });
+});
+
+// Phase 199 (199-03, D-05/Pitfall 5): the DISCORD boot-registry lesson —
+// index.ts must side-effect-import BOTH the adapter (discord.ts, module-load
+// registerAdapter) AND the gateway manager (discordGateway.ts), call
+// initDiscordGateway() in the dev+prod scheduler cluster BESIDE
+// initConnectorPollScheduler(), and closeDiscordGateway() FIRST in the
+// graceful shutdown sequence BEFORE prisma.$disconnect(). Source-string
+// assertion — fails the build if the wiring drifts (the 198-04 regression,
+// discord edition).
+describe("index.ts boot order — discord gateway (Phase 199, D-05/Pitfall 5)", () => {
+  const src = readIndexTsSource();
+  const lines = src.split(/\r?\n/);
+
+  const telegramImportLine = lineNumberOfFirstMatch(
+    lines,
+    /import\s+["']\.\/services\/connectors\/telegram["']/,
+  );
+  const discordImportLine = lineNumberOfFirstMatch(
+    lines,
+    /import\s+["']\.\/services\/connectors\/discord["']/,
+  );
+  const gatewayImportLine = lineNumberOfFirstMatch(
+    lines,
+    /from\s+["']\.\/services\/connectors\/discordGateway["']/,
+  );
+  const pollInitLine = lineNumberOfFirstMatch(
+    lines,
+    /^\s*initConnectorPollScheduler\s*\(\s*\)/,
+  );
+  const discordInitLine = lineNumberOfFirstMatch(
+    lines,
+    /^\s*initDiscordGateway\s*\(\s*\)\s*\.catch/,
+  );
+  // Phase 202 (D-06): the shutdown body moved to shutdownSequence.ts — the
+  // closeDiscordGateway teardown pin reads THAT source.
+  const seqLines = readShutdownSequenceSource().split(/\r?\n/);
+  const closeGatewayLine = lineNumberOfFirstMatch(
+    seqLines,
+    /closeDiscordGateway\s*\(\s*\)/,
+  );
+  const prismaDisconnectLine = lineNumberOfFirstMatch(
+    seqLines,
+    /await\s+prisma\.\$disconnect\s*\(\s*\)/,
+  );
+
+  test("both discord side-effect imports are present in index.ts", () => {
+    expect(telegramImportLine).toBeGreaterThan(0);
+    expect(discordImportLine).toBeGreaterThan(0);
+    expect(gatewayImportLine).toBeGreaterThan(0);
+  });
+
+  test("initDiscordGateway() is called in the scheduler cluster BESIDE initConnectorPollScheduler()", () => {
+    expect(pollInitLine).toBeGreaterThan(0);
+    expect(discordInitLine).toBeGreaterThan(0);
+    // Same cluster — the discord init immediately follows the poller init.
+    expect(discordInitLine).toBeGreaterThan(pollInitLine);
+    expect(discordInitLine - pollInitLine).toBeLessThanOrEqual(12);
+  });
+
+  test("initDiscordGateway is fire-and-forget with a logged catch (boot must not block)", () => {
+    expect(discordInitLine).toBeGreaterThan(0);
+    expect(lines[discordInitLine - 1]).toMatch(/\.catch/);
+  });
+
+  test("closeDiscordGateway is called in gracefulShutdown BEFORE prisma.$disconnect()", () => {
+    expect(closeGatewayLine).toBeGreaterThan(0);
+    expect(prismaDisconnectLine).toBeGreaterThan(0);
+    expect(closeGatewayLine).toBeLessThan(prismaDisconnectLine);
+  });
+});
+// Phase 202 (PLGM-02/03/04, D-09/D-06): the plugin-manager boot wiring pins.
+// Source-string assertion (the established convention in this file):
+//   - resolveInstanceLicenseFromDB() sits between initLicense() and the
+//     enterprise plugin load (Pitfall 1 — additive async boot step)
+//   - loadManagedPlugins(app) sits after loadSaaSPlugin(app), before
+//     authLdapComposite AND mountCatchAlls (research Open Q 2 chain)
+//   - gracefulShutdown lives ONLY in shutdownSequence.ts — index.ts imports
+//     it and points BOTH signal handlers at it (D-06 single path)
+//   - teardown order in shutdownSequence.ts: managed → SaaS → enterprise →
+//     prisma.$disconnect (D-09)
+//   - the storage/plugins boot block: idempotent mkdir + `.tmp-*` orphan
+//     sweep (Edge E6)
+describe("index.ts boot order — plugin manager (Phase 202, PLGM-02/03/04)", () => {
+  const src = readIndexTsSource();
+  const lines = src.split(/\r?\n/);
+  const seqSrc = readShutdownSequenceSource();
+  const seqLines = seqSrc.split(/\r?\n/);
+
+  const initLicenseLine = lineNumberOfFirstMatch(lines, /initLicense\s*\(\s*\)/);
+  const resolveInstanceLicenseLine = lineNumberOfFirstMatch(
+    lines,
+    /await\s+resolveInstanceLicenseFromDB\s*\(\s*\)/,
+  );
+  const enterpriseLine = lineNumberOfFirstMatch(
+    lines,
+    /loadEnterprisePlugin\s*\(\s*app\s*\)/,
+  );
+  const saasLine = lineNumberOfFirstMatch(lines, /await\s+loadSaaSPlugin\s*\(\s*app\s*\)/);
+  const managedLine = lineNumberOfFirstMatch(lines, /await\s+loadManagedPlugins\s*\(\s*app\s*\)/);
+  // Anchor at statement start (Phase 165 convention) — excludes comment lines
+  // that mention the router in prose.
+  const ldapCompositeLine = lineNumberOfFirstMatch(
+    lines,
+    /^\s*app\.use\("\/api\/auth",\s*createAuthLdapCompositeRouter\s*\(\s*\)\s*\)/,
+  );
+  const catchAllsLine = lineNumberOfFirstMatch(
+    lines,
+    /^\s*mountCatchAlls\s*\(\s*app\s*\)/,
+  );
+
+  const managedShutdownLine = lineNumberOfFirstMatch(
+    seqLines,
+    /await\s+shutdownManagedPlugins\s*\(\s*\)/,
+  );
+  const seqSaasLine = lineNumberOfFirstMatch(seqLines, /await\s+shutdownSaaSPlugin\s*\(\s*\)/);
+  const seqEnterpriseLine = lineNumberOfFirstMatch(
+    seqLines,
+    /await\s+shutdownEnterprisePlugin\s*\(\s*\)/,
+  );
+  const seqDisconnectLine = lineNumberOfFirstMatch(
+    seqLines,
+    /await\s+prisma\.\$disconnect\s*\(\s*\)/,
+  );
+
+  test("resolveInstanceLicenseFromDB() is an awaited boot step (Pitfall 1 — additive async step)", () => {
+    expect(resolveInstanceLicenseLine).toBeGreaterThan(0);
+    expect(lines[resolveInstanceLicenseLine - 1]).toMatch(
+      /^\s*await\s+resolveInstanceLicenseFromDB\s*\(\s*\)/,
+    );
+  });
+
+  test("resolveInstanceLicenseFromDB() runs AFTER initLicense() and BEFORE the enterprise plugin load (D-07)", () => {
+    expect(initLicenseLine).toBeGreaterThan(0);
+    expect(enterpriseLine).toBeGreaterThan(0);
+    expect(resolveInstanceLicenseLine).toBeGreaterThan(initLicenseLine);
+    expect(resolveInstanceLicenseLine).toBeLessThan(enterpriseLine);
+  });
+
+  test("loadManagedPlugins(app) is an awaited boot step", () => {
+    expect(managedLine).toBeGreaterThan(0);
+    expect(lines[managedLine - 1]).toMatch(/^\s*await\s+loadManagedPlugins\s*\(\s*app\s*\)/);
+  });
+
+  test("loadManagedPlugins(app) runs AFTER loadSaaSPlugin(app) (D-09 chain)", () => {
+    expect(saasLine).toBeGreaterThan(0);
+    expect(managedLine).toBeGreaterThan(saasLine);
+  });
+
+  test("loadManagedPlugins(app) runs BEFORE authLdapComposite AND mountCatchAlls (research Open Q 2 chain)", () => {
+    expect(ldapCompositeLine).toBeGreaterThan(0);
+    expect(catchAllsLine).toBeGreaterThan(0);
+    expect(managedLine).toBeLessThan(ldapCompositeLine);
+    expect(managedLine).toBeLessThan(catchAllsLine);
+  });
+
+  test("gracefulShutdown is NO LONGER inline in index.ts (D-06 extraction complete)", () => {
+    expect(src).not.toMatch(/const\s+gracefulShutdown\s*=/);
+  });
+
+  test("index.ts imports gracefulShutdown from shutdownSequence and points BOTH signal handlers at it (D-06 single path)", () => {
+    expect(src).toMatch(/from\s+["']\.\/services\/shutdownSequence["']/);
+    expect(src).toMatch(/gracefulShutdown\s*\(\s*["']SIGTERM["']\s*\)/);
+    expect(src).toMatch(/gracefulShutdown\s*\(\s*["']SIGINT["']\s*\)/);
+  });
+
+  test("shutdownSequence.ts teardown order: managed → SaaS → enterprise → prisma.$disconnect (D-09)", () => {
+    expect(managedShutdownLine).toBeGreaterThan(0);
+    expect(seqSaasLine).toBeGreaterThan(0);
+    expect(seqEnterpriseLine).toBeGreaterThan(0);
+    expect(seqDisconnectLine).toBeGreaterThan(0);
+    expect(managedShutdownLine).toBeLessThan(seqSaasLine);
+    expect(seqSaasLine).toBeLessThan(seqEnterpriseLine);
+    expect(seqEnterpriseLine).toBeLessThan(seqDisconnectLine);
+  });
+
+  test("storage/plugins boot block: idempotent mkdir + .tmp-* orphan sweep present (Edge E6)", () => {
+    expect(src).toMatch(/fs\.mkdirSync\(PLUGINS_STORAGE_DIR,\s*\{\s*recursive:\s*true\s*\}\)/);
+    expect(src).toMatch(/\.tmp-/);
+    expect(src).toMatch(/rmSync/);
   });
 });

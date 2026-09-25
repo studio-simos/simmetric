@@ -53,7 +53,7 @@ import {
   failOcrJob,
   parseOcrJobResult,
 } from "../services/ocrJobService";
-import { renderPageToPng } from "./pdfRenderer";
+import { renderPageToPng, PAGE_RENDER_SCALE } from "./pdfRenderer";
 import { ocrPage } from "./ollamaVisionClient";
 import { resolveModelConfig } from "./modelRegistry";
 import { getSetting } from "../services/systemConfigService";
@@ -188,6 +188,8 @@ interface SetupResult {
   modelConfig: ModelConfig;
   effectiveModelName: string;
   userId: string | null;
+  /** Phase 205 D-11 (OCR-04): resolved OCR_PROMPT ("" = legacy per-mode prompts) */
+  ocrPrompt: string;
 }
 
 interface OcrResult {
@@ -198,6 +200,8 @@ interface OcrResult {
     imagePath?: string;
     tokensUsed: number;
     durationMs: number;
+    /** Phase 205 D-14: time-to-first-token passthrough (additive optional) */
+    ttftMs?: number;
   }>;
   totalPages: number;
   totalTokens: number;
@@ -654,6 +658,18 @@ async function runOcrSetupStage(jobId: string): Promise<SetupResult | null> {
     promptTemplate: modelConfig.promptTemplate,
   });
 
+  // Phase 205 D-11 (OCR-04): resolve OCR_PROMPT once in the setup stage —
+  // the same getSetting fetch-with-fallback shape as OCR_DEFAULT_MODEL above.
+  // Empty string (unset/empty/whitespace) ⇒ ocrPage's byte-identical legacy
+  // path.
+  let ocrPrompt = "";
+  try {
+    const ocrPromptSetting = await getSetting("OCR_PROMPT");
+    ocrPrompt = (ocrPromptSetting.value || "").trim();
+  } catch {
+    ocrPrompt = "";
+  }
+
   // ---- D-14 Pitfall 3: Image branch detection (bypass pdfjs-dist) ----
   // If the source is an image (mimeType or extension), skip pdfjs entirely,
   // read the raw image buffer, and call ocrPage directly with a single page.
@@ -672,6 +688,7 @@ async function runOcrSetupStage(jobId: string): Promise<SetupResult | null> {
     modelConfig,
     effectiveModelName,
     userId,
+    ocrPrompt,
   };
 }
 
@@ -693,7 +710,7 @@ async function runOcrSetupStage(jobId: string): Promise<SetupResult | null> {
  * stage to consume.
  */
 async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
-  const { job, pdfBuffer, pdfPath, contentHash, isImage, modelConfig, effectiveModelName, userId } = setup;
+  const { job, pdfBuffer, pdfPath, contentHash, isImage, modelConfig, effectiveModelName, userId, ocrPrompt } = setup;
   const jobId = job.id;
 
   if (isImage) {
@@ -723,6 +740,8 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
         false,
         (job.ocrMode as "text" | "table" | "figure" | "generic" | undefined) ?? undefined,
         job.customInstructions ?? undefined,
+        // Phase 205 D-11 (OCR-04): threaded resolved OCR_PROMPT ("" = legacy)
+        ocrPrompt || undefined,
       );
     } catch (ocrErr: unknown) {
       const message = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
@@ -874,7 +893,7 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
       // ---- 5a. Render ----
       let pngBuffer: Buffer;
       try {
-        pngBuffer = await renderPageToPng(pdfPath, currentPage, 2.0);
+          pngBuffer = await renderPageToPng(pdfPath, currentPage, PAGE_RENDER_SCALE);
       } catch (renderErr: unknown) {
   const message = renderErr instanceof Error ? renderErr.message : String(renderErr);
         logger.error("[ocr] Page rendering failed", {
@@ -892,7 +911,7 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
         });
         await new Promise((resolve) => setTimeout(resolve, 2_000));
         try {
-          pngBuffer = await renderPageToPng(pdfPath, currentPage, 2.0);
+        pngBuffer = await renderPageToPng(pdfPath, currentPage, PAGE_RENDER_SCALE);
           logger.info("[ocr] Render retry succeeded", {
             jobId,
             page: currentPage,
@@ -940,6 +959,8 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
           false,
           (job.ocrMode as "text" | "table" | "figure" | "generic" | undefined) ?? undefined,
           job.customInstructions ?? undefined,
+          // Phase 205 D-11 (OCR-04): threaded resolved OCR_PROMPT ("" = legacy)
+          ocrPrompt || undefined,
         );
       } catch (ocrErr: unknown) {
         const message = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
@@ -997,6 +1018,8 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
             true, // useFallbackPrompt — different strategy for retry
             (job.ocrMode as "text" | "table" | "figure" | "generic" | undefined) ?? undefined,
             job.customInstructions ?? undefined,
+            // Phase 205 D-11 (OCR-04): threaded resolved OCR_PROMPT ("" = legacy)
+            ocrPrompt || undefined,
           );
 
           let retryCleanMarkdown = retryResult.markdown;
@@ -1120,6 +1143,8 @@ async function runOcrStage(setup: SetupResult): Promise<OcrResult | null> {
               true, // useFallbackPrompt — different strategy for retry
               (job.ocrMode as "text" | "table" | "figure" | "generic" | undefined) ?? undefined,
               job.customInstructions ?? undefined,
+              // Phase 205 D-11 (OCR-04): threaded resolved OCR_PROMPT ("" = legacy)
+              ocrPrompt || undefined,
             );
 
             let retryMarkdown = retryResult.markdown;

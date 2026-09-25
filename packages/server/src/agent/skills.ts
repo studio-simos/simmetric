@@ -22,6 +22,16 @@ import { getMCPToolsForWorkspace } from "./mcpClient";
 // imports only prisma + shared types (type-only AgentSkillDefinition import —
 // erased at compile time), so there is no import cycle.
 import { resolveCustomSkillsForChat } from "../services/skillService";
+// Phase 196 (MCPO-04 D-04): connector palette gate — a first-party connector
+// skill (gdrive_* / graph_*) stays in the palette ONLY when the workspace's
+// org has an authorized OAuth connection for the skill's provider. One
+// batched availability resolution per resolveSkillsForChat call (never
+// per-skill queries). The registry data lives in a DATA-ONLY module
+// (connectors/registry.ts) — importing it here creates no cycle
+// (connectors/skills.ts imports registerSkill from THIS module; skills.ts
+// must not import that file back).
+import { CONNECTOR_SKILL_PROVIDERS, type ConnectorProvider } from "./connectors/registry";
+import { hasAuthorizedProviderConnection } from "./connectors/tokenResolver";
 
 export interface AgentSkillDefinition {
   name: string;
@@ -165,6 +175,39 @@ export function _clearAllSkills(): void {
  * deleted. opts.userId (additive-optional trailing param, Plan 02) feeds the
  * D-05 personal arm; the org filter rides the tenant ALS scope.
  */
+/**
+ * Phase 196 (MCPO-04 D-04) — connector palette gate.
+ *
+ * Filters connector skills (gdrive_* / graph_*) out of `base` unless the
+ * workspace's org has an authorized OAuth connection for the skill's
+ * provider. STRICTLY ADDITIVE inverse: it NEVER removes non-connector
+ * skills (the MCP-02 D-04 strictly-additive invariant is untouched — builtin
+ * rag_search/memory_search/wiki_* and pinned MCP skills pass through).
+ *
+ * One batched availability resolution per resolveSkillsForChat call: the
+ * set of DISTINCT providers referenced by the connector skills present is
+ * resolved once (never per-skill queries), then each connector skill's fate
+ * is decided from that resolution.
+ */
+async function filterConnectorSkills(
+  base: AgentSkillDefinition[],
+  workspaceId: string,
+): Promise<AgentSkillDefinition[]> {
+  const connectorSkills = base.filter((s) => CONNECTOR_SKILL_PROVIDERS[s.name] !== undefined);
+  if (connectorSkills.length === 0) return base;
+
+  const providers = Array.from(new Set(connectorSkills.map((s) => CONNECTOR_SKILL_PROVIDERS[s.name]!)));
+  const availability = new Map<ConnectorProvider, boolean>();
+  for (const provider of providers) {
+    availability.set(provider, await hasAuthorizedProviderConnection(workspaceId, provider));
+  }
+  return base.filter((s) => {
+    const provider = CONNECTOR_SKILL_PROVIDERS[s.name];
+    if (provider === undefined) return true; // non-connector — never removed
+    return availability.get(provider) === true;
+  });
+}
+
 export async function resolveSkillsForChat(
   workspaceId: string,
   chatId: string,
@@ -192,7 +235,8 @@ export async function resolveSkillsForChat(
   // D-15: no pins -> use workspace defaults
   if (pins.length === 0) {
     const base = getSkillsForWorkspace(enabledSkillNames);
-    return mergeCustomSkills(unionWorkspaceMcpSkills(base, inScopeToolNames), workspaceId, opts?.userId);
+    const gated = await filterConnectorSkills(base, workspaceId);
+    return mergeCustomSkills(unionWorkspaceMcpSkills(gated, inScopeToolNames), workspaceId, opts?.userId);
   }
 
   // D-13: intersection — pinned AND enabled AND (workspace-matching OR global).
@@ -214,7 +258,8 @@ export async function resolveSkillsForChat(
       { chatId, workspaceId, pinnedCount: pins.length },
     );
     const base = getSkillsForWorkspace(enabledSkillNames);
-    return mergeCustomSkills(unionWorkspaceMcpSkills(base, inScopeToolNames), workspaceId, opts?.userId);
+    const gated = await filterConnectorSkills(base, workspaceId);
+    return mergeCustomSkills(unionWorkspaceMcpSkills(gated, inScopeToolNames), workspaceId, opts?.userId);
   }
 
   // D-13: Collect active connection IDs (UUIDs) for prefix matching.
@@ -248,7 +293,10 @@ export async function resolveSkillsForChat(
   // pin mechanism missed (unpinned but active+connected+in-scope). STRICT
   // UNION — D-04: never removes the pinned skills above; duplicates are
   // skipped by name (a pinned skill already in `base` is not re-added).
-  return mergeCustomSkills(unionWorkspaceMcpSkills(base, inScopeToolNames), workspaceId, opts?.userId);
+  // Phase 196: the connector palette gate applies to the assembled base (all
+  // return paths above get the same treatment before their union).
+  const gated = await filterConnectorSkills(base, workspaceId);
+  return mergeCustomSkills(unionWorkspaceMcpSkills(gated, inScopeToolNames), workspaceId, opts?.userId);
 }
 
 /**

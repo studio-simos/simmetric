@@ -28,6 +28,15 @@ export interface BuildOcrPromptParams {
   base64Image: string;
   ocrMode?: "text" | "table" | "figure" | "generic";
   customInstructions?: string;
+  /**
+   * Phase 205 D-11 (OCR-04) — admin-configurable glm-ocr system prompt
+   * (SystemConfig key OCR_PROMPT, default "Text recognition:"). When
+   * non-empty after trimming, it replaces the per-mode systemPrompt switch
+   * for ALL modes. When empty/undefined, output is byte-identical to the
+   * pre-205 behavior. deepseek-ocr and generic builders ignore this field
+   * (D-11 hard constraint: their templates stay byte-identical).
+   */
+  ocrPrompt?: string;
 }
 
 export function buildDeepseekOcrPrompt(params: BuildOcrPromptParams): OcrPrompt {
@@ -65,6 +74,24 @@ export function buildDeepseekOcrPrompt(params: BuildOcrPromptParams): OcrPrompt 
 
 export function buildGlmOcrPrompt(params: BuildOcrPromptParams): OcrPrompt {
   const mode = params.ocrMode || "generic";
+
+  // Phase 205 D-11 (OCR-04): a non-empty (after trim) OCR_PROMPT config
+  // value replaces the per-mode systemPrompt for ALL modes. Empty/undefined
+  // falls through to the legacy per-mode switch below — byte-identical to
+  // the pre-205 behavior. The raw (untrimmed) value is sent verbatim; trim
+  // is only the emptiness check.
+  const rawPrompt = params.ocrPrompt;
+  if (rawPrompt && rawPrompt.trim()) {
+    const customPart = params.customInstructions
+      ? `\n${params.customInstructions}`
+      : "";
+
+    return {
+      systemPrompt: rawPrompt,
+      userPrompt: `Transcribe page ${params.pageNumber} of ${params.totalPages} to Markdown.${customPart}`,
+      images: [params.base64Image],
+    };
+  }
 
   let systemPrompt: string;
   switch (mode) {

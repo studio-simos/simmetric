@@ -147,6 +147,19 @@ For Docker deployments, the enterprise tarball can be mounted as a read-only vol
 
 The mount is already active — restart the server container to pick up changes to the enterprise package. The `:ro` flag ensures the container cannot modify the enterprise package (defense in depth).
 
+## 4b. Plugin manager path (managed plugins)
+
+Third-party CJS plugins can also be installed WITHOUT the air-gap tarball: upload
+a `.zip` through the **Plugin manager** admin UI (`/plugins`, `plugins:manage`).
+The managed loader loads them fail-soft at boot after `loadSaaSPlugin`, with the
+per-plugin license gate for `licenseMode: "platform"` rows. The native runbook
+above stays the recommended path for the enterprise plugin itself (native
+`require.resolve` wins over any managed install of the same slug, and the native
+loaders keep the fail-loud contract).
+
+Full contract, packaging rules, license modes and the restart/supervisor
+runbook (Docker / Coolify / Tauri caveat): see [docs/PLUGINS.md](PLUGINS.md).
+
 ## 5. Tarball delivery model
 
 The enterprise package is shipped as a tarball — NOT via `npm install`. The customer extracts it directly into the server's `node_modules`:

@@ -97,14 +97,14 @@ describe("renderPageToPng", () => {
     );
   });
 
-  it("should use default scale of 2.0 (144 DPI)", async () => {
+  it("should use default scale of 3.0 (216 DPI — Phase 205 D-03)", async () => {
     mockSpawn.mockImplementation(() => createMockSpawn(0));
 
     await renderPageToPng("/tmp/test.pdf", 1);
 
     const args = mockSpawn.mock.calls[0]![1]!;
     expect(args).toContain("-r");
-    expect(args[args.indexOf("-r") + 1]).toBe("144");
+    expect(args[args.indexOf("-r") + 1]).toBe("216");
   });
 
   it("should respect custom scale factor", async () => {

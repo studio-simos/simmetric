@@ -49,6 +49,14 @@ export const envSchema = z.object({
   // ALWAYS_READONLY and NOT registered in systemConfigService — read via
   // getEnv() only, same posture as REDIS_URL.
   COLLECTOR_INGEST_TIMEOUT_MS: z.coerce.number().int().min(0).optional(),
+  // Server→collector POST /api/ingest/wiki-pages wait cap (axios timeout in
+  // indexWikiPage — the hourly wiki-consistency reindex path). 2026-09-21
+  // incident: the hardcoded 60s aborted large wiki pages mid-embedding
+  // (local CPU Xenova is slow), so the drift healed only via manual
+  // re-save. Default 30 min (mirrors OCR_TIMEOUT's 10-min posture —
+  // local CPU embedding of a chunk batch is slow but bounded); 0 disables
+  // the cap entirely. ENV-only infra key (never DB/UI).
+  WIKI_EMBED_TIMEOUT_MS: z.coerce.number().int().min(0).default(1800000),
   // WID-04: widget service URL + shared secret for push HTTP cache-bust.
   // WIDGET_SERVICE_URL points at the widget Express service (default :3211).
   // WIDGET_API_KEY is the symmetric shared secret matching the widget
@@ -97,6 +105,33 @@ export const envSchema = z.object({
   OLLAMA_BASE_URL: z.string().default("http://ollama:11434"),
   OLLAMA_MODEL: z.string().optional(),
   OLLAMA_API_KEY: z.string().optional(),
+  // Phase 198 (ECCO-01, D-13/OQ-3): Telegram Bot API base URL — air-gap
+  // overridable (self-hosted Bot API mirrors / proxies). No phone-home beyond
+  // the calls the connector feature itself requires; the default is the
+  // public cloud endpoint.
+  TELEGRAM_API_URL: z.string().default("https://api.telegram.org"),
+  // Phase 198 (ECCO-01, D-15): shared poller ticker cadence (ms) for the ONE
+  // per-process interval scheduler that iterates all enabled polling-mode
+  // connectors (D-15 — not a per-connector timer).
+  CONNECTOR_POLL_INTERVAL_MS: z.coerce.number().default(3000),
+  // Phase 199 (ECCO-04, D-02): Discord REST API base URL — air-gap
+  // overridable (self-hosted Discord-compatible gateway/proxy). No
+  // phone-home beyond the calls the connector feature itself requires; the
+  // default is the public cloud endpoint (REST v10 shape).
+  DISCORD_API_URL: z.string().default("https://discord.com/api/v10"),
+  // Phase 199 (ECCO-04, D-02): Discord Gateway WSS host — the raw-ws
+  // Gateway client (discordGateway.ts) connects here; air-gap overridable.
+  DISCORD_GATEWAY_URL: z.string().default("wss://gateway.discord.gg"),
+  // Phase 200 (ECCO-06, D-02): Slack Web API base URL — air-gap overridable
+  // (self-hosted Slack-compatible proxy). No phone-home beyond the calls
+  // the connector feature itself requires; the default is the public cloud
+  // endpoint.
+  SLACK_API_URL: z.string().default("https://slack.com/api"),
+  // Phase 200 (ECCO-06, D-06): WhatsApp Cloud API base URL (the Graph API
+  // version root) — air-gap overridable (self-hosted Graph-compatible
+  // proxy). No phone-home beyond the calls the connector feature itself
+  // requires; the default is the public cloud endpoint.
+  WHATSAPP_API_URL: z.string().default("https://graph.facebook.com/v18.0"),
   // Ollama Cloud Login — the server container runs `docker exec
   // <OLLAMA_CONTAINER_NAME> ollama login` against the host Docker daemon
   // (socket mounted in docker-compose.yml) to trigger the Ollama daemon's
@@ -147,6 +182,12 @@ export const envSchema = z.object({
   // documents that trip the default cap (the resulting truncation is surfaced
   // via OcrPageResult.truncated). Min 256 guards against pathological typos.
   OCR_NUM_PREDICT: z.coerce.number().int().min(256).default(8192),
+  // Phase 205 (OCR-02, D-09): runtime num_ctx override. 0 = use the
+  // registry's modelConfig.contextWindow (the request posture); any value
+  // >= 1 wins over the registry request. The trained GGUF cap
+  // (<arch>.context_length) is audited at runtime via client.show() per
+  // D-08 — the silent clamp becomes a greppable warn, never a surprise.
+  OCR_NUM_CTX: z.coerce.number().int().min(0).default(0),
   // Synthesis Configuration — model used for the auto-synthesis pipeline
   SYNTHESIS_LLM_MODEL: z.string().default("gemma4:latest"),
   // D-05 (Phase 89-03): "hf-local" is the additive HF v3 provider (@huggingface/transformers).
@@ -277,6 +318,54 @@ export const envSchema = z.object({
       return !["false", "0", "no", "off", ""].includes(v.trim().toLowerCase());
     })
     .optional(),
+  // MCP OAuth (outbound) — Phase 195 (MCPO-01 D-05/D-06). OAuth 2.0
+  // authorization-code flow toward external providers (Google/Microsoft) for
+  // MCP connections. All optional — the server boots without them and the
+  // OAuth start route returns a clear 400 { error } when a provider has no
+  // client configured. Client credentials are env-only in v1 (air-gap-first,
+  // D-06); the per-org oauthClientId column is dormant until Phase 196+.
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  // Plaintext env secret (same posture as OIDC_CLIENT_SECRET — T-193-01
+  // precedent) — no .min(1) so empty string = unset. Env file secrecy is the
+  // operator's responsibility; never logged (T-195-03).
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  MICROSOFT_CLIENT_ID: z.string().optional(),
+  // Plaintext env secret (same posture as GOOGLE_CLIENT_SECRET above).
+  MICROSOFT_CLIENT_SECRET: z.string().optional(),
+  // Phase 200 (ECCO-06, D-05): Slack OAuth client credentials (env-only in
+  // v1, same posture as GOOGLE_CLIENT_* — air-gap-first). Unset = the
+  // Connect button hides and the static-token create path stays the only
+  // install surface.
+  SLACK_CLIENT_ID: z.string().optional(),
+  // Plaintext env secret (same posture as GOOGLE_CLIENT_SECRET above).
+  SLACK_CLIENT_SECRET: z.string().optional(),
+  // Provider endpoint overrides (air-gap/proxy installs, D-05). Unset = the
+  // registry's hardcoded Context7-verified defaults are used. .url() enforces
+  // a valid URL the same way OIDC_DISCOVERY_URL does.
+  OAUTH_GOOGLE_AUTH_URL: z.string().url().optional(),
+  OAUTH_GOOGLE_TOKEN_URL: z.string().url().optional(),
+  // Phase 200 (ECCO-06, D-05): Slack endpoint overrides — the same air-gap
+  // lever posture as the google/microsoft arms. Unset = the registry's
+  // hardcoded Slack defaults are used.
+  OAUTH_SLACK_AUTH_URL: z.string().url().optional(),
+  OAUTH_SLACK_TOKEN_URL: z.string().url().optional(),
+  OAUTH_MICROSOFT_AUTH_URL: z.string().url().optional(),
+  OAUTH_MICROSOFT_TOKEN_URL: z.string().url().optional(),
+  // Tenant path segment for the Microsoft v2.0 endpoints ("common" default;
+  // "organizations" or a tenant-id for enterprise deployments).
+  OAUTH_MICROSOFT_TENANT: z.string().optional(),
+  // Phase 196 (MCPO-04, T-196-05): connector API base-URL overrides — the
+  // air-gap lever for the first-party connector tools (gdrive_* / graph_*).
+  // Unset = the documented provider defaults resolve at the consumption site
+  // (https://www.googleapis.com and https://graph.microsoft.com). No
+  // phone-home beyond the provider calls the connector tools require.
+  GDRIVE_API_BASE_URL: z.string().url().optional(),
+  GRAPH_API_BASE_URL: z.string().url().optional(),
+  // Phase 197 (MCPO-05, air-gap lever): Gmail API base-URL override for the
+  // gmail_* connector tools — same posture as the GDRIVE/GRAPH keys above.
+  // Unset = the documented provider default resolves at the consumption site
+  // (https://gmail.googleapis.com).
+  GMAIL_API_BASE_URL: z.string().url().optional(),
   // --- Optional integration env vars (validated here so missing/malformed
   // values surface at startup, not at feature-use time). All optional with
   // sensible behavior when unset. See CONCERNS.md "Unvalidated process.env". ---

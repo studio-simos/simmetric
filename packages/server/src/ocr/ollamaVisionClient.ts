@@ -46,6 +46,7 @@ import {
   type OcrPrompt,
 } from "./promptTemplates";
 import { getOllamaClient } from "../services/ollamaClient";
+import { preprocessForOcr } from "./preprocessing";
 
 // ---------------------------------------------------------------------------
 // OCR System Prompt (fallback path)
@@ -83,6 +84,8 @@ export interface OcrPageResult {
   tokensUsed: number;
   /** Duration of the OCR call in milliseconds */
   durationMs: number;
+  /** Time-to-first-token in ms (first stream chunk carrying content) — Phase 205 D-14, additive */
+  ttftMs?: number;
   /** True when the vision model stopped at the output token limit (done_reason: "length") — output may be incomplete */
   truncated?: boolean;
 }
@@ -91,14 +94,17 @@ export interface OcrPageResult {
  * Send a single page image to the Ollama vision model for OCR.
  *
  * Flow:
- * 1. Base64-encode the image buffer
- * 2. Build system + user prompts using model-specific template
- * 3. Resolve the shared ollama-js client via getOllamaClient (92-01)
- * 4. POST via client.generate (default) or client.chat (deepseek-ocr)
+ * 1. Preprocess the image buffer (Phase 205 OCR-03 / D-03/D-05):
+ *    grayscale → resize (long side ≤ 1024, only-downscale) → deskew →
+ *    JPEG q85 — fail-open inside the module (original buffer on failure)
+ * 2. Base64-encode the preprocessed image buffer
+ * 3. Build system + user prompts using model-specific template
+ * 4. Resolve the shared ollama-js client via getOllamaClient (92-01)
+ * 5. POST via client.generate (default) or client.chat (deepseek-ocr)
  *    — ollama-js parses the NDJSON upstream and yields parsed chunk objects
- * 5. Accumulate `response` (generate) or `message.content` (chat) in order
- * 6. Log warnings for truncation (done_reason: "length")
- * 7. Return structured result
+ * 6. Accumulate `response` (generate) or `message.content` (chat) in order
+ * 7. Log warnings for truncation (done_reason: "length")
+ * 8. Return structured result
  *
  * Critical implementation details:
  * - Temperature: 0 MUST be inside the `options` object (NOT top-level)
@@ -111,7 +117,8 @@ export interface OcrPageResult {
  *   (Pitfall 2 — kills all in-flight streams process-wide)
  * - images are base64 strings ONLY — never file paths (Pitfall 9)
  *
- * @param imageBuffer - PNG-encoded image of the page
+ * @param imageBuffer - Image buffer of the page (any sharp-decodable format;
+ *   preprocessed at entry per Phase 205 OCR-03 — grayscale/≤1024/deskew/JPEG q85)
  * @param pageNumber - 1-based page number (for prompt context)
  * @param totalPages - Total pages in document (for prompt context)
  * @param modelName - Actual model name (e.g. "deepseek-ocr:latest"), NOT the registry pattern
@@ -120,6 +127,9 @@ export interface OcrPageResult {
  * @param useFallbackPrompt - If true, use simplified plain-text prompt
  * @param ocrMode - Optional mode override (text/table/figure/generic)
  * @param customInstructions - Optional custom instructions appended to prompt
+ * @param ocrPrompt - Optional admin-configured OCR_PROMPT override (Phase 205
+ *   D-11/OCR-04): non-empty value replaces the glm-ocr systemPrompt in all
+ *   modes; empty/undefined keeps the legacy per-mode prompts (byte-identical).
  * @returns OcrPageResult with markdown, token count, and duration
  */
 export async function ocrPage(
@@ -132,8 +142,28 @@ export async function ocrPage(
   useFallbackPrompt?: boolean,
   ocrMode?: "text" | "table" | "figure" | "generic",
   customInstructions?: string,
+  ocrPrompt?: string,
 ): Promise<OcrPageResult> {
-  const base64Image = imageBuffer.toString("base64");
+  // Phase 205 (OCR-03 / D-03, D-05): preprocess at ENTRY — grayscale →
+  // resize (long side ≤ 1024, only-downscale) → deskew → JPEG q85. ONE
+  // landing point covers all 6 call sites (ocrStages image branch + PDF
+  // loop + PDF retry + empty-retry, ragOcrService, ocrRepair) — retry and
+  // repair paths inherit preprocessing for free (RESEARCH Open Question 3).
+  // Fail-open is INSIDE the module: on any error pre.buffer IS the original
+  // buffer and the pipeline proceeds unchanged (no try/catch needed here).
+  // An already-JPEG-q85-sized input pays one extra decode+encode pass —
+  // acceptable and measured by the 205-04 regression suite.
+  const pre = await preprocessForOcr(imageBuffer);
+  if (pre.applied) {
+    logger.info("[ocr] preprocessed page image", {
+      pageNumber,
+      estimatedSkewDeg: pre.estimatedSkewDeg,
+      resized: pre.resized,
+      inputBytes: imageBuffer.length,
+      outputBytes: pre.buffer.length,
+    });
+  }
+  const base64Image = pre.buffer.toString("base64");
   const startedAt = Date.now();
 
   let systemPrompt: string;
@@ -158,12 +188,15 @@ export async function ocrPage(
         });
         break;
       case "glm-ocr":
+        // Phase 205 D-11 (OCR-04): ocrPrompt threads into the glm-ocr branch
+        // ONLY — deepseek-ocr and generic builders stay byte-identical.
         promptResult = buildGlmOcrPrompt({
           pageNumber,
           totalPages,
           base64Image,
           ocrMode,
           customInstructions,
+          ocrPrompt,
         });
         break;
       default:
@@ -190,6 +223,73 @@ export async function ocrPage(
     timeoutMs: getEnv().OCR_TIMEOUT,
   });
 
+  // Runtime num_ctx resolution (Phase 205, OCR-02 / D-09): the boundary is
+  // exact — 0 means "registry fallback" (modelConfig.contextWindow), any
+  // value >= 1 wins over the registry request.
+  const requestedNumCtx =
+    getEnv().OCR_NUM_CTX > 0 ? getEnv().OCR_NUM_CTX : modelConfig.contextWindow;
+
+  // D-08 effective-cap audit (best-effort — NEVER fails the OCR call):
+  // read the trained GGUF context_length via client.show() and warn when the
+  // requested num_ctx exceeds it (Ollama's sched.go effectiveContext clamps
+  // silently — this makes the clamp observable instead of a surprise).
+  // model_info key scan matches any ".context_length" SUFFIX (the prefix is
+  // the GGUF architecture name — glm-ocr is NOT llama; never hardcode it).
+  // The TS type declares Map but the wire JSON is a plain object — handle
+  // BOTH shapes (Assumption A4). show() is instrumentation: on ANY error
+  // (including the ResponseError-404 "model not created yet" arm, duck-typed
+  // exactly like the :329-344 handler) log a warn and proceed with the
+  // requested value (Pitfall 5 — fail-open).
+  try {
+    const info = await client.show({ model: modelName });
+    const modelInfo: unknown = info.model_info;
+    const entries: Array<[string, unknown]> =
+      modelInfo instanceof Map
+        ? Array.from(modelInfo.entries())
+        : Object.entries((modelInfo ?? {}) as Record<string, unknown>);
+    const ctxEntry = entries.find(([key]) => key.endsWith(".context_length"));
+    const trained = ctxEntry ? Number(ctxEntry[1]) : 0;
+    if (trained > 0 && requestedNumCtx > trained) {
+      logger.warn(
+        "[ocr] num_ctx requested exceeds GGUF context_length — silent clamp expected",
+        {
+          model: modelName,
+          requested: requestedNumCtx,
+          trained,
+          effective: trained,
+        },
+      );
+    } else {
+      logger.info("[ocr] effective num_ctx", {
+        model: modelName,
+        requested: requestedNumCtx,
+        trained,
+      });
+    }
+  } catch (showErr: unknown) {
+    // ResponseError duck-typing mirrors the :329-344 block — a 404 here just
+    // means the model is not created yet; the show() error never propagates.
+    const showErrName = (showErr as Error | null)?.name;
+    const showStatusCode =
+      showErr !== null &&
+      typeof showErr === "object" &&
+      "status_code" in showErr &&
+      typeof (showErr as { status_code?: unknown }).status_code === "number"
+        ? (showErr as { status_code: number }).status_code
+        : undefined;
+    const isModelNotFound =
+      showErrName === "ResponseError" && showStatusCode === 404;
+    logger.warn(
+      isModelNotFound
+        ? "[ocr] could not read model_info (model not created yet?) — using requested num_ctx"
+        : "[ocr] could not read model_info — using requested num_ctx",
+      {
+        model: modelName,
+        error: showErr instanceof Error ? showErr.message : String(showErr),
+      },
+    );
+  }
+
   // Common request fields shared by both endpoints, mirroring the
   // pre-migration body verbatim. CRITICAL: temperature lives INSIDE options,
   // NOT at top level (Pitfall 3). images stays base64 strings — NEVER file
@@ -197,10 +297,17 @@ export async function ocrPage(
   const options = {
     temperature: 0,
     // num_predict flows from OCR_NUM_PREDICT env var (default 8192) — admins
-    // raise the cap for dense documents; truncation is surfaced via the
-    // `truncated` flag on the result so downstream code can react.
+    // raise the cap for dense documents that trip the default cap (the resulting
+    // truncation is surfaced via OcrPageResult.truncated). Min 256 guards
+    // against pathological typos.
     num_predict: getEnv().OCR_NUM_PREDICT,
-    num_ctx: modelConfig.contextWindow, // context window from config
+    // Phase 205 (OCR-02 / D-09): num_ctx = OCR_NUM_CTX when > 0, else the
+    // registry's modelConfig.contextWindow (D-08 logs the trained cap).
+    num_ctx: requestedNumCtx,
+    // Phase 205 (OCR-02 / D-10): the API request wins over the Modelfile —
+    // double determinism guarantee, same "options wins" posture as
+    // temperature/num_predict above.
+    top_k: 1,
   };
   const keepAlive = getEnv().OLLAMA_KEEP_ALIVE;
 
@@ -253,6 +360,9 @@ export async function ocrPage(
     let content = "";
     let evalCount = 0;
     let truncated = false;
+    // Phase 205 (D-14): time-to-first-token — first chunk carrying content.
+    let firstChunkAt = 0;
+    let ttftMs = 0;
 
     // 260829-lkq: ollama-js 0.6.3 throws "Did not receive done or success
     // response in stream." when the NDJSON stream ends without a done:true
@@ -272,10 +382,24 @@ export async function ocrPage(
         // generate → chunk.response; chat → chunk.message?.content.
         if (useChatEndpoint) {
           const delta = chunk.message?.content ?? "";
-          if (delta) content += delta;
+          if (delta) {
+            // D-14 ttftMs: stamp on the first chunk that carries content.
+            if (!firstChunkAt) {
+              firstChunkAt = Date.now();
+              ttftMs = firstChunkAt - startedAt;
+            }
+            content += delta;
+          }
         } else {
           const delta = chunk.response ?? "";
-          if (delta) content += delta;
+          if (delta) {
+            // D-14 ttftMs: stamp on the first chunk that carries content.
+            if (!firstChunkAt) {
+              firstChunkAt = Date.now();
+              ttftMs = firstChunkAt - startedAt;
+            }
+            content += delta;
+          }
         }
         if (chunk.done) {
           evalCount = chunk.eval_count ?? 0;
@@ -308,6 +432,7 @@ export async function ocrPage(
           markdown: content,
           tokensUsed: evalCount,
           durationMs: Date.now() - startedAt,
+          ttftMs, // D-14: salvaged runs are degraded successes — metrics still reported
           truncated: true,
         };
       }
@@ -321,6 +446,7 @@ export async function ocrPage(
       markdown: content,
       tokensUsed: evalCount,
       durationMs: Date.now() - startedAt,
+      ttftMs,
       truncated,
     };
   } catch (err: unknown) {

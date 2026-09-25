@@ -1,0 +1,27 @@
+# Simmetric Chat — Copyright (C) 2026 Simmetric Chat
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# This file is part of the Simmetric Chat community build.
+# See LICENSE and NOTICE at the repository root for full terms.
+
+# glm-ocr-optimized — OCR reliability tuning (Phase 205, OCR-01 / D-06).
+#
+# Rationale: the stock glm-ocr:latest defaults carry contextWindow 4096 in the
+# server's registry, which silently truncates the OCR prompt itself at
+# prompt-composition time (Ollama's chatPrompt drops content until the
+# tokenized prompt fits num_ctx). This child model requests a 16K context with
+# deterministic sampling so page content survives composition.
+#
+# Runbook: docs/OCR_RELIABILITY.md.
+#
+# TEMPLATE IS INTENTIONALLY INHERITED — no TEMPLATE block here, ever. The bare
+# `{{ .Prompt }}` template on the base model is load-bearing (see the
+# done-less-stream comment in packages/server/src/ocr/modelRegistry.ts:
+# the /api/chat routing it drives is what avoids the done-less-stream
+# infinite-loop regression; salvage rule 260829-lkq in ollamaVisionClient.ts
+# is the safety net, not the fix). Omitting the template (and `system`) makes
+# the child inherit both from glm-ocr:latest verbatim.
+FROM glm-ocr:latest
+PARAMETER num_ctx 16384
+PARAMETER num_predict 8192
+PARAMETER temperature 0
+PARAMETER top_k 1

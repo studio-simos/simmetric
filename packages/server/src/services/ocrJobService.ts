@@ -49,6 +49,8 @@ export interface OcrJobResultData {
     imagePath?: string;
     tokensUsed: number;
     durationMs: number;
+    /** Phase 205 D-14: time-to-first-token passthrough (additive optional) */
+    ttftMs?: number;
   }>;
   qualityScoreDetail?: { overall: number; breakdown: string };
   credibilityScore?: { score: number; explanation: string; signals?: Record<string, boolean> };

@@ -7,7 +7,8 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { apiGet, apiPost, apiPut, apiDelete } from "../utils/api";
 import { showSuccess, showError } from "../lib/toast";
-import { MENU_SECTIONS } from "@simmetric-chat/shared";
+import { MENU_SECTIONS, SETTINGS_TAB_PERMISSIONS } from "@simmetric-chat/shared";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -64,6 +65,23 @@ const PERMISSION_CATEGORIES: Record<string, { labelKey: string; perms: string[] 
   Admin: { labelKey: "settings.roles.permCatAdmin", perms: ["admin:users", "admin:settings", "admin:roles"] },
 };
 
+// Phase 206 (VIS-01, D-16): per-role settings/menu section visibility entries
+// served by GET /api/roles/:roleId/visibility (override|default tagged).
+interface RoleVisibilityEntryLocal {
+  sectionKey: string;
+  visible: boolean;
+  source: "override" | "default";
+}
+
+interface RoleWithSections {
+  id: string;
+  name: string;
+  description: string | null;
+  isDefault: boolean;
+  permissions: string[];
+  menuSections: string[];
+}
+
 interface RoleFormValues {
   name: string;
   description: string;
@@ -80,6 +98,50 @@ export default function SettingsRoles() {
   // Edit form state
   const [editPermissions, setEditPermissions] = useState<Set<string>>(new Set());
   const [editMenuSections, setEditMenuSections] = useState<Set<string>>(new Set());
+
+  // Phase 206 (VIS-01, D-16): visibility editor state (dedicated dialog).
+  const [visibilityRole, setVisibilityRole] = useState<RoleWithSections | null>(null);
+  const [visibilityEntries, setVisibilityEntries] = useState<RoleVisibilityEntryLocal[]>([]);
+  const [visibilitySaving, setVisibilitySaving] = useState(false);
+  const [visibilityLoading, setVisibilityLoading] = useState(false);
+
+  const openVisibility = async (role: RoleWithSections) => {
+    setVisibilityRole(role);
+    setVisibilityLoading(true);
+    try {
+      const data = await apiGet<{ sections: RoleVisibilityEntryLocal[] }>(`/roles/${role.id}/visibility`);
+      setVisibilityEntries(data.sections);
+    } catch (err: unknown) {
+      showError(t("settings.roles.visibility.loadFailed") + ": " + getErrorMessage(err));
+      setVisibilityRole(null);
+    } finally {
+      setVisibilityLoading(false);
+    }
+  };
+
+  const toggleVisibility = (sectionKey: string) => {
+    setVisibilityEntries((prev) =>
+      prev.map((entry) =>
+        entry.sectionKey === sectionKey ? { ...entry, visible: !entry.visible, source: "override" as const } : entry,
+      ),
+    );
+  };
+
+  const saveVisibility = async () => {
+    if (!visibilityRole) return;
+    setVisibilitySaving(true);
+    try {
+      await apiPut(`/roles/${visibilityRole.id}/visibility`, {
+        sections: visibilityEntries.map(({ sectionKey, visible }) => ({ sectionKey, visible })),
+      });
+      showSuccess(t("settings.roles.visibility.saved"));
+      setVisibilityRole(null);
+    } catch (err: unknown) {
+      showError(t("settings.roles.visibility.saveFailed") + ": " + getErrorMessage(err));
+    } finally {
+      setVisibilitySaving(false);
+    }
+  };
 
   const createForm = useForm<RoleFormValues>({
     defaultValues: { name: "", description: "" },
@@ -381,6 +443,73 @@ export default function SettingsRoles() {
         </DialogContent>
       </Dialog>
 
+      {/* Phase 206 (VIS-01, D-16): per-role visibility dialog — menu + settings
+          sections with server-resolved values (override wins; absent rows fall
+          back to the permission-OR default). */}
+      <Dialog open={!!visibilityRole} onOpenChange={(open) => !open && setVisibilityRole(null)}>
+        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{t("settings.roles.visibility.title")} — {visibilityRole?.name}</DialogTitle>
+            <DialogDescription>{t("settings.roles.visibility.description")}</DialogDescription>
+          </DialogHeader>
+          {visibilityLoading ? (
+            <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground mb-2">{t("settings.roles.visibility.menuSections")}</p>
+                <div className="space-y-2">
+                  {visibilityEntries
+                    .filter((e) => (MENU_SECTIONS as readonly string[]).includes(e.sectionKey))
+                    .map((entry) => (
+                      <div key={entry.sectionKey} className="flex items-center justify-between">
+                        <span className="text-sm">{entry.sectionKey}</span>
+                        <Switch
+                          checked={entry.visible}
+                          onCheckedChange={() => toggleVisibility(entry.sectionKey)}
+                          aria-label={`${entry.sectionKey}: ${entry.visible}`}
+                        />
+                      </div>
+                    ))}
+                </div>
+              </div>
+              <div className="space-y-4">
+                <p className="text-xs font-semibold text-muted-foreground mb-2">{t("settings.roles.visibility.settingsSections")}</p>
+                <div className="space-y-2">
+                  {Object.keys(SETTINGS_TAB_PERMISSIONS).map((key) => {
+                    const entry = visibilityEntries.find((e) => e.sectionKey === key);
+                    const visible = entry?.visible ?? true;
+                    return (
+                      <div key={key} className="flex items-center justify-between">
+                        <span className="text-sm">
+                          {key}
+                          {entry?.source === "override" && (
+                            <Badge variant="outline" className="ml-2 text-[10px]">{t("settings.roles.visibility.override")}</Badge>
+                          )}
+                        </span>
+                        <Switch
+                          checked={visible}
+                          onCheckedChange={() => toggleVisibility(key)}
+                          aria-label={`${key}: ${visible}`}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <DialogClose asChild>
+              <Button variant="outline" size="sm" onClick={() => setVisibilityRole(null)}>{t("common.cancel")}</Button>
+            </DialogClose>
+            <Button size="sm" disabled={visibilitySaving} onClick={saveVisibility}>
+              {t("common.save")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Roles list */}
       <div className="space-y-3">
         {roles.map((role) => (
@@ -402,6 +531,13 @@ export default function SettingsRoles() {
                   onClick={() => startEdit(role)}
                 >
                   {t("common.edit")}
+                </Button>
+                <Button
+                  variant="link"
+                  size="sm"
+                  onClick={() => openVisibility(role)}
+                >
+                  {t("settings.roles.visibility.title")}
                 </Button>
                 {!role.isDefault && (
                   <Button

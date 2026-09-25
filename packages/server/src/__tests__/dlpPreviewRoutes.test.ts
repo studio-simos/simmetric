@@ -445,7 +445,7 @@ describe("GET /:documentId/text?unmask=true — cross-tenant negative (T-78-01 i
       .get(`/api/documents/${DOC_ID}/text?unmask=true`)
       .set("Authorization", `Bearer ${token}`)
       .expect(403);
-    expect(res.body.error).toMatch(/access denied/i);
+    expect(res.body.error.message).toMatch(/access denied/i);
     // The same 403 shape as the masked view — no oracle distinguishing
     // permission from content; and no decrypt work happened.
     expect(mockBuildRecompositionMap).not.toHaveBeenCalled();
@@ -459,7 +459,7 @@ describe("GET /:documentId/text?unmask=true — cross-tenant negative (T-78-01 i
       .get(`/api/documents/${DOC_ID}/text`)
       .set("Authorization", `Bearer ${token}`)
       .expect(403);
-    expect(res.body.error).toMatch(/access denied/i);
+    expect(res.body.error.message).toMatch(/access denied/i);
   });
 });
 
@@ -470,8 +470,8 @@ describe("GET /:documentId/text — query contract + shape pins", () => {
       .get(`/api/documents/${DOC_ID}/text?unmask=banana`)
       .set("Authorization", `Bearer ${token}`)
       .expect(400);
-    expect(res.body.error).toBe("Invalid query parameter");
-    expect(res.body.details).toBeDefined();
+    expect(res.body.error.message).toBe("Invalid query parameter");
+    expect(res.body.error.details).toBeDefined();
     expect(mockBuildRecompositionMap).not.toHaveBeenCalled();
   });
 
@@ -492,7 +492,7 @@ describe("GET /:documentId/text — query contract + shape pins", () => {
       .get(`/api/documents/nonexistent/text?unmask=true`)
       .set("Authorization", `Bearer ${token}`)
       .expect(404);
-    expect(res.body.error).toBe("Document not found");
+    expect(res.body.error.message).toBe("Document not found");
     expect(mockBuildRecompositionMap).not.toHaveBeenCalled();
   });
 });

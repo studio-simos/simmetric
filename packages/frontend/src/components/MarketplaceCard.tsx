@@ -32,7 +32,7 @@ import {
   CardContent,
   CardFooter,
 } from "@/components/ui/card";
-import { ShieldCheck, Check } from "lucide-react";
+import { ShieldCheck, Check, KeyRound } from "lucide-react";
 import type { CatalogEntry } from "../queries/useMarketplace";
 
 function formatRelativeTime(dateStr: string | null | undefined): string {
@@ -182,6 +182,25 @@ export default function MarketplaceCard({
           <Badge variant="outline" className="text-xs">
             {entry.category ? t(`marketplace.categories.${entry.category}`, { defaultValue: entry.category }) : t("marketplace.categories.other")}
           </Badge>
+          {/* Phase 197 (MCPO-03 D-06/UI-SPEC §3): OAuth indicator — outline
+              neutral (accent budget reserved), only for authType=oauth
+              entries; absent authType keeps old payloads byte-identical. */}
+          {entry.authType === "oauth" && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge
+                  variant="outline"
+                  className="inline-flex items-center gap-1 text-xs cursor-default"
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  {t("marketplace.card.oauthBadge", { provider: entry.oauthProvider ?? "" })}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {t("marketplace.card.oauthBadgeTooltip", { provider: entry.oauthProvider ?? "" })}
+              </TooltipContent>
+            </Tooltip>
+          )}
           <span className="text-xs text-muted-foreground">{t("marketplace.card.toolsLabel")}</span>
         </div>
       </CardContent>
@@ -262,7 +281,13 @@ export default function MarketplaceCard({
                     {t("common.uninstall", "Uninstall")} {entry.name}?
                   </AlertDialogTitle>
                   <AlertDialogDescription>
-                    {t("mcp.uninstallConfirm", "This MCP server will be removed from the workspace.")}
+                    {/* G-197-3 (D-08/UI-SPEC §6): OAuth entries surface the
+                        revoke+wipe confirm body — mirrors the detail-page arm
+                        (MarketplaceDetail.tsx); non-OAuth entries keep the
+                        existing card copy byte-identically. */}
+                    {entry.authType === "oauth"
+                      ? t("marketplace.uninstallConfirmOAuth")
+                      : t("mcp.uninstallConfirm", "This MCP server will be removed from the workspace.")}
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>

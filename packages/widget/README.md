@@ -250,3 +250,11 @@ pnpm --filter widget test
 ```
 
 Tests cover HTTP routes (supertest), middleware, Redis integration, and pure helper logic. The Jest config maps `@simmetric-chat/shared` to the monorepo shared package source and uses `@swc/jest` for transformation. Test files live in `src/__tests__/` (`chat.proxy.test.ts`, `chatPanelLogic.test.ts`, `chatPanel.seam.test.ts`, `envExampleParity.test.ts`, `globToRegex.test.ts`, `loader.test.ts`, `matchUrlPattern.test.ts`, `rateLimit.test.ts`, `rateLimit.daily.test.ts`, `rateLimit.redis.test.ts`, `rawEnvReads.test.ts`, `redisService.test.ts`, `session.test.ts`, `session-route.test.ts`, `sourceCitationSeam.test.ts`, `useWidgetChat.dedup.test.ts`, `useWidgetConfig.test.ts`, `welcomeScreen.seam.test.ts`, `widgetApi.test.ts`, `widgetApp.test.ts`, `widgetEmbedLayout.seam.test.ts`, `widgetI18n.test.ts`, `widgetOpenState.test.ts`) with shared env setup under `src/__tests__/helpers/setupEnv.ts`.
+
+## Contributing
+
+See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines.
+
+## License
+
+Released under the [AGPL-3.0-or-later](../../LICENSE) license.

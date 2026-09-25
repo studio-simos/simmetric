@@ -68,24 +68,26 @@ jest.mock("@/components/ui/command", () => {
 // ── Imports ──────────────────────────────────────────────────────
 
 import "@testing-library/jest-dom";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import AppSidebar from "../components/AppSidebar";
 import AppNavOverlay from "../components/AppNavOverlay";
 import type { AppNavOverlayProps } from "../components/AppNavOverlay";
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-function renderSidebar(menuSections: string[]) {
+function renderSidebar(menuSections: string[], overrides = {}) {
   return render(
     <AppSidebar
       appName="Simmetric Chat"
       primaryColor="#4c6ef5"
       user={null}
-      onOpenNavOverlay={jest.fn()}
+      onMenuOpenChange={jest.fn()}
+      menuOpen={false}
       onOpenUserMenu={jest.fn()}
       t={(key: string) => key}
       sidebarOpen
       setSidebarOpen={jest.fn()}
+      {...overrides}
     />
   );
 }
@@ -132,5 +134,61 @@ describe("AppSidebar uploads menu section (UI revision R-5)", () => {
   it("the overlay does NOT render the uploads item when 'uploads' is absent", () => {
     renderOverlay({ menuSections: ["chat", "widget"] });
     expect(screen.queryByText("sidebar.uploads")).not.toBeInTheDocument();
+  });
+});
+
+describe("AppSidebar inline menu toggle (UI revision R-7)", () => {
+  it("clicking the footer Menu button calls onMenuOpenChange(true)", () => {
+    const onMenuOpenChange = jest.fn();
+    renderSidebar(["chat"], { onMenuOpenChange, menuOpen: false });
+    fireEvent.click(screen.getByRole("button", { name: "nav.openMenu" }));
+    expect(onMenuOpenChange).toHaveBeenCalledWith(true);
+    expect(onMenuOpenChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("with the menu open, clicking the button calls onMenuOpenChange(false)", () => {
+    const onMenuOpenChange = jest.fn();
+    renderSidebar(["chat"], { onMenuOpenChange, menuOpen: true });
+    fireEvent.click(screen.getByRole("button", { name: "nav.closeMenu" }));
+    expect(onMenuOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("the nav region is completely unmounted when menuOpen is false", () => {
+    renderSidebar(["chat"], {
+      menuOpen: false,
+      nav: <div data-testid="inline-nav">nav</div>,
+    });
+    expect(screen.queryByTestId("inline-nav")).not.toBeInTheDocument();
+  });
+
+  it("the nav region renders between the body and the footer when menuOpen is true", () => {
+    renderSidebar(["chat"], {
+      menuOpen: true,
+      nav: <div data-testid="inline-nav">nav</div>,
+    });
+    expect(screen.getByTestId("inline-nav")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "nav.closeMenu" })).toBeInTheDocument();
+  });
+
+  it("opening the menu from the collapsed rail expands the sidebar (one click, no dead end)", () => {
+    const setSidebarOpen = jest.fn();
+    renderSidebar(["chat"], {
+      menuOpen: true,
+      sidebarOpen: false,
+      isMobile: false,
+      setSidebarOpen,
+    });
+    expect(setSidebarOpen).toHaveBeenCalledWith(true);
+  });
+
+  it("closing the menu never force-collapses the sidebar", () => {
+    const setSidebarOpen = jest.fn();
+    renderSidebar(["chat"], {
+      menuOpen: false,
+      sidebarOpen: true,
+      isMobile: false,
+      setSidebarOpen,
+    });
+    expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 });

@@ -49,6 +49,8 @@ const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   // Phase 97 (MEM-01 D-02): memory permissions — user manages their own per-user-per-workspace memories.
   "memory:read": "View own memories",
   "memory:write": "Create and modify own memories",
+  // Phase 195 (MCPO-01 D-15): MCP OAuth management (37th permission).
+  "mcp:oauth:manage": "Authorize and revoke MCP OAuth connections",
 };
 
 /** Seed permissions into the database (idempotent; internal step of seedAll) */

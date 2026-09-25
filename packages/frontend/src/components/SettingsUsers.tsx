@@ -7,6 +7,8 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { apiGet, apiPost, apiPut } from "../utils/api";
 import { showSuccess, showError } from "../lib/toast";
+// Phase 207 (D-16): admin quota cell + edit/reset dialog (207-UI-SPEC contract).
+import { QuotaUsageCell, UserQuotaDialog } from "./UserQuotaSection";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -75,6 +77,8 @@ interface ResetPasswordFormValues {
 export default function SettingsUsers() {
   const { t } = useTranslation();
   const [users, setUsers] = useState<UserWithRoles[]>([]);
+  // Phase 207 (D-16): the user whose quota dialog is open.
+  const [quotaUser, setQuotaUser] = useState<UserWithRoles | null>(null);
   const [roles, setRoles] = useState<RoleInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -358,6 +362,9 @@ export default function SettingsUsers() {
                   {t("settings.users.colPermissions")}
                 </TableHead>
                 <TableHead className="px-5 py-2">
+                  {t("settings.users.quota.colQuota")}
+                </TableHead>
+                <TableHead className="px-5 py-2">
                   {t("settings.users.colCreated")}
                 </TableHead>
                 <TableHead className="px-5 py-2">
@@ -414,6 +421,9 @@ export default function SettingsUsers() {
                           {user.permissions.slice(0, 3).join(", ")}
                           {user.permissions.length > 3 &&
                             ` +${user.permissions.length - 3}`}
+                        </TableCell>
+                        <TableCell className="px-5 py-3">
+                          <QuotaUsageCell userId={user.id} onManage={() => setQuotaUser(user)} />
                         </TableCell>
                         <TableCell className="px-5 py-3 text-muted-foreground text-xs">
                           {new Date(user.createdAt).toLocaleDateString()}
@@ -594,6 +604,18 @@ export default function SettingsUsers() {
           ))}
         </div>
       </div>
+
+      {quotaUser ? (
+        <UserQuotaDialog
+          userId={quotaUser.id}
+          username={quotaUser.username}
+          open={Boolean(quotaUser)}
+          onOpenChange={(open) => {
+            if (!open) setQuotaUser(null);
+          }}
+          onSaved={loadData}
+        />
+      ) : null}
     </div>
   );
 }

@@ -4,6 +4,24 @@
 // See LICENSE and NOTICE at the repository root for full terms.
 
 /**
+ * RUNBOOK (Phase 204-03, D-05) — how to actually run this suite locally:
+ *
+ *   OLLAMA_BASE_URL=http://localhost:11434 \
+ *   DATABASE_URL=postgresql://simmetricchat:simmetricchat@localhost:5432/simmetricchat \
+ *   pnpm --filter server test:integration -- \
+ *     src/__tests__/nativeToolsIntegration.integration.test.ts
+ *
+ * - The `OLLAMA_BASE_URL` skip-guard below (the `ollamaAvailable` const) is
+ *   the correct no-model behavior: with the env var absent the ollama arm
+ *   skips — do NOT "fix" the `env.ts` OLLAMA_BASE_URL default
+ *   (`http://ollama:11434`): it is compose-shaped by design and dead-DNS only
+ *   for host-side processes, so pass the override at the command line.
+ * - The qwen2.5:3b arm additionally requires the model to be PULLED on the
+ *   targeted instance (`ollama pull qwen2.5:3b`); see the availability guard
+ *   inside that describe block.
+ */
+
+/**
  * Phase 95-04 (D-06) — Native function calling integration tests per reliable
  * model.
  *

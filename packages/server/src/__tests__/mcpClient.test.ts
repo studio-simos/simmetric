@@ -13,20 +13,14 @@ jest.mock("../utils/prisma", () => {
   return { __esModule: true, default: createMockPrisma().prisma };
 });
 
-jest.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+jest.mock("@modelcontextprotocol/client", () => ({
   Client: jest.fn().mockImplementation(() => ({
     connect: jest.fn(),
     listTools: jest.fn(),
     close: jest.fn(),
     callTool: jest.fn(),
   })),
-}));
-
-jest.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
   SSEClientTransport: jest.fn().mockImplementation(() => ({ __kind: "sse" })),
-}));
-
-jest.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: jest.fn().mockImplementation(() => ({ __kind: "streamable-http" })),
 }));
 
@@ -57,9 +51,24 @@ jest.mock("../services/systemConfigService", () => ({ seedConfigDefaults: jest.f
 jest.mock("../services/ftsService", () => ({ initPostgreSQLFTS: jest.fn() }));
 jest.mock("../agent/mcpServer", () => ({ mountMCPServer: jest.fn() }));
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+// Phase 195 (MCPO-01): the OAuth lifecycle + registry seams are mocked at the
+// module boundary — the header-switch tests assert the mcpClient-side logic
+// (decrypt → Bearer build → merge), not the crypto itself (covered by
+// oauthExchange.test.ts).
+jest.mock("../services/oauthTokenLifecycle", () => ({
+  decryptTokenBlob: jest.fn(),
+  encryptTokenBlob: jest.fn(() => "iv:tag:reencrypted"),
+  refreshAccessToken: jest.fn(),
+}));
+jest.mock("../services/oauthProviderRegistry", () => ({
+  resolveProvider: jest.fn(),
+  hasClientConfigured: jest.fn(),
+  resolveScopes: jest.fn((_def: unknown, requested?: string) => (requested ? requested.split(/\s+/) : ["default-scope"])),
+}));
+
+import { Client } from "@modelcontextprotocol/client";
+import { SSEClientTransport } from "@modelcontextprotocol/client";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import prisma from "../utils/prisma";
 import {
   getConnectionStatuses,
@@ -73,8 +82,18 @@ import {
   getMCPToolsForWorkspace,
   __setActiveConnectionForTest,
   __clearActiveConnectionForTest,
+  resolveConnectionHeaders,
+  getActiveConnectionState,
+  withConnectionLock,
 } from "../agent/mcpClient";
 import { registerSkill, unregisterSkillsForConnection, getAllBuiltinSkills } from "../agent/skills";
+import { decryptTokenBlob, refreshAccessToken } from "../services/oauthTokenLifecycle";
+import { resolveProvider, hasClientConfigured } from "../services/oauthProviderRegistry";
+
+const mockedDecryptTokenBlob = decryptTokenBlob as jest.Mock;
+const mockedRefreshAccessToken = refreshAccessToken as jest.Mock;
+const mockedResolveProvider = resolveProvider as jest.Mock;
+const mockedHasClientConfigured = hasClientConfigured as jest.Mock;
 
 // Test unregisterSkillsForConnection with real implementation
 const realSkills = jest.requireActual("../agent/skills") as typeof import("../agent/skills");
@@ -706,5 +725,351 @@ describe("MCP-03 lifecycle (D-06/D-07/D-08, T-63-leak)", () => {
     expect(snap[0]?.id).toBe(CONN_ID);
     expect(snap[0]?.state.connected).toBe(true);
     expect(snap[0]?.state.tools.map((t: { name: string }) => t.name)).toContain("snap-tool");
+  });
+});
+// ─── Phase 195 (MCPO-01 D-11/D-13/D-15a): header switch + reactive 401 ───
+
+describe("resolveConnectionHeaders — authType switch (D-11, D-02 byte-identical)", () => {
+  const CONN = "conn-oauth-1";
+  const BLOB_TOKEN = "bearer-from-blob";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedDecryptTokenBlob.mockReturnValue({
+      ok: true,
+      blob: { accessToken: BLOB_TOKEN, refreshToken: "rt", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+  });
+
+  function oauthRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: CONN,
+      name: "OAuth MCP",
+      authType: "oauth",
+      oauthStatus: "authorized",
+      oauthProvider: "google",
+      oauthScopes: null,
+      credentialsEncrypted: "iv:tag:ct",
+      headers: JSON.stringify({ "X-Project": "proj-1" }),
+      ...overrides,
+    };
+  }
+
+  it("none/static passthrough unchanged — headers parsed via mcpHeadersSchema, no decrypt", async () => {
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue({
+      id: "conn-static",
+      name: "Static MCP",
+      url: "http://mcp-server.example.com/sse",
+      transportType: "sse",
+      enabled: true,
+      authType: "static",
+      oauthStatus: "none",
+      headers: JSON.stringify({ "X-Api-Key": "k" }),
+      projectId: null,
+      workspaceId: "ws",
+    });
+    (prisma.mCPConnection.update as jest.Mock).mockResolvedValue({});
+
+    await connectMCPServer("conn-static");
+
+    expect(mockedDecryptTokenBlob).not.toHaveBeenCalled();
+    const call = (SSEClientTransport as jest.Mock).mock.calls[0];
+    const headers = (call![1] as { requestInit: { headers: Headers } }).requestInit.headers;
+    expect(headers.get("X-Api-Key")).toBe("k");
+    expect(headers.get("Authorization")).toBeNull();
+  });
+
+  it("legacy null authType behaves as none (D-02)", async () => {
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue({
+      id: "conn-legacy",
+      name: "Legacy MCP",
+      transportType: "sse",
+      enabled: true,
+      authType: null,
+      headers: "{}",
+      projectId: null,
+      workspaceId: "ws",
+    });
+    (prisma.mCPConnection.update as jest.Mock).mockResolvedValue({});
+
+    await connectMCPServer("conn-legacy");
+
+    expect(mockedDecryptTokenBlob).not.toHaveBeenCalled();
+  });
+
+  it("oauth authorized → Authorization Bearer from the DECRYPTED blob + merged static header", async () => {
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue({
+      id: CONN,
+      name: "OAuth MCP",
+      url: "http://mcp-server.example.com/sse",
+      transportType: "sse",
+      enabled: true,
+      authType: "oauth",
+      oauthStatus: "authorized",
+      oauthProvider: "google",
+      credentialsEncrypted: "iv:tag:ct",
+      headers: JSON.stringify({ "X-Project": "proj-1" }),
+      projectId: null,
+      workspaceId: "ws",
+    });
+    (prisma.mCPConnection.update as jest.Mock).mockResolvedValue({});
+
+    await connectMCPServer(CONN);
+
+    expect(mockedDecryptTokenBlob).toHaveBeenCalledWith("iv:tag:ct");
+    const call = (SSEClientTransport as jest.Mock).mock.calls[0];
+    const headers = (call![1] as { requestInit: { headers: Headers } }).requestInit.headers;
+    // Server-built Bearer from the decrypted blob (never user input).
+    expect(headers.get("Authorization")).toBe(`Bearer ${BLOB_TOKEN}`);
+    // Static header merged under the Bearer.
+    expect(headers.get("X-Project")).toBe("proj-1");
+  });
+
+  it("oauth not-authorized → refuses with a clear error (D-11)", async () => {
+    // Assert via the exported helper directly — the connect-path error
+    // posture deletes the entry from activeConnections, so
+    // getConnectionStatuses (which iterates that Map) is not the observable
+    // here. The helper's { ok: false, error } IS the connectionErrors
+    // message source (set by the same code path inside connectMCPServer).
+    const result = resolveConnectionHeaders(
+      oauthRow({ oauthStatus: "pending" }) as unknown as Parameters<typeof resolveConnectionHeaders>[0]
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("not authorized");
+  });
+
+  it("oauth decrypt-failure → refuses with a message disclosing nothing about the blob", async () => {
+    mockedDecryptTokenBlob.mockReturnValue({
+      ok: false,
+      errorDescription: "OAuth credential blob could not be decrypted",
+    });
+    const result = resolveConnectionHeaders(
+      oauthRow() as unknown as Parameters<typeof resolveConnectionHeaders>[0]
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("OAuth credential blob could not be decrypted");
+      expect(result.error).not.toContain("iv:tag:ct");
+    }
+  });
+});
+
+describe("reactive-401 arm (D-13 / Pitfall 12 loop guard)", () => {
+  let CONN_401: string;
+  let capturedExecute: ((params: { query: string }) => Promise<{ success: boolean; data?: string; error?: string }>) | null;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    capturedExecute = null;
+    // Unique id per test — connectMCPServer's ensureConnected cache is keyed
+    // by id, and a connected id from a sibling test would short-circuit the
+    // second connect (skipping registerSkill entirely).
+    CONN_401 = `conn-401-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    mockedDecryptTokenBlob.mockReturnValue({
+      ok: true,
+      blob: { accessToken: "stale-token", refreshToken: "rt-1", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+    mockedResolveProvider.mockReturnValue({ id: "google", tokenUrl: "https://fake/token" });
+    mockedHasClientConfigured.mockReturnValue(true);
+    mockedRefreshAccessToken.mockResolvedValue({
+      ok: true,
+      blob: { accessToken: "fresh-token", refreshToken: "rt-1", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+    (prisma.mCPConnection.update as jest.Mock).mockResolvedValue({});
+  });
+
+  function stage401Connection(callToolImpl: jest.Mock) {
+    (Client as jest.Mock).mockImplementation(() => ({
+      connect: jest.fn(() => Promise.resolve()),
+      listTools: jest.fn(() => Promise.resolve({ tools: [{ name: "tool1", description: "d" }] })),
+      close: jest.fn(() => Promise.resolve()),
+      callTool: callToolImpl,
+    }));
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue({
+      id: CONN_401,
+      name: "OAuth 401 MCP",
+      url: "http://mcp-server.example.com/sse",
+      transportType: "sse",
+      enabled: true,
+      authType: "oauth",
+      oauthStatus: "authorized",
+      oauthProvider: "google",
+      oauthScopes: null,
+      credentialsEncrypted: "iv:tag:ct",
+      headers: "{}",
+      projectId: null,
+      workspaceId: "ws-401",
+    });
+    return connectMCPServer(CONN_401).then(() => {
+      // ../agent/skills is module-mocked — connectMCPServer registers through
+      // the mock, so the execute closure comes from registerSkill.mock.calls.
+      const registered = (registerSkill as jest.Mock).mock.calls
+        .map((call) => call[0] as { name: string; execute: unknown })
+        .find((s) => s.name === `mcp_${CONN_401}_tool1`);
+      capturedExecute = registered?.execute as unknown as typeof capturedExecute;
+      expect(capturedExecute).toBeTruthy();
+    });
+  }
+
+  it("401 on tool call → exactly ONE refresh + reconnect + retry succeeds", async () => {
+    let calls = 0;
+    const callTool = jest.fn(() => {
+      calls += 1;
+      if (calls === 1) {
+        const err = new Error("HTTP 401 Unauthorized") as Error & { code?: number };
+        err.code = 401;
+        return Promise.reject(err);
+      }
+      return Promise.resolve({ content: [{ type: "text", text: "recovered" }] });
+    });
+    await stage401Connection(callTool);
+
+    const result = await capturedExecute!({ query: "q" });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toBe("recovered");
+    expect(mockedRefreshAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("CR-01: retry rides the FRESH client (the closed old client is never called after reconnect)", async () => {
+    // Distinct callTool mocks per Client instance: instance 1 always 401s,
+    // instance 2 (post-reconnect) succeeds. The retry MUST hit instance 2 —
+    // calling the closed instance 1 would throw "Not connected" and lose the
+    // refreshed token's result (CR-01).
+    const callTool1 = jest.fn(() => {
+      const err = new Error("HTTP 401 Unauthorized") as Error & { code?: number };
+      err.code = 401;
+      return Promise.reject(err);
+    });
+    const callTool2 = jest.fn(() => Promise.resolve({ content: [{ type: "text", text: "from-fresh-client" }] }));
+    const instances: Array<{ callTool: jest.Mock }> = [];
+    (Client as jest.Mock).mockImplementation(() => {
+      const inst = { connect: jest.fn(() => Promise.resolve()), listTools: jest.fn(() => Promise.resolve({ tools: [{ name: "tool1", description: "d" }] })), close: jest.fn(() => Promise.resolve()), callTool: instances.length === 0 ? callTool1 : callTool2 };
+      instances.push(inst);
+      return inst;
+    });
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue({
+      id: CONN_401,
+      name: "OAuth 401 MCP",
+      url: "http://mcp-server.example.com/sse",
+      transportType: "sse",
+      enabled: true,
+      authType: "oauth",
+      oauthStatus: "authorized",
+      oauthProvider: "google",
+      oauthScopes: null,
+      credentialsEncrypted: "iv:tag:ct",
+      headers: "{}",
+      projectId: null,
+      workspaceId: "ws-401",
+    });
+    await connectMCPServer(CONN_401);
+    const registered = (registerSkill as jest.Mock).mock.calls
+      .map((call) => call[0] as { name: string; execute: unknown })
+      .find((s) => s.name === `mcp_${CONN_401}_tool1`);
+    const execute = registered?.execute as unknown as (params: { query: string }) => Promise<{ success: boolean; data?: string; error?: string }>;
+
+    const result = await execute({ query: "q" });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toBe("from-fresh-client");
+    // The retry rode the SECOND client instance (the fresh one), never the
+    // closed first instance.
+    expect(instances.length).toBeGreaterThanOrEqual(2);
+    expect(instances[1]?.callTool).toHaveBeenCalledTimes(1);
+    // And the fresh client is the one now registered as the active state.
+    expect(getActiveConnectionState(CONN_401)?.connected).toBe(true);
+  });
+
+  it("CR-02: the reactive 401 refresh is serialized by withConnectionLock", async () => {
+    // The mock Client constructor hands EVERY instance the same callTool mock
+    // (stage401Connection) — after the CR-01 fix the retry rides the FRESH
+    // instance, so the second call must succeed (first call 401s, retry
+    // succeeds). The observable lock effect: the refresh ran exactly once and
+    // the arm delivered the retry result (a retry against the closed OLD
+    // client would throw "Not connected" — CR-01 — landing in the catch).
+    let calls = 0;
+    const callTool = jest.fn(() => {
+      calls += 1;
+      if (calls === 1) {
+        const err = new Error("HTTP 401 Unauthorized") as Error & { code?: number };
+        err.code = 401;
+        return Promise.reject(err);
+      }
+      return Promise.resolve({ content: [{ type: "text", text: "recovered" }] });
+    });
+    await stage401Connection(callTool);
+
+    const result = await capturedExecute!({ query: "q" });
+
+    expect(result.success).toBe(true);
+    expect(mockedRefreshAccessToken).toHaveBeenCalledTimes(1);
+    // The retry rode the FRESH client (callTool called twice total: initial +
+    // single retry — the fresh instance's callTool delivered the result).
+    expect(callTool).toHaveBeenCalledTimes(2);
+    // No leaked gate for this connection — the lock was acquired + released.
+    const snapshot = getActiveConnectionsSnapshot();
+    expect(snapshot.find((c) => c.id === CONN_401)?.state.connected).toBe(true);
+  });
+
+  it("401 persists after retry → exactly 1 refresh + success:false, NO second attempt (Pitfall 12)", async () => {
+    const err401 = () => {
+      const err = new Error("Unauthorized") as Error & { status?: number };
+      err.status = 401;
+      return err;
+    };
+    const callTool = jest.fn(() => Promise.reject(err401()));
+    await stage401Connection(callTool);
+
+    const result = await capturedExecute!({ query: "q" });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("MCP tool error");
+    // Loop guard: refresh happened at most once; callTool was attempted
+    // exactly twice (initial + single retry), never a third time.
+    expect(mockedRefreshAccessToken).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledTimes(2);
+  });
+
+  it("non-401 error → no refresh, standard error return", async () => {
+    const callTool = jest.fn(() => Promise.reject(new Error("socket hang up")));
+    await stage401Connection(callTool);
+
+    const result = await capturedExecute!({ query: "q" });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("socket hang up");
+    expect(mockedRefreshAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("401 on a NON-oauth connection → no refresh (arm is oauth-only)", async () => {
+    const callTool = jest.fn(() => Promise.reject(new Error("HTTP 401 Unauthorized")));
+    (Client as jest.Mock).mockImplementation(() => ({
+      connect: jest.fn(() => Promise.resolve()),
+      listTools: jest.fn(() => Promise.resolve({ tools: [{ name: "tool1", description: "d" }] })),
+      close: jest.fn(() => Promise.resolve()),
+      callTool: callTool,
+    }));
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue({
+      id: "conn-static-401",
+      name: "Static 401 MCP",
+      url: "http://mcp-server.example.com/sse",
+      transportType: "sse",
+      enabled: true,
+      authType: "static",
+      headers: "{}",
+      projectId: null,
+      workspaceId: "ws",
+    });
+    await connectMCPServer("conn-static-401");
+    const registered = (registerSkill as jest.Mock).mock.calls
+      .map((call) => call[0] as { name: string; execute: unknown })
+      .find((s) => s.name === "mcp_conn-static-401_tool1");
+    const execute = registered?.execute as unknown as (params: { query: string }) => Promise<{ success: boolean; error?: string }>;
+
+    const result = await execute({ query: "q" });
+
+    expect(result.success).toBe(false);
+    expect(mockedRefreshAccessToken).not.toHaveBeenCalled();
   });
 });

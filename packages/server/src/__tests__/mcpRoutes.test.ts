@@ -53,6 +53,17 @@ jest.mock("../agent/mcpClient", () => ({
   getConnectionStatuses: jest.fn(),
   testMCPServerConnection: jest.fn(() => Promise.resolve()),
   clearConnectionError: jest.fn(),
+  // Phase 195 (MCPO-01 D-15a): the test-connection probe resolves headers
+  // through resolveConnectionHeaders — the heavy-mock object gains the fn
+  // (extended in place; prior jest.fn members intact). Default mirrors the
+  // none/static path: parse the row's stored headers JSON.
+  resolveConnectionHeaders: jest.fn((connection: { headers?: string | null }) => {
+    try {
+      return { ok: true, headers: connection.headers ? (JSON.parse(connection.headers) as Record<string, string>) : {} };
+    } catch {
+      return { ok: false, error: "Invalid headers JSON" };
+    }
+  }),
 }));
 
 jest.mock("../agent/skills", () => ({
@@ -87,6 +98,25 @@ import { generateTestToken } from "./helpers/mockAuth";
 import { connectMCPServer, disconnectMCPServer, getConnectionStatuses, testMCPServerConnection } from "../agent/mcpClient";
 import { unregisterSkillsForConnection } from "../agent/skills";
 
+jest.mock("../services/oauthTokenLifecycle", () => ({
+  decryptTokenBlob: jest.fn(),
+  revokeProviderToken: jest.fn(),
+  encryptTokenBlob: jest.fn(),
+  refreshAccessToken: jest.fn(),
+  exchangeAuthorizationCode: jest.fn(),
+}));
+
+jest.mock("../services/oauthProviderRegistry", () => ({
+  resolveProvider: jest.fn(),
+  hasClientConfigured: jest.fn(),
+  buildAuthorizeUrl: jest.fn(),
+  resolveScopes: jest.fn(),
+  resolveRedirectUri: jest.fn(),
+}));
+
+import { decryptTokenBlob, revokeProviderToken } from "../services/oauthTokenLifecycle";
+import { resolveProvider } from "../services/oauthProviderRegistry";
+
 const app = createApp();
 
 function adminAuth() {
@@ -108,6 +138,17 @@ const mockConnection = {
   // Phase 185 (T-185-10): matches the membership mock's org — the route's
   // org assertion hides cross-org connections as 404.
   organizationId: "org-default",
+  // Phase 195 (D-01): the oauth columns exist on the row now. The route must
+  // strip credentialsEncrypted + oauthError from every response (Pitfall 1 /
+  // T-195-09) — the mock row carries them to prove the strip.
+  authType: "oauth",
+  oauthProvider: "google",
+  oauthScopes: null,
+  credentialsEncrypted: "iv:tag:ciphertext-SECRET",
+  tokenExpiresAt: new Date("2026-01-01T01:00:00.000Z"),
+  oauthStatus: "authorized",
+  oauthError: "stale provider error",
+  oauthClientId: null,
 };
 
 // ─── GET /api/mcp-connections ────────────────────────────────────────
@@ -378,6 +419,119 @@ describe("DELETE /api/mcp-connections/:connectionId", () => {
   });
 });
 
+// ─── DELETE /:connectionId — oauth revoke+wipe hook (Phase 197, MCPO-03 D-08) ──
+
+describe("DELETE /api/mcp-connections/:connectionId — revoke+wipe hook (Phase 197 D-08)", () => {
+  const googleDef = { id: "google", revokeUrl: "https://oauth2.googleapis.com/revoke" };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (resolveProvider as jest.Mock).mockReturnValue(googleDef);
+    (revokeProviderToken as jest.Mock).mockResolvedValue({ ok: true });
+  });
+
+  it("generic DELETE on an oauth row calls revoke (with the decrypted token) then delete — order pinned", async () => {
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue(mockConnection);
+    (prisma.mCPConnection.delete as jest.Mock).mockResolvedValue(mockConnection);
+    (decryptTokenBlob as jest.Mock).mockReturnValue({
+      ok: true,
+      blob: { accessToken: "at-token", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+
+    const res = await request(app)
+      .delete("/api/mcp-connections/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth());
+
+    expect(res.status).toBe(200);
+    expect(resolveProvider).toHaveBeenCalledWith("google");
+    expect(revokeProviderToken).toHaveBeenCalledTimes(1);
+    expect(revokeProviderToken).toHaveBeenCalledWith(googleDef, "at-token");
+    // Revoke BEFORE delete — the blob dies with the row.
+    expect((revokeProviderToken as jest.Mock).mock.invocationCallOrder[0]!).toBeLessThan(
+      (prisma.mCPConnection.delete as jest.Mock).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("non-oauth row: revoke NOT called, delete proceeds unchanged", async () => {
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue({
+      ...mockConnection,
+      authType: "none",
+      oauthProvider: null,
+      credentialsEncrypted: null,
+    });
+    (prisma.mCPConnection.delete as jest.Mock).mockResolvedValue(mockConnection);
+
+    const res = await request(app)
+      .delete("/api/mcp-connections/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth());
+
+    expect(res.status).toBe(200);
+    expect(decryptTokenBlob).not.toHaveBeenCalled();
+    expect(revokeProviderToken).not.toHaveBeenCalled();
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("decrypt-failure row: revoke NOT called AND delete STILL called (fail-open-to-wipe pin)", async () => {
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue(mockConnection);
+    (prisma.mCPConnection.delete as jest.Mock).mockResolvedValue(mockConnection);
+    (decryptTokenBlob as jest.Mock).mockReturnValue({ ok: false, errorDescription: "undecryptable" });
+
+    const res = await request(app)
+      .delete("/api/mcp-connections/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth());
+
+    expect(res.status).toBe(200);
+    expect(revokeProviderToken).not.toHaveBeenCalled();
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("unknown oauthProvider: revoke NOT called, delete STILL called (registry consumes fail-closed)", async () => {
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue({
+      ...mockConnection,
+      oauthProvider: "dropbox",
+    });
+    (prisma.mCPConnection.delete as jest.Mock).mockResolvedValue(mockConnection);
+    (resolveProvider as jest.Mock).mockReturnValue(null);
+    (decryptTokenBlob as jest.Mock).mockReturnValue({
+      ok: true,
+      blob: { accessToken: "at", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+
+    const res = await request(app)
+      .delete("/api/mcp-connections/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth());
+
+    expect(res.status).toBe(200);
+    expect(revokeProviderToken).not.toHaveBeenCalled();
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("microsoft row: revoke called with skipped:true arm — delete proceeds (D-14 local wipe primary)", async () => {
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue({
+      ...mockConnection,
+      oauthProvider: "microsoft",
+    });
+    (prisma.mCPConnection.delete as jest.Mock).mockResolvedValue(mockConnection);
+    (resolveProvider as jest.Mock).mockReturnValue({ id: "microsoft", revokeUrl: null });
+    (decryptTokenBlob as jest.Mock).mockReturnValue({
+      ok: true,
+      blob: { accessToken: "ms-token", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+    (revokeProviderToken as jest.Mock).mockResolvedValue({ ok: true, skipped: true });
+
+    const res = await request(app)
+      .delete("/api/mcp-connections/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth());
+
+    expect(res.status).toBe(200);
+    expect(revokeProviderToken).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "microsoft" }),
+      "ms-token",
+    );
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ─── POST /api/mcp-connections/:connectionId/toggle ────────────────────
 
 describe("POST /api/mcp-connections/:connectionId/toggle", () => {
@@ -594,6 +748,183 @@ describe("PUT /api/mcp-connections/:connectionId headers validation (D-12 write-
     expect(prisma.mCPConnection.update).not.toHaveBeenCalled();
   });
 });
+// ─── Phase 195 (MCPO-01, Pitfall 1 / T-195-09): response no-leak pins ───
+
+describe("response shape — credentialsEncrypted/oauthError never leak (Pitfall 1, T-195-09)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("GET / list response: credentialsEncrypted + oauthError ABSENT; non-secret oauth columns MAY be present", async () => {
+    (prisma.mCPConnection.findMany as jest.Mock).mockResolvedValue([mockConnection]);
+
+    const res = await request(app)
+      .get("/api/mcp-connections")
+      .set(adminAuth());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].credentialsEncrypted).toBeUndefined();
+    expect(res.body[0].oauthError).toBeUndefined();
+    expect("credentialsEncrypted" in res.body[0]).toBe(false);
+    expect("oauthError" in res.body[0]).toBe(false);
+    // Non-secret columns survive for the Phase 196 UI.
+    expect(res.body[0].oauthStatus).toBe("authorized");
+    expect(res.body[0].authType).toBe("oauth");
+    expect(res.body[0].oauthProvider).toBe("google");
+  });
+
+  it("POST / create response: credentialsEncrypted + oauthError ABSENT", async () => {
+    (prisma.mCPConnection.create as jest.Mock).mockResolvedValue(mockConnection);
+
+    const res = await request(app)
+      .post("/api/mcp-connections")
+      .set(adminAuth())
+      .send({ name: "Test MCP Server", url: "http://localhost:3001/mcp", projectId: "550e8400-e29b-41d4-a716-446655440001" });
+
+    expect(res.status).toBe(201);
+    expect("credentialsEncrypted" in res.body).toBe(false);
+    expect("oauthError" in res.body).toBe(false);
+    expect(res.body.oauthStatus).toBe("authorized");
+  });
+
+  it("PUT /:connectionId update response: credentialsEncrypted + oauthError ABSENT", async () => {
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue(mockConnection);
+    (prisma.mCPConnection.update as jest.Mock).mockResolvedValue({
+      ...mockConnection,
+      name: "Updated Name",
+    });
+
+    const res = await request(app)
+      .put("/api/mcp-connections/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth())
+      .send({ name: "Updated Name" });
+
+    expect(res.status).toBe(200);
+    expect("credentialsEncrypted" in res.body).toBe(false);
+    expect("oauthError" in res.body).toBe(false);
+  });
+
+  it("PUT reconnect-warning arm: credentialsEncrypted + oauthError ABSENT even with _warning", async () => {
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue(mockConnection);
+    (prisma.mCPConnection.update as jest.Mock).mockResolvedValue(mockConnection);
+    (connectMCPServer as jest.Mock).mockRejectedValue(new Error("Connection refused"));
+
+    const res = await request(app)
+      .put("/api/mcp-connections/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth())
+      .send({ name: "Updated" });
+
+    expect(res.status).toBe(200);
+    expect(res.body._warning).toContain("Reconnect failed");
+    expect("credentialsEncrypted" in res.body).toBe(false);
+    expect("oauthError" in res.body).toBe(false);
+  });
+});
+
+// ─── Phase 196 (MCPO-02 D-03a): oauthErrorSummary sanitized field pins ──
+
+describe("response shape — oauthErrorSummary sanitized field (D-03a)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("list response: oauthErrorSummary = first ≤200 chars of provider prose oauthError; oauthError + credentialsEncrypted ABSENT", async () => {
+    const longProse = "Rate limit exceeded: quota project misconfigured. ".repeat(10) + "TRAILING-DETAIL";
+    (prisma.mCPConnection.findMany as jest.Mock).mockResolvedValue([
+      { ...mockConnection, oauthError: longProse },
+    ]);
+
+    const res = await request(app)
+      .get("/api/mcp-connections")
+      .set(adminAuth());
+
+    expect(res.status).toBe(200);
+    expect("oauthError" in res.body[0]).toBe(false);
+    expect("credentialsEncrypted" in res.body[0]).toBe(false);
+    expect(res.body[0].oauthErrorSummary).toBe(longProse.slice(0, 200));
+    expect((res.body[0].oauthErrorSummary as string).length).toBeLessThanOrEqual(200);
+  });
+
+  it("create response: oauthErrorSummary present-and-bounded, secrets stripped", async () => {
+    (prisma.mCPConnection.create as jest.Mock).mockResolvedValue(mockConnection);
+
+    const res = await request(app)
+      .post("/api/mcp-connections")
+      .set(adminAuth())
+      .send({ name: "Test MCP Server", url: "http://localhost:3001/mcp", projectId: "550e8400-e29b-41d4-a716-446655440001" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.oauthErrorSummary).toBe("stale provider error");
+    expect("oauthError" in res.body).toBe(false);
+    expect("credentialsEncrypted" in res.body).toBe(false);
+  });
+
+  it("clean row (oauthError null) → oauthErrorSummary: null", async () => {
+    (prisma.mCPConnection.findMany as jest.Mock).mockResolvedValue([
+      { ...mockConnection, oauthError: null },
+    ]);
+
+    const res = await request(app)
+      .get("/api/mcp-connections")
+      .set(adminAuth());
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].oauthErrorSummary).toBeNull();
+    expect("oauthError" in res.body[0]).toBe(false);
+  });
+
+  it("PUT update response: oauthErrorSummary derived, secrets stripped", async () => {
+    (prisma.mCPConnection.findUnique as jest.Mock).mockResolvedValue(mockConnection);
+    (prisma.mCPConnection.update as jest.Mock).mockResolvedValue(mockConnection);
+
+    const res = await request(app)
+      .put("/api/mcp-connections/550e8400-e29b-41d4-a716-446655440001")
+      .set(adminAuth())
+      .send({ name: "Updated Name" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.oauthErrorSummary).toBe("stale provider error");
+    expect("oauthError" in res.body).toBe(false);
+    expect("credentialsEncrypted" in res.body).toBe(false);
+  });
+
+  it("GET /statuses payload: every row carries the six sanitized non-secret oauth fields (badge-matrix field set)", async () => {
+    (prisma.mCPConnection.findMany as jest.Mock).mockResolvedValue([mockConnection]);
+    (getConnectionStatuses as jest.Mock).mockReturnValue(new Map());
+
+    const res = await request(app)
+      .get("/api/mcp-connections/statuses")
+      .set(adminAuth());
+
+    expect(res.status).toBe(200);
+    const row = res.body[0];
+    // Exactly the six added non-secret oauth fields:
+    expect(row.authType).toBe("oauth");
+    expect(row.oauthProvider).toBe("google");
+    expect(row.oauthStatus).toBe("authorized");
+    expect(row.tokenExpiresAt).toBe("2026-01-01T01:00:00.000Z");
+    expect(row.oauthScopes).toBeNull();
+    expect(row.oauthErrorSummary).toBe("stale provider error");
+    // Secrets never ride the statuses payload either:
+    expect("credentialsEncrypted" in row).toBe(false);
+    expect("oauthError" in row).toBe(false);
+  });
+
+  it("GET /statuses: clean row → oauthErrorSummary null", async () => {
+    (prisma.mCPConnection.findMany as jest.Mock).mockResolvedValue([
+      { ...mockConnection, oauthError: null },
+    ]);
+    (getConnectionStatuses as jest.Mock).mockReturnValue(new Map());
+
+    const res = await request(app)
+      .get("/api/mcp-connections/statuses")
+      .set(adminAuth());
+
+    expect(res.body[0].oauthErrorSummary).toBeNull();
+  });
+});
+
 // ─── POST /api/chats/:chatId/pins (MCP pinning) ─────────────────────
 
 describe("POST /api/chats/:chatId/pins (D-14 global + workspace scope)", () => {

@@ -10,6 +10,11 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiDelete } from "./api";
 import { queryKeys } from "./keys";
+import type { CreateMcpCatalogEntryInput } from "@simmetric-chat/shared";
+
+// Phase 197 (MCPO-03 D-06): the create payload type rides the shared schema —
+// never re-declared client-side (root AGENTS.md schema-location rule).
+export type CreateCatalogEntryInput = CreateMcpCatalogEntryInput;
 
 export interface CatalogEntry {
   id: string;
@@ -27,6 +32,10 @@ export interface CatalogEntry {
   lastHealthCheck?: string | null;
   lastHealthError?: string | null;
   lastCommitDate?: string | null;
+  // Phase 197 (MCPO-03 D-06): optional OAuth identity — BOTH fields optional,
+  // absent-means-none rendering, so old server payloads stay byte-identical.
+  authType?: "none" | "oauth";
+  oauthProvider?: string | null;
   createdAt: string;
   updatedAt: string;
   isInstalled: boolean;
@@ -92,6 +101,23 @@ export function useDeleteMarketplaceEntry() {
   return useMutation<{ message: string }, Error, { entryId: string }>({
     mutationFn: ({ entryId }) => apiDelete<{ message: string }>(`/mcp-marketplace/${entryId}`),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.marketplace.catalog().slice(0, 2) });
+    },
+  });
+}
+
+// Phase 197 (MCPO-03 D-06): create-only catalog entry mutation — payload shape
+// mirrors createMcpCatalogEntrySchema (@simmetric-chat/shared). CREATE-ONLY
+// per UI-SPEC §5: no PUT route exists on the server — the edit arm ships when
+// the server exposes PUT /:entryId; do not invent the route.
+export function useCreateCatalogEntry() {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, CreateCatalogEntryInput>({
+    mutationFn: (payload) => apiPost<void>("/mcp-marketplace", payload),
+    onSuccess: () => {
+      // The catalog is global — invalidate the same 2-segment prefix the
+      // delete mutation uses so every cached workspace variant refetches.
       queryClient.invalidateQueries({ queryKey: queryKeys.marketplace.catalog().slice(0, 2) });
     },
   });

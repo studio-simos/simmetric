@@ -59,16 +59,16 @@ export default function ForcePasswordChange() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+    <div className="min-h-[100dvh] flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-md">
         {/* Controls bar — theme toggle */}
-        <div className="flex items-center justify-end gap-2 mb-4">
+        <div className="auth-enter flex items-center justify-end gap-2 mb-4">
           <ThemeToggle />
         </div>
 
-        <Card>
+        <Card className="auth-enter auth-enter-1">
           <CardHeader className="text-center">
-            <CardTitle className="text-2xl font-bold">{t("login.forceChange.title")}</CardTitle>
+            <CardTitle className="font-display text-2xl font-medium tracking-tight">{t("login.forceChange.title")}</CardTitle>
             <CardDescription>{t("login.forceChange.description")}</CardDescription>
           </CardHeader>
 

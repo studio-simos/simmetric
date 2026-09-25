@@ -7,6 +7,7 @@ import { Router, type Request, type Response } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { tenantContextMiddleware } from "../middleware/tenantContext";
 import { requireAdmin } from "../middleware/rbac";
+import { logger } from "../utils/logger";
 import prisma from "../utils/prisma";
 
 // Phase 185 (T-185-10, Pitfall-2 grep-gate): the findUnique site(s) in this
@@ -157,3 +158,72 @@ router.get("/top-users", async (req: Request, res: Response) => {
 });
 
 export default router;
+// GET /api/system/analytics/cost?days=N — per-currency daily cost aggregates
+// (Phase 203, D8: per-currency grouped — NEVER summed cross-currency).
+router.get("/cost", async (req: Request, res: Response) => {
+  try {
+    const days = Math.min(parseInt(String(req.query.days) || "30", 10) || 30, 365);
+    const since = new Date(Date.now() - days * 24 * 3600 * 1000);
+    const rows = await prisma.workspaceTokenUsage.findMany({
+      where: { createdAt: { gte: since }, totalCost: { not: null } },
+      select: { promptCost: true, completionCost: true, totalCost: true, currency: true, createdAt: true },
+    });
+    const byDayCurrency = new Map<string, { promptCost: number; completionCost: number; totalCost: number }>();
+    for (const r of rows) {
+      const key = `${r.createdAt.toISOString().slice(0, 10)}|${r.currency}`;
+      const entry = byDayCurrency.get(key) ?? { promptCost: 0, completionCost: 0, totalCost: 0 };
+      entry.promptCost += Number(r.promptCost ?? 0);
+      entry.completionCost += Number(r.completionCost ?? 0);
+      entry.totalCost += Number(r.totalCost ?? 0);
+      byDayCurrency.set(key, entry);
+    }
+    const daily = [...byDayCurrency.entries()].map(([k, v]) => {
+      const [date, currency] = k.split("|");
+      return { date, currency, ...v };
+    });
+    const totalByCurrency: Record<string, number> = {};
+    for (const [, v] of byDayCurrency) {
+      void v;
+    }
+    const totals = new Map<string, number>();
+    for (const [, v] of byDayCurrency) {
+      void v;
+    }
+    // per-currency totals from the same rows
+    const perCurrency = new Map<string, number>();
+    for (const r of rows) {
+      const cur = r.currency ?? "USD";
+      perCurrency.set(cur, (perCurrency.get(cur) ?? 0) + Number(r.totalCost ?? 0));
+    }
+    for (const [cur, total] of perCurrency) totalByCurrency[cur] = total;
+    res.json({ days, daily: [...byDayCurrency.entries()].map(([key, v]) => { const [date, currency] = key.split("|"); return { date, currency, ...v }; }), totalByCurrency });
+  } catch (err: unknown) {
+    logger.error("[analytics] Error computing cost", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /api/system/analytics/cost-by-model — per-model per-currency cost rows.
+router.get("/cost-by-model", async (req: Request, res: Response) => {
+  try {
+    const byModel = await prisma.workspaceTokenUsage.groupBy({
+      by: ["model", "currency"],
+      _sum: { promptCost: true, completionCost: true, totalCost: true },
+    });
+    const rows = byModel.map((m) => ({
+      model: m.model,
+      currency: m.currency,
+      promptCost: m._sum.promptCost === null ? null : Number(m._sum.promptCost),
+      completionCost: m._sum.completionCost === null ? null : Number(m._sum.completionCost),
+      totalCost: m._sum.totalCost === null ? null : Number(m._sum.totalCost),
+    }));
+    res.json({ byModel: rows });
+  } catch (err: unknown) {
+    logger.error("[analytics] Error computing cost-by-model", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    res.status(500).json({ error: "Internal server error" });
+  }
+});

@@ -7,7 +7,7 @@ import { useState, useEffect, useEffectEvent, lazy, Suspense, type ReactNode } f
 import { useTranslation } from "react-i18next";
 import { usePageMeta } from "@/hooks/usePageMeta";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useMe, useLogout } from "../queries/useAuth";
+import { useMe, useLogout, useMenuSections } from "../queries/useAuth";
 import { useSettings } from "../queries/useSettings";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { ApiError } from "../utils/api";
@@ -20,11 +20,15 @@ import SettingsLLM from "./SettingsLLM";
 import SettingsProviders from "./SettingsProviders";
 import SettingsVectorDB from "./SettingsVectorDB";
 import SettingsUsers from "./SettingsUsers";
+import SettingsAgencyUsers from "./SettingsAgencyUsers";
 // Phase 189 (WSIS-03, D-19): per-workspace admin access panel.
 import SettingsWorkspaceAccess from "./SettingsWorkspaceAccess";
 import SettingsApiKeys from "./SettingsApiKeys";
 import SettingsRoles from "./SettingsRoles";
 import SettingsMcpConnections from "./SettingsMcpConnections";
+// Phase 199 (199-02, ECCO-05): external chat-connector admin panel —
+// Settings sub-section beside mcpConnections (D-08, no new route).
+import SettingsConnectors from "./SettingsConnectors";
 import {
   SettingsProfilePersonal,
   SettingsProfileInstructions,
@@ -35,6 +39,7 @@ import {
   SettingsGeneralLanguages,
   SettingsGeneralResetDb,
 } from "./SettingsGeneral";
+import { SettingsQuotaPresets } from "./SettingsQuotaPresets";
 import SettingsOcr from "./SettingsOcr";
 import SettingsSynthesis from "./SettingsSynthesis";
 import SettingsMaintenance from "./SettingsMaintenance";
@@ -105,7 +110,7 @@ const SettingsBackups = lazy(() => import("./SettingsBackups"));
  *    then on.
  */
 
-type Tab = "profile" | "llm" | "appearance" | "security" | "advanced";
+type Tab = "profile" | "llm" | "appearance" | "security" | "advanced" | "team";
 
 /**
  * Canonical sub-section ids. Each maps to a labelled `<SubSection>` inside a
@@ -114,6 +119,7 @@ type Tab = "profile" | "llm" | "appearance" | "security" | "advanced";
  * deep link.
  */
 type SectionId =
+  | "quotaPresets"
   | "personalInfo"
   | "customInstructions"
   | "languages"
@@ -139,12 +145,19 @@ type SectionId =
   | "dlpPatterns"
   | "templates"
   | "chatData"
+  // Phase 206 (AGENCY-01, D-10): team tab (agencyUsers voice).
+  | "agencyUsers"
   | "resetDb"
   // Phase 189 (WSIS-03, D-19): admin per-workspace access panel (Security tab).
-  | "workspaceAccess";
+  | "workspaceAccess"
+  // Phase 199 (199-02, ECCO-05): external chat-connector admin panel (D-08).
+  | "connectors"
+  // Phase 206 (AGENCY-01, D-10): agency team-management voice (team tab).
+  | "agencyUsers";
 
 /** i18n label key for each sub-section id (matches `settings.subSections.*`). */
 const SECTION_LABEL: Record<SectionId, string> = {
+  quotaPresets: "settings.quotaPresets.title",
   personalInfo: "settings.subSections.personalInfo",
   customInstructions: "settings.subSections.customInstructions",
   languages: "settings.subSections.languages",
@@ -173,6 +186,10 @@ const SECTION_LABEL: Record<SectionId, string> = {
   resetDb: "settings.subSections.resetDb",
   // Phase 189 (WSIS-03, D-19): admin per-workspace access panel.
   workspaceAccess: "settings.subSections.workspaceAccess",
+  // Phase 199 (199-02, ECCO-05): external chat-connector admin panel.
+  connectors: "settings.subSections.connectors",
+  // Phase 206 (AGENCY-01, D-10): agency team voice.
+  agencyUsers: "settings.subSections.agencyUsers",
 };
 
 /** DOM anchor id for a sub-section — used by SettingsMenu scroll-to-section. */
@@ -203,6 +220,8 @@ const TAB_KEYS: { key: Tab; labelKey: string }[] = [
   { key: "appearance", labelKey: "settings.tabs.appearance" },
   { key: "security", labelKey: "settings.tabs.security" },
   { key: "advanced", labelKey: "settings.tabs.advanced" },
+  // Phase 206 (AGENCY-01, D-10): agency team-management tab (permission-gated).
+  { key: "team", labelKey: "settings.tabs.team" },
 ];
 
 // Map every legacy sub-section key (and the canonical ones) onto one of the 5
@@ -248,6 +267,9 @@ const LEGACY_TAB_MAP: Record<string, Tab> = {
   chatData: "advanced",
   resetdb: "advanced",
   resetDb: "advanced",
+  // Phase 199 (199-02, ECCO-05): deep-link parity for the connectors
+  // sub-section (the mcpconnections/mcpConnections twin precedent).
+  connectors: "advanced",
   advanced: "advanced",
 };
 
@@ -349,6 +371,11 @@ function GroupPage({ tab }: { tab: Tab }) {
       // The appearance tab is a single sub-section: its group page renders
       // it directly, so a group-header click never lands on a blank page.
       return <SettingsAppearance />;
+    case "team":
+      // Phase 206 (AGENCY-01, D-10): single-component tab (appearance idiom) —
+      // all option lists arrive server-derived; the client never computes
+      // the lattice.
+      return <SettingsAgencyUsers />;
     case "security":
       return (
         <div className="space-y-8">
@@ -387,6 +414,13 @@ function GroupPage({ tab }: { tab: Tab }) {
           <SubSection id="mcpConnections" label={t("settings.subSections.mcpConnections")} show={has("admin:settings")}>
             <SettingsMcpConnections />
           </SubSection>
+          {/* Phase 199 (199-02, ECCO-05): external chat-connector admin
+              panel — directly below mcpConnections. Gate is connector:view
+              (D-08: a view-only admin sees the cards; actions are gated
+              connector:manage inside the panel). */}
+          <SubSection id="connectors" label={t("settings.subSections.connectors")} show={has("connector:view")}>
+            <SettingsConnectors />
+          </SubSection>
           <SubSection id="maintenance" label={t("settings.subSections.maintenance")} show={has("admin:settings")}>
             <SettingsMaintenance />
           </SubSection>
@@ -419,6 +453,10 @@ function GroupPage({ tab }: { tab: Tab }) {
             {/* Phase 192 (UI-SPEC surface 4): eval-gate + backfill panel sits
                 DIRECTLY below the chat-side DLP card, same sub-section. */}
             <DlpDocumentScanPanel />
+          </SubSection>
+          <SubSection id="quotaPresets" label={t("settings.quotaPresets.title")} show={has("admin:settings")}>
+            {/* Phase 207 (CLOUD-04, D-08): install-level quota presets. */}
+            <SettingsQuotaPresets />
           </SubSection>
           <SubSection id="webSearch" label={t("settings.subSections.webSearch")} show={has("admin:settings")}>
             <SettingsWebSearch />
@@ -486,6 +524,9 @@ function SectionPage({ id }: { id: SectionId }) {
       );
     case "appearance":
       return <SettingsAppearance />;
+    // Phase 206 (AGENCY-01): detail arm for the agencyUsers voice.
+    case "agencyUsers":
+      return <SettingsAgencyUsers />;
     case "roles":
       return <SettingsRoles />;
     case "users":
@@ -504,6 +545,9 @@ function SectionPage({ id }: { id: SectionId }) {
       return <SettingsApiKeys />;
     case "mcpConnections":
       return <SettingsMcpConnections />;
+    // Phase 199 (199-02, ECCO-05): the only new component mount (D-08).
+    case "connectors":
+      return <SettingsConnectors />;
     case "maintenance":
       return <SettingsMaintenance />;
     case "backups":
@@ -591,8 +635,14 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
     }
   }, [activeTab]);
 
-  // Filter tabs based on user permissions (OR on sub-section perms).
+  // Filter tabs: Phase 206 (VIS-01, D-15) — the SERVER-resolved
+  // settingsSections win when the visibility payload is present; the
+  // SETTINGS_TAB_PERMISSIONS OR-permissions stay as the in-code fallback
+  // (defensive when the payload lacks the key).
+  const { data: visibilityData } = useMenuSections();
+  const serverSettingsSections = visibilityData?.settingsSections;
   const visibleTabs = TAB_KEYS.filter((tab) => {
+    if (serverSettingsSections) return serverSettingsSections.includes(tab.key);
     const requiredPerms = SETTINGS_TAB_PERMISSIONS[tab.key];
     if (!requiredPerms || requiredPerms.length === 0) return true;
     return requiredPerms.some((p: string) => permissions.includes(p));
@@ -653,6 +703,11 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
         ];
       case "appearance":
         return [{ id: "appearance", show: true }];
+      // Phase 206 (AGENCY-01, D-10): the team tab renders its single
+      // component directly in the detail area (appearance idiom); the voice
+      // mirrors that with a permission-gated show flag.
+      case "team":
+        return [{ id: "agencyUsers", show: has("agency:users:manage") }];
       case "security":
         return [
           { id: "roles", show: has("admin:roles") },
@@ -672,6 +727,9 @@ export default function SettingsPage({ embedded = false }: { embedded?: boolean 
           { id: "vectorDB", show: has("admin:settings") },
           { id: "apiKeys", show: has("admin:settings") },
           { id: "mcpConnections", show: has("admin:settings") },
+          // Phase 199 (199-02, ECCO-05): connectors sub-section voice —
+          // gated connector:view (menu/page parity with the SubSection).
+          { id: "connectors", show: has("connector:view") },
           { id: "maintenance", show: has("admin:settings") },
           {
             id: "backups",

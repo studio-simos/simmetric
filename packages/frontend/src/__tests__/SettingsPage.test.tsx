@@ -73,6 +73,9 @@ jest.mock("../hooks/use-mobile", () => ({
 jest.mock("../queries/useAuth", () => ({
   useMe: (...args: Parameters<typeof mockUseMe>) => mockUseMe(...args),
   useLogout: () => ({ mutate: mockLogoutMutate, mutateAsync: jest.fn() }),
+  // Phase 206 (D-15): the SettingsPage consumes the server-resolved
+  // visibility payload — tests keep the permission-fallback path by default.
+  useMenuSections: () => ({ data: undefined, isLoading: false }),
 }));
 
 // Mock settings query

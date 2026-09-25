@@ -82,6 +82,19 @@ export const TENANT_READ_MODELS = new Set<string>([
   // seeded builtin rows carry the default org, so no DlpPattern-class exemption
   // entry is needed. Cross-org custom reads fail closed via the AND-merge.
   "AgentSkill",
+  // Phase 198 (ECCO-01, D-01): chat-inbound connectors are org-owned rows
+  // (direct non-null organizationId sentinel like Widget) — the webhook tenant
+  // slot (198-01b) runs inside runInTenant, so tenant reads AND-merge org.
+  // ConnectorSession joins because the ConnectorChat continuity path reads
+  // sessions inside tenant scope; ConnectorMessage stays OUT (no org column,
+  // Tier-B transitive scoping via the session's connector row, mirroring the
+  // WidgetSession exclusion note above).
+  "ChatConnector",
+  "ConnectorSession",
+  // Phase 202 (research Open Q 1): PluginInstall stays OUT — instance-scoped
+  // admin surface (nullable org seam column, null = instance-scoped),
+  // mirroring the ProviderPreset/McpCatalogEntry documented class exemption.
+  // Managed by the admin who uploaded the zip (D6 trust model).
 ]);
 
 /** Read + org-pinnable write ops (updateMany/deleteMany carry where). */

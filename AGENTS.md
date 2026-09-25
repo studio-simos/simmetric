@@ -15,16 +15,14 @@ Five packages, strict unidirectional deps — `@simmetric-chat/shared` is the ON
 
 Module formats differ per package: root + frontend are ESM; server, collector, shared, widget are CJS. Respect each package's tsconfig `module`.
 
-## Enterprise plugin
+## Private plugin packages
 
-The enterprise package (`simmetric-enterprise/`) is a SEPARATE private repo (IP isolation + air-gap + single-package contract). It is NOT a community dependency. Four subsections below.
+TWO optional private sibling repos (IP isolation + air-gap + single-package contract), wired via `pnpm-workspace.yaml` overrides as `link:../simmetric-*`:
 
-### Package boundary
+- `simmetric-enterprise/` → `@simmetric-chat/enterprise`, loaded by `packages/server/src/services/enterpriseLoader.ts` — SSO, audit log, white-label branding, backup, license-limit overrides.
+- `simmetric-saas/` → `@simmetric-chat/saas`, loaded by `packages/server/src/services/saasLoader.ts` — SaaS plugin (Phase 186); same seam pattern, but with an `apiVersion` acceptance check (`pluginLoaderCore.ts`).
 
-- The enterprise package imports ONLY `@simmetric-chat/shared` (Zod schemas, constants, types) — never server/frontend/collector/widget.
-- The community repo imports NOTHING from enterprise. The loader's `require.resolve("@simmetric-chat/enterprise")` (in `packages/server/src/services/enterpriseLoader.ts`) is the ONLY seam.
-- If absent, the server runs in community mode (graceful degradation — `MODULE_NOT_FOUND` is caught and logged at info level, "Community build — no enterprise package found"). A broken install (load throws) is fail-LOUD (`process.exit(1)` — never silently degrade a paying customer).
-- The enterprise package provides SSO (Phase 143), audit log (Phase 144), white-label branding (Phase 145), and backup (Phase 146). Phase 147 added the license-limit override resolver.
+Both live in the parent dir (`../simmetric-enterprise`, `../simmetric-saas`); both import ONLY `@simmetric-chat/shared`; the community repo imports NOTHING from them — the loaders' `require.resolve()` are the ONLY seams. If absent, community mode (graceful degradation — `MODULE_NOT_FOUND` caught, logged at info). A broken install (load throws) is fail-LOUD (`process.exit(1)` — never silently degrade a paying customer). `autoInstallPeers: false` in `pnpm-workspace.yaml` keeps `pnpm install` from hard-failing on the registry when the private packages are absent.
 
 ### PluginContext contract
 
@@ -61,9 +59,9 @@ No npm install, no phone-home, no telemetry. The license service is read-only + 
 
 ### Boot order
 
-`prisma.$connect()` → `initLicense()` (validates JWT, builds `tierFeatures`) → `loadEnterprisePlugin(app)` (calls `register(ctx)` which mounts routes, registers schedulers, calls `overrideFeatureLimit`) → routes live.
+`prisma.$connect()` → `initLicense()` (validates JWT, builds `tierFeatures`) → `loadEnterprisePlugin(app)` → `loadSaaSPlugin(app)` (each calls `register(ctx)` which mounts routes, registers schedulers, calls `overrideFeatureLimit`) → routes live.
 
-The enterprise plugin loads AFTER the license is validated so `ctx.licenseInfo` reflects the current tier. Enforced by `packages/server/src/__tests__/bootOrder.test.ts`. See `packages/server/src/index.ts` for the boot sequence.
+The plugins load AFTER the license is validated so `ctx.licenseInfo` reflects the current tier. Enforced by `packages/server/src/__tests__/bootOrder.test.ts`. See `packages/server/src/index.ts` for the boot sequence.
 
 ## Two-repo topology (public = primary)
 
@@ -92,7 +90,7 @@ pnpm test:e2e                # Playwright — see below
 - **ROOT `.env` is THE single runtime config.** Bootstrap + shared secrets (`DATABASE_URL`, `JWT_SECRET`, `COLLECTOR_SECRET`, `WIDGET_API_KEY`, `API_KEY_HMAC_SECRET`, optional `ENCRYPTION_KEY`/`REDIS_URL`/`LICENSE_KEY`) live in the repo-root `.env` (gitignored); template: root `.env.example` — the single exhaustive file documenting EVERY schema key of every package, organized in per-package sections with `[server]`/`[collector]`/`[widget]` applicability markers (guarded by the three `envExampleParity` tripwires, which all point at the root file). The per-package `.env` override layer was REMOVED (Phase 177 cleanup): `packages/{server,collector,widget}/.env` no longer exist and are never read. Loader resolution: `process.env > root .env > Zod default` (root-only `loadRootEnv()` in `packages/shared/src/config/loadEnv.ts`, marker-walk to the repo root; containers get env via compose `env_file`, Tauri packaged layout falls back gracefully). `packages/server/.env.test` stays tracked for tests.
 - Strictly required (Zod `.min(1)` in `packages/server/src/config/env.ts`): `JWT_SECRET` and `COLLECTOR_SECRET`. `DATABASE_URL` has a code default, and `LICENSE_KEY` is optional — `licenseService.initLicense()` falls back to Community when missing (a working Enterprise JWT enables widget/SSO/webhooks/etc. — the committed `.env.test` does NOT carry the JWT; the gitignored `.env` does, read by E2E `globalSetup`).
 - Default DB (code default in `packages/server/src/config/env.ts`): `postgresql://simmetricchat:simmetricchat@host.docker.internal:5432/simmetricchat` (the tracked root `.env.example` uses `host.docker.internal:5432` with a comment listing the `localhost:5432` host-native alternative; `docs/GETTING_STARTED.md` / `docs/DEPLOYMENT.md` document both variants). Vector DB defaults to LanceDB (local); LLM defaults to Ollama.
-- The server loads env on boot. **Precedence (code-verified, `systemConfigService.ts`):** `ALWAYS_READONLY` infra keys (JWT_SECRET, DATABASE_URL, SERVER_PORT, COLLECTOR_PORT, SERVER_URL, COLLECTOR_URL) are ENV-only, never DB; every other UI-editable key resolves DB > ENV > default (the DB wins — UI edits take effect immediately). Versioning is pre-1.0 beta: root `package.json` tracks the latest 0.x tag (v0.21 = debt sweep line, rebased from the never-published 1.x numbering).
+- The server loads env on boot. **Precedence (code-verified, `systemConfigService.ts`):** `ALWAYS_READONLY` infra keys (JWT_SECRET, DATABASE_URL, SERVER_PORT, COLLECTOR_PORT, SERVER_URL, COLLECTOR_URL) are ENV-only, never DB; every other UI-editable key resolves DB > ENV > default (the DB wins — UI edits take effect immediately). Versioning is pre-1.0 beta: root `package.json` tracks the latest 0.x tag (currently v0.25; `pnpm version:check` enforces root version ≡ latest tag on major.minor — bump via `pnpm version:bump <ver>`, which updates all 6 package.json files + CHANGELOG).
 
 ## Migrations
 

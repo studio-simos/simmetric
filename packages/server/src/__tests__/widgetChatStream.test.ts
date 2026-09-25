@@ -224,6 +224,21 @@ describe("POST /api/internal/widget/chat/stream — validation", () => {
     (prisma.workspace.findFirst as jest.Mock).mockResolvedValue({
       organizationId: "org-widget-default",
     });
+    // Phase 207 (D-05/P2): widget quota principal = the org's first admin —
+    // resolved via workspace.findUnique + organizationMember.findFirst; the
+    // owner's quota defaults to unlimited so the gate passes.
+    (prisma.workspace.findUnique as jest.Mock).mockResolvedValue({
+      organizationId: "org-widget-default",
+    });
+    (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+      userId: "widget-org-owner",
+    });
+    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+      tokenQuotaLimit: null, tokenQuotaUnlimited: true,
+      storageQuotaGb: null, storageQuotaUnlimited: true,
+    });
+    (prisma.quotaReset as any).findFirst.mockResolvedValue(null);
+    (prisma.workspaceTokenUsage as any).aggregate.mockResolvedValue({ _sum: { totalTokens: 0 } });
   });
 
   it("returns 400 with details for an invalid body (no message)", async () => {

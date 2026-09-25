@@ -41,6 +41,7 @@ import type { SidebarDropdownItem } from "./sidebar";
 import SidebarDropdown from "./sidebar/SidebarDropdown";
 import { buildNavGroups, LockBadge, isActiveNavPath } from "./sidebar/navModel";
 import type { NavGroup } from "./sidebar/navModel";
+import { preloadRoute } from "./routePreload";
 import { cn } from "@/lib/utils";
 
 export interface AppNavOverlayProps {
@@ -87,6 +88,10 @@ export default function AppNavOverlay({
     onClose();
     navigate(path);
   };
+
+  // bundle-preload: warm the destination's lazy chunk on hover/focus so the
+  // click lands without a chunk fetch (mirrors AppSidebarNav wiring).
+  const handleEntryHover = (path: string) => () => preloadRoute(path);
 
   const isActivePath = (path: string) => isActiveNavPath(location.pathname, path);
 
@@ -200,6 +205,8 @@ export default function AppNavOverlay({
                 key={entry.id}
                 value={navValue(entry.labelKey, entry.keywords)}
                 onSelect={() => navigateTo(entry.path)}
+                onMouseEnter={handleEntryHover(entry.path)}
+                onFocus={handleEntryHover(entry.path)}
               >
                 {entry.icon}
                 <span className={cn(isActivePath(entry.path) && "text-primary font-medium")}>
@@ -262,6 +269,8 @@ export default function AppNavOverlay({
                     key={entry.id}
                     value={navValue(entry.labelKey, entry.keywords)}
                     onSelect={() => navigateTo(entry.path)}
+                    onMouseEnter={handleEntryHover(entry.path)}
+                    onFocus={handleEntryHover(entry.path)}
                   >
                     {entry.icon}
                     <span className={cn(isActivePath(entry.path) && "text-primary font-medium")}>
@@ -287,6 +296,8 @@ export default function AppNavOverlay({
                 key={entry.id}
                 type="button"
                 onClick={() => navigateTo(entry.path)}
+                onMouseEnter={handleEntryHover(entry.path)}
+                onFocus={handleEntryHover(entry.path)}
                 className={cn(
                   "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-left transition-colors",
                   "hover:bg-accent hover:text-accent-foreground",

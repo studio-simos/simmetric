@@ -12,9 +12,13 @@ export type { CreateArchiveInput, UpdateArchiveInput, CreatePageInput, UpdatePag
 export { createProjectSchema, updateProjectSchema } from "./project.schema";
 export type { CreateProjectInput } from "./project.schema";
 
+// Phase 207 (CLOUD-03/04/06) — quota engine contracts
+export { quotaKindSchema, quotaBreachPayloadSchema, updateQuotaInputSchema, manualResetSchema, quotaPresetSchema, quotaUsageSchema } from "./quota.schema";
+export type { QuotaKindInput, QuotaBreachPayload, UpdateQuotaInput, ManualResetInput, QuotaPresetInput, QuotaUsage } from "./quota.schema";
+
 export { createWorkspaceSchema, updateWorkspaceSchema, permanentDeleteWorkspacesSchema } from "./workspace.schema";
 
-export { chatRequestSchema, renameChatSchema, updateChatModelSchema, linkArchiveSchema, createFolderSchema, updateFolderSchema, moveChatSchema, editMessageSchema } from "./chat.schema";
+export { chatRequestSchema, renameChatSchema, updateChatModelSchema, linkArchiveSchema, createFolderSchema, updateFolderSchema, moveChatSchema, editMessageSchema, chatListQuerySchema } from "./chat.schema";
 export type { AgentPlan } from "./chat.schema";
 
 // Phase 190 (SKIL-01..05) — custom prompt-template skill contracts +
@@ -28,14 +32,48 @@ export type { AgentPlan } from "./chat.schema";
 // module.
 export { createSkillSchema, updateSkillSchema, testSkillSchema, skillIdParamSchema, RESERVED_SLUGS } from "./skill.schema";
 
-export { bulkDeleteDocumentsSchema } from "./document.schema";
+// Phase 202 (PLGM-01/03/05) — plugin-manager contracts: the secrets-stripped
+// serialized row (pluginRowSchema — licenseKeyEncrypted/packageJson are NEVER
+// in this whitelisted surface, P4), the list envelope with the server-owned
+// restartMode, the toggle/license bodies, and the :id param guard.
+// Consumed by server routes/plugins.ts (202-04) + frontend usePlugins/PluginPage.
+export {
+  pluginRowSchema,
+  pluginListResponseSchema,
+  updatePluginSchema,
+  setPluginLicenseSchema,
+  verifyPluginLicenseSchema,
+  pluginIdParamSchema,
+} from "./pluginManager.schema";
+export type {
+  PluginRow,
+  PluginListResponse,
+} from "./pluginManager.schema";
+
+export { bulkDeleteDocumentsSchema, updateDocumentTextSchema, documentListQuerySchema } from "./document.schema";
 
 export { configKeySchema, bulkSetConfigSchema } from "./config.schema";
 export type { ConfigKey, SetConfigInput } from "./config.schema";
 
 export { chatRetentionSchema } from "./chatRetention.schema";
 
-export { createRoleSchema, updateRoleSchema, roleIdParamSchema } from "./role.schema";
+/**
+ * @latentByDesign — roleSectionVisibilitySchema + its inferred type ship with
+ * plan 01 (206-VERIFICATION W0) and get their route consumer in plan 03
+ * (PUT /api/roles/:roleId/visibility, VIS-01 D-14/D-16).
+ */
+export { createRoleSchema, updateRoleSchema, roleIdParamSchema, roleSectionVisibilitySchema } from "./role.schema";
+/** @latentByDesign — paired type of roleSectionVisibilitySchema (plan 03). */
+export type { RoleSectionVisibilityInput } from "./role.schema";
+// Phase 206 (AGENCY-01..04 D-07): agency sub-user contracts.
+/**
+ * @latentByDesign — resetSubUserPasswordSchema + updateSubUserSchema (+ paired
+ * inferred types) ship in plan 02 and get their lifecycle consumers in plan
+ * 04 (disable/enable/reset routes, D-05/D-06).
+ */
+export { createSubUserSchema, resetSubUserPasswordSchema, updateSubUserSchema } from "./agency.schema";
+/** @latentByDesign — Reset/Update paired types; consumers = plan 04 lifecycle routes. */
+export type { CreateSubUserInput, ResetSubUserPasswordInput, UpdateSubUserInput } from "./agency.schema";
 
 // Phase 189 (WSIS-03, D-18): route-specific workspace-access contracts —
 // grant (WITHOUT the optional workspaceId; route takes it from the URL),
@@ -72,7 +110,41 @@ export { widgetChatRequestSchema, widgetSessionCreateSchema, createWidgetSchema,
 export type { WidgetConfigResponse, WidgetCredits, WidgetContactOptions, WidgetWorkspaceArchiveFilterInput } from "./widget.schema";
 
 export { createMcpConnectionSchema, updateMcpConnectionSchema, toggleMcpConnectionSchema, mcpConnectionIdParamSchema, mcpCatalogEntryIdParamSchema, installMcpServerSchema, uninstallMcpServerSchema, mcpHeadersSchema } from "./mcpConnection.schema";
+/**
+ * @latentByDesign — 195-01 shipped both oauth schemas for the Phase 196 UI
+ * ("EXPORTED for the Phase 196 UI badges", mcpConnection.schema.ts); the
+ * badges render status inline today — the named schemas await that wiring.
+ */
+export { oauthStatusSchema, oauthStartResponseSchema } from "./mcpConnection.schema";
+/**
+ * @latentByDesign — paired inferred types (Phase 196 UI badges).
+ */
+export type { OauthStatus, OauthStartResponse } from "./mcpConnection.schema";
 
+// Phase 197 (MCPO-03 D-04) — OAuth-capable marketplace catalog entry schemas
+// (create-only route consumption; the update schema exists for shape parity).
+export { createMcpCatalogEntrySchema } from "./mcpConnection.schema";
+export type { CreateMcpCatalogEntryInput } from "./mcpConnection.schema";
+/**
+ * @latentByDesign — 197-02 shipped the update schema deliberately (own
+ * z.object, never .partial(), 15 tests) with NO PUT route: the marketplace
+ * is create-only per UI-SPEC §5 (197-VERIFICATION "Latent only — no route
+ * consumes updateMcpCatalogEntrySchema today"). It becomes the live gate
+ * when the catalog-update route lands.
+ */
+export { updateMcpCatalogEntrySchema } from "./mcpConnection.schema";
+/**
+ * @latentByDesign — paired inferred type of updateMcpCatalogEntrySchema
+ * (see the schema tag above — 197-02, marketplace is create-only today).
+ */
+export type { UpdateMcpCatalogEntryInput } from "./mcpConnection.schema";
+
+// Phase 198 (ECCO-01, D-03) — external chat-connector contracts. Only the
+// route-consumed schemas ride the barrel: the platform/pollMode enums are
+// module-private composition inputs of the create/update/validate schemas
+// (the routes never import them directly), and the inferred *Input types
+// were never consumed (routes infer inline) — pruned by the knip sweep.
+export { createConnectorSchema, updateConnectorSchema, validateTokenSchema, webhookSetupSchema, connectorIdParamSchema } from "./connector.schema";
 
 export { chatIdParamSchema, createMcpPinSchema, mcpPinIdParamSchema } from "./mcpPins.schema";
 
@@ -91,8 +163,22 @@ export type { OcrPageRetryRequest } from "./ocr.schema";
 export { wikiWritePreviewSchema, wikiWriteApproveRejectSchema, wikilinkResolveSchema, wikiDistillSchema, mergePagesSchema } from "./wiki.schema";
 
 
-export { providerTypeSchema, createProviderSchema, updateProviderSchema, updateProviderModelSchema, providerPresetIdParamSchema, installProviderPresetSchema } from "./provider.schema";
+export { providerTypeSchema, createProviderSchema, updateProviderSchema, updateProviderModelSchema, providerPresetIdParamSchema, installProviderPresetSchema, updateModelPricingSchema } from "./provider.schema";
+/**
+ * @latentByDesign — Phase 203 shared cost contract (spec §2.7): the server
+ * (providers.ts PUT/GET/RESET + routes/chatCost.ts) validates and builds
+ * these shapes inline today; the deferred 203-03/04 UI (Costi tab, chat
+ * badge, pricing dialog) is the named consumer
+ * (TODO/MODEL_COST_CONTROL_SPEC.md). Time-boxed — remove the tag when the
+ * UI wiring lands.
+ */
+export { costSchema, chatCostResponseSchema, todayCostResponseSchema } from "./provider.schema";
 export type { ProviderType } from "./provider.schema";
+/**
+ * @latentByDesign — paired inferred types of the Phase 203 cost contract
+ * (see the costSchema tag above; consumed by the deferred UI query layer).
+ */
+export type { UpdateModelPricingInput, CostBreakdown, ChatCostResponse, TodayCostResponse } from "./provider.schema";
 
 
 

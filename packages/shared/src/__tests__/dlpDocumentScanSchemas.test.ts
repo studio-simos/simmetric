@@ -228,9 +228,19 @@ describe("dlp:unmask permission", () => {
     expect(PERMISSION_NAMES).toContain("dlp:unmask");
   });
 
-  it("is the 36th permission entry", () => {
-    expect(PERMISSION_NAMES.length).toBe(36);
+  it("is the 36th permission entry (37th is Phase 195 mcp:oauth:manage; 38th/39th are Phase 198 connector:manage/connector:view; 40th is Phase 202 plugins:manage; 41st is Phase 206 agency:users:manage)", () => {
     expect(PERMISSION_NAMES[35]).toBe("dlp:unmask");
+    // Phase 195 (MCPO-01 D-15): the array grew to 37 with mcp:oauth:manage
+    // appended AFTER dlp:unmask — dlp:unmask keeps its index-36 position.
+    // Phase 198 (ECCO-01 D-04): 37 → 39 with connector:manage/connector:view.
+    // Phase 202 (PLGM-05 D-08): 39 → 40 with plugins:manage appended.
+    // Phase 206 (AGENCY-03 D-07): 40 → 41 with agency:users:manage appended.
+    expect(PERMISSION_NAMES.length).toBe(41);
+    expect(PERMISSION_NAMES[36]).toBe("mcp:oauth:manage");
+    expect(PERMISSION_NAMES[37]).toBe("connector:manage");
+    expect(PERMISSION_NAMES[38]).toBe("connector:view");
+    expect(PERMISSION_NAMES[39]).toBe("plugins:manage");
+    expect(PERMISSION_NAMES[40]).toBe("agency:users:manage");
   });
 
   it("DEFAULT_ADMIN_ROLE auto-gains it via the spread", () => {

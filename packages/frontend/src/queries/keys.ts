@@ -16,6 +16,21 @@ export const queryKeys = {
     menuSections: ["auth", "menuSections"] as const,
     registration: ["auth", "registration"] as const,
   },
+  // Phase 206 (VIS-01, D-16): per-role visibility resolution + toggles.
+  roles: {
+    visibility: (roleId: string) => ["roles", "visibility", roleId] as const,
+  },
+  // Phase 206 (AGENCY-01/02, plan 05): agency team-management queries.
+  agency: {
+    users: ["agency", "users"] as const,
+    ceiling: ["agency", "ceiling"] as const,
+    delegatable: ["agency", "delegatable"] as const,
+  },
+  // Phase 207 (Plan 04): admin quota read/write/reset keys.
+  quota: {
+    user: (userId: string) => ["quota", "user", userId] as const,
+    presets: ["quota", "presets"] as const,
+  },
   // Phase 152-03 (WIZ-01, D-04) — system state queries. `isInitialized`
   // drives the App.tsx wizard-vs-login gate (always refetch on mount —
   // staleTime: 0 in useSystem.ts). Probe query keys embed the request
@@ -83,6 +98,30 @@ export const queryKeys = {
     list: ["mcpConnections", "list"] as const,
     detail: (id: string) => ["mcpConnections", "detail", id] as const,
     statuses: ["mcpConnections", "statuses"] as const,
+  },
+  // Phase 199 (199-02, ECCO-05) — external chat-connector admin UI. Mirrors
+  // the mcpConnections block shape; every mutation in useConnectors.ts
+  // invalidates queryKeys.connectors.list.
+  connectors: {
+    list: ["connectors", "list"] as const,
+    detail: (id: string) => ["connectors", "detail", id] as const,
+    // Phase 200 (D-05): the OAuth-provider visibility signal (GET
+    // /connectors/oauth/providers) — the Connect-with-Slack button's
+    // configured gate.
+    oauthProviders: ["connectors", "oauthProviders"] as const,
+  },
+  // Phase 202 (PLGM-05, 202-04) — plugin-manager admin UI. Mirrors the
+  // connectors block shape; every mutation in usePlugins.ts invalidates
+  // queryKeys.plugins.list. restartMode rides the list envelope (A-2).
+  // Phase 203 (MCC): cost keys — chat/today/modelPricing.
+  cost: {
+    chat: (workspaceId: string, chatId: string) => ["cost", "chat", workspaceId, chatId] as const,
+    today: (workspaceId: string) => ["cost", "today", workspaceId] as const,
+    modelPricing: ["cost", "modelPricing"] as const,
+  },
+  plugins: {
+    list: ["plugins", "list"] as const,
+    detail: (id: string) => ["plugins", "detail", id] as const,
   },
   widgets: {
     list: ["widgets"] as const,

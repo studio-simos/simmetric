@@ -30,6 +30,13 @@ export interface ProviderModel {
   isOcr: boolean;
   temperature: number | null;
   maxTokens: number | null;
+  // Phase 203 (MCC-01): per-model pricing — serialized as numbers (Decimal →
+  // number at the API boundary; null = N/A).
+  inputCostPerToken?: number | null;
+  outputCostPerToken?: number | null;
+  currency?: string | null;
+  lastCostUpdated?: string | null;
+  lastCostUpdatedBy?: string | null;
   createdAt: Date;
   updatedAt: Date;
   provider?: Provider;
@@ -37,6 +44,12 @@ export interface ProviderModel {
 
 export interface ProviderConfig {
   type: "ollama" | "openai" | "anthropic" | "openrouter" | "gemini" | "xiaomi" | "minimax";
+  // Phase 203 (MCC-02): the resolved provider's id — additive-optional so
+  // every existing construction site stays valid. Consumed by the
+  // orchestrator's usage-write cost seam (pricing lookup keys on
+  // providerId + model name; the config previously had NO provider link,
+  // which the spec's pseudo-code assumed).
+  providerId?: string;
   baseUrl: string;
   apiKey: string | null;
   model: string;

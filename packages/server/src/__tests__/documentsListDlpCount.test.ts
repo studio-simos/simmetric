@@ -172,8 +172,14 @@ describe("GET /api/documents — dlpEntityCount mapping (192-10 Gap 3)", () => {
       .expect(200);
 
     expect(prisma.document.findMany).toHaveBeenCalledTimes(1);
-    // No per-row secondary fetches anywhere in the route path.
-    expect(prisma.dlpEntity).toBeUndefined();
+    // No per-row secondary fetches anywhere in the route path. The mock now
+    // carries a dlpEntity delegate (Phase 204 FEAT-01 re-scan arm — the deep
+    // mock needed it for the document text-edit route), so the pin asserts
+    // the delegate is NEVER TOUCHED by the list route instead of absent:
+    // the tripwire's intent is "no per-row fetch", not "no delegate".
+    expect(prisma.dlpEntity.findMany).not.toHaveBeenCalled();
+    expect(prisma.dlpEntity.count).not.toHaveBeenCalled();
+    expect(prisma.dlpEntity.findUnique).not.toHaveBeenCalled();
     expect(prisma.document.findUnique).not.toHaveBeenCalled();
   });
 

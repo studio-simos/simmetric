@@ -65,6 +65,8 @@ function configureDevProxy(proxy: any, opts: Record<string, unknown>): void {
     // fully silent; for ws sockets just end the stream like Vite does.
     if (isHttp) {
       if (!res.headersSent && !res.writableEnded) {
+        // Deployment-appropriate copy — this body surfaces in user-facing
+        // toasts via ApiError, so no dev jargon ("dev proxy") here.
         res.writeHead(502, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Backend unavailable" }));
       }

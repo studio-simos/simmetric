@@ -244,17 +244,27 @@
 
 /* ───────────────────────────────────────────────────────────────────────
    Citations expand/collapse (4.7.2) — both directions. The list stays
-   mounted; the .is-open class toggles max-height + opacity. Replaces the
-   older one-shot animation that only handled expand. ──────────────────── */
+   mounted; the .is-open class toggles grid-template-rows 0fr → 1fr +
+   opacity. Replaces the former max-height transition: max-height is a
+   layout-triggering interpolation with a fixed 200ms duration regardless
+   of content height, and its 800px cap clipped long citation lists. The
+   grid-rows trick interpolates to the real content height for any length.
+   Requires a SINGLE child wrapper (.chat-citation-list-inner) with
+   overflow:hidden + min-height:0 — implicit grid rows would stay visible.
+   ──────────────────────────────────────────────────────────────────── */
 .chat-citation-list {
-  max-height: 0;
+  display: grid;
+  grid-template-rows: 0fr;
   opacity: 0;
-  overflow: hidden;
-  transition: max-height 200ms ease-out, opacity 200ms ease-out;
+  transition: grid-template-rows 300ms cubic-bezier(0.16, 1, 0.3, 1), opacity 250ms ease-out;
 }
 .chat-citation-list.is-open {
-  max-height: 800px;
+  grid-template-rows: 1fr;
   opacity: 1;
+}
+.chat-citation-list-inner {
+  overflow: hidden;
+  min-height: 0;
 }
 /* Citation count — neon-amber mono under hacker (4.2.4). */
 .theme-hacker .chat-citation-count {

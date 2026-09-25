@@ -49,7 +49,7 @@ export default function OnboardingWizard({ hasOnboarded, workspacesCount }: Onbo
     // whenever the App gate detects an empty workspace list with
     // hasOnboarded true (or with the scalar not yet loaded).
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background" data-testid="onboarding-ask-admin">
+      <div className="min-h-[100dvh] flex items-center justify-center bg-background" data-testid="onboarding-ask-admin">
         <div className="max-w-md text-center space-y-3 p-6">
           <h1 className="text-xl font-semibold text-foreground">{t("onboarding.noAccessMessage")}</h1>
           <p className="text-sm text-muted-foreground">{t("onboarding.askAdmin")}</p>
@@ -76,7 +76,7 @@ export default function OnboardingWizard({ hasOnboarded, workspacesCount }: Onbo
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background" data-testid="onboarding-wizard">
+    <div className="min-h-[100dvh] flex items-center justify-center bg-background" data-testid="onboarding-wizard">
       <div className="max-w-md w-full space-y-5 p-6">
         <div className="text-center space-y-2">
           <h1 className="text-xl font-semibold text-foreground">{t("onboarding.welcome")}</h1>

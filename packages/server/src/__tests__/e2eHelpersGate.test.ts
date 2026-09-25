@@ -75,12 +75,14 @@ describe("G-1: /api/__tests__ is not mounted in production (T-DRD-01)", () => {
   it("returns 404 for POST /api/__tests__/start-echo-server when NODE_ENV=production", async () => {
     const res = await request(app).post("/api/__tests__/start-echo-server");
     expect(res.status).toBe(404);
-    expect(res.body.error).toBe("Not found");
+    expect(res.body.error.code).toBe("not_found");
+    expect(res.body.error.message).toBe("Not found");
   });
 
   it("returns 404 for POST /api/__tests__/stop-echo-server when NODE_ENV=production", async () => {
     const res = await request(app).post("/api/__tests__/stop-echo-server");
     expect(res.status).toBe(404);
-    expect(res.body.error).toBe("Not found");
+    expect(res.body.error.code).toBe("not_found");
+    expect(res.body.error.message).toBe("Not found");
   });
 });

@@ -76,6 +76,13 @@ jest.mock("../../queries/useDocuments", () => {
         staleTime: 30_000,
       });
     },
+    // Phase 204 (DEBT-SW-05): the edit affordance consumes the mutation seam
+    // — these backstop suites never trigger it, so a resolved promise stub
+    // keeps the hook contract whole.
+    useUpdateDocumentText: () => ({
+      mutateAsync: jest.fn().mockResolvedValue({ documentId: "doc", status: "reindexing" }),
+      isPending: false,
+    }),
   };
 });
 

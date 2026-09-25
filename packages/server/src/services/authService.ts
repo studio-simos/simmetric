@@ -131,6 +131,15 @@ export async function login(input: LoginInput) {
     throw new Error("Invalid credentials");
   }
 
+  // Phase 206 (D-05): disabled accounts cannot log in — distinct,
+  // i18n-able message (NOT folded into "Invalid credentials" so the
+  // agency can tell the user why); checked AFTER the password verify arm
+  // keeps credential-timing parity.
+  if (user.disabledAt) {
+    await bcrypt.compare(validated.password, user.passwordHash);
+    throw new Error("Account is disabled");
+  }
+
   const passwordValid = await bcrypt.compare(validated.password, user.passwordHash);
   if (!passwordValid) {
     throw new Error("Invalid credentials");
@@ -182,7 +191,7 @@ export function verifyToken(token: string): { userId: string; jti?: string } {
 }
 
 export async function getUserWithRoles(userId: string) {
-  return prisma.user.findUnique({
+  const user = await prisma.user.findUnique({
     where: { id: userId },
     include: {
       roles: {
@@ -196,8 +205,20 @@ export async function getUserWithRoles(userId: string) {
           },
         },
       },
+      // Phase 206 (D-09): delegated grants compose into the effective set
+      // (utils/auth getEffectivePermissions unions them).
+      permissionOverrides: { select: { permissionName: true } },
     },
   });
+  if (!user) return null;
+  // Phase 206 (D-05): disabledAt is a SCALAR — Prisma include accepts only
+  // relations, so the fail-closed gate rides a paired scalar fetch merged
+  // onto the payload (1 extra PK select on the cache-miss path only).
+  const basic = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { disabledAt: true },
+  });
+  return { ...user, disabledAt: basic?.disabledAt ?? null };
 }
 
 // D-07 (Phase 104): Auth context caching via Redis. Cache key: auth:user:{userId}.

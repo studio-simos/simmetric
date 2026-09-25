@@ -98,6 +98,9 @@ describe("authCache — getCachedUserWithRoles", () => {
     acMockEnv.REDIS_URL = "redis://localhost:6379";
     const dbUser = {
       id: "user-2",
+      // Phase 206 (D-05): getUserWithRoles merges the disabledAt scalar onto
+      // the cached payload (the auth chain gates on it — fail-closed).
+      disabledAt: null,
       username: "bob",
       roles: [{ role: { id: "role-2", name: "user", permissions: [] } }],
     };
@@ -122,6 +125,7 @@ describe("authCache — getCachedUserWithRoles", () => {
     acMockEnv.REDIS_URL = undefined;
     const dbUser = {
       id: "user-3",
+      disabledAt: null,
       username: "charlie",
       roles: [],
     };

@@ -22,6 +22,7 @@ import {
   Layers,
   FolderKanban,
   Store,
+  Puzzle,
   BarChart3,
   ScrollText,
   Shield,
@@ -182,6 +183,18 @@ export function buildNavGroups({
       keywords: "marketplace mcp servers catalog",
       icon: <Store className="w-4 h-4" />,
       path: "/mcp-marketplace",
+    });
+  }
+  // Phase 202 (PLGM-05, UI-SPEC §1): the plugins entry rides the platform
+  // group directly AFTER marketplace — the Phase 190 skills additive pattern
+  // (MENU_SECTIONS "plugins" is the 15th entry, admin auto-gains).
+  if (menuSections.includes("plugins")) {
+    platformEntries.push({
+      id: "plugins",
+      labelKey: "sidebar.plugins",
+      keywords: "plugins extensions addons licenses restart",
+      icon: <Puzzle className="w-4 h-4" />,
+      path: "/plugins",
     });
   }
   if (menuSections.includes("analytics")) {

@@ -18,7 +18,11 @@ export interface McpConnection {
   transportType: "sse" | "streamable-http";
   projectId: string | null;
   workspaceId: string | null;
-  headers: Record<string, string>;
+  // CR-02: optional — /statuses (the settings-list source) now re-includes
+  // headers, but rows may omit the field (older payloads / future shapes);
+  // the form treats undefined as "seed empty + omit headers on PUT" instead
+  // of seeding a destructive `headers: {}`.
+  headers?: Record<string, string>;
   enabled: boolean;
   lastSyncAt: string | null;
   createdAt: string;
@@ -26,6 +30,16 @@ export interface McpConnection {
   liveStatus?: "connected" | "disconnected" | "error";
   toolCount?: number;
   lastError?: string | null;
+  // Phase 196 (MCPO-02 D-03a): sanitized OAuth badge-matrix fields served by
+  // GET /mcp-connections/statuses (plan 196-01). Secrets (credentialsEncrypted,
+  // oauthError) stay stripped server-side — the UI renders ONLY these fields
+  // and never decodes tokens (T-196-11).
+  authType?: "none" | "static" | "oauth";
+  oauthProvider?: string | null;
+  oauthStatus?: "none" | "pending" | "authorized" | "error";
+  tokenExpiresAt?: string | null;
+  oauthScopes?: string | null;
+  oauthErrorSummary?: string | null;
 }
 
 export interface TestResult {
@@ -119,5 +133,43 @@ export function useToggleMcpConnection() {
 export function useTestMcpConnection() {
   return useMutation<TestResult, Error, string>({
     mutationFn: (id) => apiPost<TestResult>(`/mcp-connections/${id}/test`, {}),
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  OAuth lifecycle (Phase 196 MCPO-02 — D-03)                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Start (or re-start) the OAuth authorization flow for a connection.
+ * Resolves with the provider authorizeUrl — the caller redirects via
+ * window.location.assign (full-page redirect, D-03; never a popup).
+ * Uses the existing Phase 195 POST /:id/oauth/start route (idempotent
+ * semantics — Reauthorize rides the same route, 196 D-03b).
+ */
+export function useStartMcpOauth() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ authorizeUrl: string }, Error, string>({
+    mutationFn: (id) => apiPost<{ authorizeUrl: string }>(`/mcp-connections/${id}/oauth/start`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.mcpConnections.list });
+    },
+  });
+}
+
+/**
+ * Revoke a connection's provider access (Phase 195 DELETE /:id/oauth).
+ * Success clears stored tokens server-side; list invalidation flips the
+ * badge back to "Not connected" on refetch.
+ */
+export function useRevokeMcpOauth() {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, string>({
+    mutationFn: (id) => apiDelete<void>(`/mcp-connections/${id}/oauth`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.mcpConnections.list });
+    },
   });
 }

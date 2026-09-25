@@ -43,7 +43,19 @@
   // When the enterprise package grows its shared-API surface, tag the new
   // exports by hand (CI cannot grep the private repo). Full list + policy:
   // docs/DEVELOPMENT.md "Dead-code gate (knip)".
-  "tags": ["-enterpriseConsumed"],
+  //
+  // Phase 206 latent schemas/services — consumers are the named phase plans:
+  // roleSectionVisibilitySchema + updateSubUserSchema → plan 03/04 routes;
+  // getSponsorCeiling → plan 04 AGENCY-04 route (D-11).
+  // Exports tagged `/** @latentByDesign */` are likewise excluded: shipped
+  // deliberately AHEAD of their consumer, tracked by the milestone plans —
+  // e.g. updateMcpCatalogEntrySchema (197-02, "Latent only — no route
+  // consumes it today", 197-VERIFICATION) and the Phase 203 shared cost
+  // contract (server validates inline today; the deferred 203-03/04 UI is
+  // the named consumer — TODO/MODEL_COST_CONTROL_SPEC.md §2.7). Unlike the
+  // enterprise tag, this one is time-boxed: when the consumer lands (or the
+  // phase is descoped), REMOVE the tag and let the gate decide.
+  "tags": ["-enterpriseConsumed", "-latentByDesign"],
   "ignore": [
     // Test trees are not production surface.
     "**/__tests__/**"
@@ -71,6 +83,10 @@
       //  - license-checker-rseidelsohn: spawned as a CLI BINARY by
       //    scripts/license-policy-check.cjs + license-check-self.cjs — never
       //    imported, so knip cannot see the usage.
+      //  - ollama + sharp: the OCR utility scripts resolve them from
+      //    packages/server/node_modules via require.resolve(name, { paths })
+      //    (pnpm isolated layout — scripts/ must NOT re-declare them; the
+      //    seam is the same createRequire string class as bcryptjs below).
       //  - dotenv: NOT ignored on purpose — the collector+widget copies are
       //    genuinely unused (Phase 177 root-env loader) and get REMOVED by
       //    the Task-4 sweep. The root copy is USED (dynamic import in
@@ -80,6 +96,8 @@
       "ignoreDependencies": [
         "@simmetric-chat/enterprise",
         "license-checker-rseidelsohn",
+        "ollama",
+        "sharp",
         // e2e/lib/prisma.ts imports these directly (root e2e workspace);
         // resolved via the server package's deps through pnpm node_modules.
         "@prisma/adapter-pg",
@@ -87,10 +105,12 @@
         "jest",
         // e2e specs resolve these via `createRequire(requireFromServer("…"))`
         // STRING seams (e2e/globalSetup.ts:62, custom-skills.spec.ts:127,
-        // workspace-access.spec.ts:143) — knip cannot follow createRequire,
-        // established idiom (pnpm strict isolation). simple-git left this
-        // list in quick 260921: schema-prompt.spec.ts imports it statically,
-        // so it moved to a declared root devDependency instead.
+        // workspace-access.spec.ts:143, schema-prompt.spec.ts:83) — knip
+        // cannot follow createRequire, established idiom (pnpm strict
+        // isolation). simple-git rides the SAME seam since quick-260921:
+        // schema-prompt.spec.ts resolves it via requireFromServer (the dep
+        // lives in packages/server, imported by archive*Service.ts) — it is
+        // NOT a root devDependency.
         "bcryptjs"
       ]
     },
@@ -125,7 +145,7 @@
         // Phase 180 sweep BEFORE this ignore went in. Documented trade-off:
         // future dead FILES under ui/ are not knip-detected (cheap to
         // re-audit by hand — the directory is small and generated).
-        "src/components/ui/**"
+        "src/components/ui/**",
       ]
     },
     "packages/widget": {

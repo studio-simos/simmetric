@@ -41,6 +41,27 @@ export const OCR_MODEL_REGISTRY: readonly OcrModelConfig[] = [
     promptTemplate: "glm-ocr",
     contextWindow: 4096,
   },
+  // glm-ocr-optimized (Phase 205, OCR-01 / D-07): the tuned child model built
+  // from glm-ocr:latest via scripts/build-glm-ocr-optimized.cjs or
+  // `ollama create` (docker/ollama/glm-ocr-optimized.Modelfile). FROM
+  // inherits the weights AND the bare `{{ .Prompt }}` template, so the
+  // done-less-stream chat-endpoint routing above still applies — same
+  // handling, larger requested contextWindow (the D-08 show() audit logs the
+  // trained GGUF cap at runtime). ORDER IS LOAD-BEARING: this entry must sit
+  // AFTER the exact glm-ocr:latest entry and BEFORE the glm-ocr:* wildcard —
+  // resolveModelConfig checks exact, then wildcard, in array order. Note
+  // patternToRegex("glm-ocr:*") does NOT match "glm-ocr-optimized:latest"
+  // (the name has no "glm-ocr:" prefix), so without this entry the optimized
+  // model would fall to the generic 4096 fallback.
+  {
+    name: "glm-ocr-optimized:latest",
+    namePattern: "glm-ocr-optimized:*",
+    apiEndpoint: "chat",
+    inputMode: "base64_array",
+    supportedModes: ["text", "table", "figure", "generic"],
+    promptTemplate: "glm-ocr",
+    contextWindow: 16384,
+  },
   {
     name: "glm-ocr:*",
     namePattern: "glm-ocr:*",

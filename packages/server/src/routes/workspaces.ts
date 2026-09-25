@@ -25,6 +25,8 @@ import prisma, { withSoftDelete } from "../utils/prisma";
 import { createWorkspaceSchema, updateWorkspaceSchema, createFolderSchema, updateFolderSchema, grantWorkspaceAccessRouteSchema, bulkGrantWorkspaceAccessSchema, permanentDeleteWorkspacesSchema } from "@simmetric-chat/shared";
 import { logEvent } from "../services/eventLogService";
 import { isAdmin } from "../utils/auth";
+import { assertEvalGatePassed } from "../services/dlpBackfillService";
+import { logger } from "../utils/logger";
 
 const router = Router();
 
@@ -293,6 +295,26 @@ router.put("/:workspaceId", requireWorkspaceWriteAccess(), async (req: Request, 
       skills,
     } = validated;
 
+    // Phase 201 (DEBT-01): DLP-05 enable-arm eval gate — the ===true arm
+    // requires the DLP-05 eval result to have passed server-side, mirroring
+    // the backfill 409 (system.ts D-12 ordering gate, T-192-28). Fail-closed.
+    // The false / omitted arms fall straight through — turning OFF is never
+    // blocked (Phase 192 D-05, still binding). Sits OUTSIDE the try/catch's
+    // P2002 mapping and before any DB write, so the two 409s never conflate.
+    if (dlpDocumentScanEnabled === true) {
+      const evalGatePassed = await assertEvalGatePassed();
+      if (!evalGatePassed) {
+        logger.warn("[workspaces] DLP-05 enable refused — eval gate not passed", {
+          workspaceId: req.params.workspaceId,
+        });
+        res.status(409).json({
+          error: "DLP eval gate not passed — run the eval and retry",
+          gate: "eval-not-passed",
+        });
+        return;
+      }
+    }
+
     const workspace = await prisma.workspace.update({
       where: { id: req.params.workspaceId as string },
       data: {
@@ -301,9 +323,11 @@ router.put("/:workspaceId", requireWorkspaceWriteAccess(), async (req: Request, 
         ...(embeddingModel !== undefined && { embeddingModel }),
         ...(allowMemberUploads !== undefined && { allowMemberUploads }),
         // Phase 192 (D-05): per-workspace document-scan toggle — rides the
-        // same conditional-spread as allowMemberUploads. Turning OFF is never
-        // blocked (UI-SPEC rule 1 is binding server-side too); the DLP-05
-        // eval gate lives on enablement surfaces + the backfill 409, never here.
+        // same conditional-spread as allowMemberUploads. Turning OFF is
+        // never blocked (UI-SPEC rule 1 is binding server-side too); since
+        // Phase 201 (DEBT-01) the enable arm (===true) requires the DLP-05
+        // eval gate server-side (the inline 409 above), mirroring the
+        // backfill 409.
         ...(dlpDocumentScanEnabled !== undefined && { dlpDocumentScanEnabled }),
         ...(icon !== undefined && { icon }),
         ...(templateId !== undefined && { template: templateId ? { connect: { id: templateId } } : { disconnect: true } }),

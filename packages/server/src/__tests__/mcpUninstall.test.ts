@@ -25,11 +25,13 @@ jest.mock("../utils/logger", () => ({
     info: jest.fn(),
     warn: jest.fn(),
     error: jest.fn(),
+    debug: jest.fn(),
   },
   logger: {
     info: jest.fn(),
     warn: jest.fn(),
     error: jest.fn(),
+    debug: jest.fn(),
   },
 }));
 
@@ -41,13 +43,27 @@ jest.mock("../agent/skills", () => ({
   unregisterSkillsForConnection: jest.fn(),
 }));
 
+jest.mock("../services/oauthTokenLifecycle", () => ({
+  decryptTokenBlob: jest.fn(),
+  revokeProviderToken: jest.fn(),
+  encryptTokenBlob: jest.fn(),
+  refreshAccessToken: jest.fn(),
+  exchangeAuthorizationCode: jest.fn(),
+}));
+
+jest.mock("../services/oauthProviderRegistry", () => ({
+  resolveProvider: jest.fn(),
+}));
+
 // --- Imports (after mocks) ---
 
-import { uninstallMcpServer } from "../services/mcpUninstallService";
+import { uninstallMcpServer, revokeAndWipeCredentials } from "../services/mcpUninstallService";
 import prisma from "../utils/prisma";
 import { disconnectMCPServer } from "../agent/mcpClient";
 import { unregisterSkillsForConnection } from "../agent/skills";
 import { logger } from "../utils/logger";
+import { decryptTokenBlob, revokeProviderToken } from "../services/oauthTokenLifecycle";
+import { resolveProvider } from "../services/oauthProviderRegistry";
 
 describe("uninstallMcpServer", () => {
   const mockCatalogEntryId = "entry-550e8400-e29b-41d4-a716-446655440000";
@@ -224,5 +240,231 @@ describe("uninstallMcpServer", () => {
       // Verify ChatMCPPin model was never accessed — pins survive per D-12
       expect(prisma.chatMCPPin).toBeUndefined();
     });
+  });
+});
+
+// ====================================================================
+// Phase 197 (MCPO-03 D-08): revoke+wipe helper + uninstall integration
+// ====================================================================
+
+describe("revokeAndWipeCredentials (Phase 197 D-08)", () => {
+  const googleDef = { id: "google", revokeUrl: "https://oauth2.googleapis.com/revoke" };
+  const microsoftDef = { id: "microsoft", revokeUrl: null };
+  const CONN_ID = "conn-550e8400-e29b-41d4-a716-446655440000";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (resolveProvider as jest.Mock).mockReturnValue(googleDef);
+    (revokeProviderToken as jest.Mock).mockResolvedValue({ ok: true });
+  });
+
+  it("revokes provider-side for an oauth row with a decryptable blob", async () => {
+    (decryptTokenBlob as jest.Mock).mockReturnValue({
+      ok: true,
+      blob: { accessToken: "at-token", scope: "https://www.googleapis.com/auth/gmail.readonly", obtainedAt: new Date().toISOString() },
+    });
+
+    await revokeAndWipeCredentials({
+      id: CONN_ID,
+      authType: "oauth",
+      oauthProvider: "google",
+      credentialsEncrypted: "iv:tag:ct",
+    });
+
+    expect(resolveProvider).toHaveBeenCalledWith("google");
+    expect(revokeProviderToken).toHaveBeenCalledTimes(1);
+    expect(revokeProviderToken).toHaveBeenCalledWith(googleDef, "at-token");
+  });
+
+  it("skips revoke for a non-oauth row (no call, no throw)", async () => {
+    await revokeAndWipeCredentials({ id: CONN_ID, authType: "none", oauthProvider: null, credentialsEncrypted: null });
+
+    expect(resolveProvider).not.toHaveBeenCalled();
+    expect(decryptTokenBlob).not.toHaveBeenCalled();
+    expect(revokeProviderToken).not.toHaveBeenCalled();
+  });
+
+  it("skips revoke when the row has no stored blob", async () => {
+    await revokeAndWipeCredentials({ id: CONN_ID, authType: "oauth", oauthProvider: "google", credentialsEncrypted: null });
+
+    expect(decryptTokenBlob).not.toHaveBeenCalled();
+    expect(revokeProviderToken).not.toHaveBeenCalled();
+  });
+
+  it("fail-open on decrypt failure: no revoke, no throw (wipe proceeds via delete)", async () => {
+    (decryptTokenBlob as jest.Mock).mockReturnValue({ ok: false, errorDescription: "blob undecryptable" });
+
+    await expect(
+      revokeAndWipeCredentials({ id: CONN_ID, authType: "oauth", oauthProvider: "google", credentialsEncrypted: "iv:tag:ct" }),
+    ).resolves.toBeUndefined();
+
+    expect(revokeProviderToken).not.toHaveBeenCalled();
+  });
+
+  it("fail-open on unknown provider: no revoke, no throw", async () => {
+    (resolveProvider as jest.Mock).mockReturnValue(null);
+
+    await expect(
+      revokeAndWipeCredentials({ id: CONN_ID, authType: "oauth", oauthProvider: "dropbox", credentialsEncrypted: "iv:tag:ct" }),
+    ).resolves.toBeUndefined();
+
+    expect(decryptTokenBlob).not.toHaveBeenCalled();
+    expect(revokeProviderToken).not.toHaveBeenCalled();
+  });
+
+  it("microsoft arm: resolveProvider returns a def without revokeUrl — revoke still called, skipped:true does not block", async () => {
+    (resolveProvider as jest.Mock).mockReturnValue(microsoftDef);
+    (decryptTokenBlob as jest.Mock).mockReturnValue({
+      ok: true,
+      blob: { accessToken: "ms-token", scope: "offline_access", obtainedAt: new Date().toISOString() },
+    });
+    (revokeProviderToken as jest.Mock).mockResolvedValue({ ok: true, skipped: true });
+
+    await revokeAndWipeCredentials({ id: CONN_ID, authType: "oauth", oauthProvider: "microsoft", credentialsEncrypted: "iv:tag:ct" });
+
+    expect(revokeProviderToken).toHaveBeenCalledWith(microsoftDef, "ms-token");
+  });
+
+  it("provider-side revoke failure never blocks (never-throws contract: errorDescription arm resolves)", async () => {
+    (decryptTokenBlob as jest.Mock).mockReturnValue({
+      ok: true,
+      blob: { accessToken: "at-token", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+    (revokeProviderToken as jest.Mock).mockResolvedValue({ ok: true, errorDescription: "provider revoke returned 400" });
+
+    await expect(
+      revokeAndWipeCredentials({ id: CONN_ID, authType: "oauth", oauthProvider: "google", credentialsEncrypted: "iv:tag:ct" }),
+    ).resolves.toBeUndefined();
+
+    expect(revokeProviderToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs provider + status only — token material never in logs (T-195-05 posture)", async () => {
+    (decryptTokenBlob as jest.Mock).mockReturnValue({
+      ok: true,
+      blob: { accessToken: "SECRET-TOKEN-MATERIAL", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+    (revokeProviderToken as jest.Mock).mockResolvedValue({ ok: true, errorDescription: "unreachable" });
+
+    await revokeAndWipeCredentials({ id: CONN_ID, authType: "oauth", oauthProvider: "google", credentialsEncrypted: "iv:tag:ct" });
+
+    for (const call of (logger.info as jest.Mock).mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("SECRET-TOKEN-MATERIAL");
+    }
+    for (const call of (logger.warn as jest.Mock).mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("SECRET-TOKEN-MATERIAL");
+    }
+  });
+});
+
+describe("uninstallMcpServer revoke+wipe integration (Phase 197 D-08)", () => {
+  const mockCatalogEntryId = "entry-550e8400-e29b-41d4-a716-446655440000";
+  const mockWorkspaceId = "workspace-550e8400-e29b-41d4-a716-446655440000";
+  const mockConnectionId = "conn-550e8400-e29b-41d4-a716-446655440000";
+  const mockConnectionName = "Test MCP Server";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("uninstall of an oauth row: revoke BEFORE delete (order pinned), then delete called", async () => {
+    (prisma.mCPConnection.findFirst as jest.Mock).mockResolvedValue({
+      id: mockConnectionId,
+      name: mockConnectionName,
+      catalogEntryId: mockCatalogEntryId,
+      workspaceId: mockWorkspaceId,
+      source: "marketplace",
+      authType: "oauth",
+      oauthProvider: "google",
+      credentialsEncrypted: "iv:tag:ct",
+    });
+    (disconnectMCPServer as jest.Mock).mockResolvedValue(undefined);
+    (prisma.mCPConnection.delete as jest.Mock).mockResolvedValue({ id: mockConnectionId });
+    (resolveProvider as jest.Mock).mockReturnValue({ id: "google", revokeUrl: "https://oauth2.googleapis.com/revoke" });
+    (decryptTokenBlob as jest.Mock).mockReturnValue({
+      ok: true,
+      blob: { accessToken: "at", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+    (revokeProviderToken as jest.Mock).mockResolvedValue({ ok: true });
+
+    await uninstallMcpServer(mockCatalogEntryId, mockWorkspaceId);
+
+    expect(revokeProviderToken).toHaveBeenCalledTimes(1);
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
+    expect((revokeProviderToken as jest.Mock).mock.invocationCallOrder[0]!).toBeLessThan(
+      (prisma.mCPConnection.delete as jest.Mock).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("uninstall of a non-oauth row: revoke NOT called, delete still called", async () => {
+    (prisma.mCPConnection.findFirst as jest.Mock).mockResolvedValue({
+      id: mockConnectionId,
+      name: mockConnectionName,
+      catalogEntryId: mockCatalogEntryId,
+      workspaceId: mockWorkspaceId,
+      source: "marketplace",
+      authType: "none",
+      oauthProvider: null,
+      credentialsEncrypted: null,
+    });
+    (disconnectMCPServer as jest.Mock).mockResolvedValue(undefined);
+    (prisma.mCPConnection.delete as jest.Mock).mockResolvedValue({ id: mockConnectionId });
+
+    await uninstallMcpServer(mockCatalogEntryId, mockWorkspaceId);
+
+    expect(revokeProviderToken).not.toHaveBeenCalled();
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("decrypt-failure row: revoke NOT called AND delete STILL called (fail-open-to-wipe pin)", async () => {
+    (prisma.mCPConnection.findFirst as jest.Mock).mockResolvedValue({
+      id: mockConnectionId,
+      name: mockConnectionName,
+      catalogEntryId: mockCatalogEntryId,
+      workspaceId: mockWorkspaceId,
+      source: "marketplace",
+      authType: "oauth",
+      oauthProvider: "google",
+      credentialsEncrypted: "iv:tag:ct",
+    });
+    (disconnectMCPServer as jest.Mock).mockResolvedValue(undefined);
+    (prisma.mCPConnection.delete as jest.Mock).mockResolvedValue({ id: mockConnectionId });
+    (resolveProvider as jest.Mock).mockReturnValue({ id: "google", revokeUrl: "https://r" });
+    (decryptTokenBlob as jest.Mock).mockReturnValue({ ok: false, errorDescription: "undecryptable" });
+
+    await uninstallMcpServer(mockCatalogEntryId, mockWorkspaceId);
+
+    expect(revokeProviderToken).not.toHaveBeenCalled();
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("provider-side revoke failure does not block the wipe (delete still called)", async () => {
+    (prisma.mCPConnection.findFirst as jest.Mock).mockResolvedValue({
+      id: mockConnectionId,
+      name: mockConnectionName,
+      catalogEntryId: mockCatalogEntryId,
+      workspaceId: mockWorkspaceId,
+      source: "marketplace",
+      authType: "oauth",
+      oauthProvider: "google",
+      credentialsEncrypted: "iv:tag:ct",
+    });
+    (disconnectMCPServer as jest.Mock).mockResolvedValue(undefined);
+    (prisma.mCPConnection.delete as jest.Mock).mockResolvedValue({ id: mockConnectionId });
+    (resolveProvider as jest.Mock).mockReturnValue({ id: "google", revokeUrl: "https://r" });
+    (decryptTokenBlob as jest.Mock).mockReturnValue({
+      ok: true,
+      blob: { accessToken: "at", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+    (revokeProviderToken as jest.Mock).mockResolvedValue({ ok: true, errorDescription: "provider revoke unreachable: ECONNREFUSED" });
+
+    await expect(uninstallMcpServer(mockCatalogEntryId, mockWorkspaceId)).resolves.toEqual({
+      success: true,
+      connectionId: mockConnectionId,
+      connectionName: mockConnectionName,
+    });
+
+    expect(revokeProviderToken).toHaveBeenCalledTimes(1);
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
   });
 });

@@ -195,6 +195,12 @@ describe("TENANT_READ_MODELS INVENTORY (group 8)", () => {
       "Chat",
       "ChatFolder",
       "ChatMessage",
+      // Phase 198 (ECCO-01, D-01): chat-connector org-carrying models join
+      // the AND-merge (the webhook tenant slot runs inside runInTenant;
+      // ConnectorMessage stays OUT — no org column, Tier-B transitive via
+      // the session's connector row).
+      "ChatConnector",
+      "ConnectorSession",
       // DlpPattern EXCLUDED as of 185-05 CR-02: the extension's outer AND
       // would drop the default-org built-in rows from every non-default
       // org's scan (DLP fail-open); dlpPatternService carries the
@@ -221,11 +227,12 @@ describe("TENANT_READ_MODELS INVENTORY (group 8)", () => {
       "WorkspaceTokenUsage",
     ];
     // Phase 190 (SKIL-01 A1): AgentSkill joins the AND-merge (26 models).
-    expect(TENANT_READ_MODELS.size).toBe(26);
+    // Phase 198 (ECCO-01): 26 → 28 with ChatConnector + ConnectorSession.
+    expect(TENANT_READ_MODELS.size).toBe(28);
     for (const name of expected) {
       expect(TENANT_READ_MODELS.has(name)).toBe(true);
     }
-    // And nothing beyond the 26:
+    // And nothing beyond the 28:
     expect([...TENANT_READ_MODELS].sort()).toEqual(expected.sort());
   });
 

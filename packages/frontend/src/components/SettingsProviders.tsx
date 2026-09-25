@@ -66,6 +66,7 @@ import { z } from "zod";
 import type { Provider, ProviderModel, ProviderType } from "@simmetric-chat/shared";
 import { providerTypeSchema } from "@simmetric-chat/shared";
 import { getErrorMessage } from "../utils/errorUtils";
+import ModelPricingDialog from "./ModelPricingDialog";
 import ProviderPresetCatalog from "./ProviderPresetCatalog";
 
 const capabilityKeyMap: Record<string, string> = {
@@ -327,6 +328,7 @@ export default function SettingsProviders() {
   const setDefaultModelMutation = useSetDefaultModel();
   const refreshModelsMutation = useRefreshModels();
   const updateModelMutation = useUpdateModel();
+  const [pricingModel, setPricingModel] = useState<{ providerId: string; modelId: string; modelName: string } | null>(null);
   const deleteModelMutation = useDeleteModel();
 
   const [showCreate, setShowCreate] = useState(false);
@@ -656,6 +658,7 @@ export default function SettingsProviders() {
             <ProviderCard
               key={provider.id}
               provider={provider}
+              onOpenPricing={(modelId, modelName) => setPricingModel({ providerId: provider.id, modelId, modelName })}
               isExpanded={expandedProvider === provider.id}
               onToggleExpand={() =>
                 setExpandedProvider(
@@ -775,6 +778,15 @@ export default function SettingsProviders() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {pricingModel && (
+        <ModelPricingDialog
+          providerId={pricingModel.providerId}
+          modelId={pricingModel.modelId}
+          modelName={pricingModel.modelName}
+          open={!!pricingModel}
+          onClose={() => setPricingModel(null)}
+        />
+      )}
     </div>
   );
 }
@@ -798,6 +810,7 @@ function ProviderCard({
   onEditDisplayNameChange,
   onDeleteModel,
   onPullModel,
+  onOpenPricing,
   pulling,
   onStartEdit,
   onSaveEdit,
@@ -827,6 +840,7 @@ function ProviderCard({
   onSaveDisplayName: (modelId: string) => void;
   onEditDisplayNameChange: (value: string) => void;
   onDeleteModel: (modelId: string) => void;
+  onOpenPricing: (modelId: string, modelName: string) => void;
   onPullModel: (modelName: string) => void;
   pulling: { providerId: string; modelName: string; progress: { status: string; digest?: string; total?: number; completed?: number } | null; error: string | null } | null;
   onStartEdit: () => void;
@@ -1068,6 +1082,7 @@ function ProviderCard({
                         onSaveDisplayName={() => onSaveDisplayName(model.id)}
                         onEditDisplayNameChange={onEditDisplayNameChange}
                         onDelete={() => onDeleteModel(model.id)}
+                        onOpenPricing={onOpenPricing}
                       />
                     ))}
                   </div>
@@ -1346,6 +1361,7 @@ function ModelRow({
   onSaveDisplayName,
   onEditDisplayNameChange,
   onDelete,
+  onOpenPricing,
 }: {
   model: ProviderModel;
   providerId: string;
@@ -1361,6 +1377,7 @@ function ModelRow({
   onSaveDisplayName: () => void;
   onEditDisplayNameChange: (value: string) => void;
   onDelete: () => void;
+  onOpenPricing: (modelId: string, modelName: string) => void;
 }) {
   const { t } = useTranslation();
   const isActuallyLocal = providerType === "ollama" ? !providerApiKey : false;
@@ -1410,6 +1427,19 @@ function ModelRow({
             <div className="flex items-center gap-2">
               <span className="text-sm text-foreground truncate">
                 {model.displayName || model.name}
+                        {model.inputCostPerToken != null && (
+                          <Badge variant="outline" className="text-[10px] px-1">
+                            ${(Number(model.inputCostPerToken) * 1e6).toFixed(2)}/M in{model.outputCostPerToken != null ? ` · $${(Number(model.outputCostPerToken) * 1e6).toFixed(2)}/M out` : ""}
+                          </Badge>
+                        )}
+                        {model.inputCostPerToken == null && (
+                          <Badge variant="outline" className="text-[10px] px-1 text-muted-foreground">
+                            {model.isLocal ? "Free" : "N/A"}
+                          </Badge>
+                        )}
+                        <button type="button" className="text-[10px] text-muted-foreground underline-offset-2 hover:underline ml-1"
+                          onClick={(e) => { e.stopPropagation(); onOpenPricing(model.id, model.displayName || model.name); }}
+                        >{t("settings.providers.cost.editPricing", "Set pricing")}</button>
               </span>
               {model.displayName && model.displayName !== model.name && (
                 <span className="text-xs text-muted-foreground truncate">({model.name})</span>

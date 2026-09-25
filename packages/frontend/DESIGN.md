@@ -20,22 +20,22 @@ colors:
   neon-amber: "#ffaa00"
 typography:
   display:
-    fontFamily: "Inter Variable, sans-serif"
+    fontFamily: "Geist Variable, sans-serif"
     fontSize: "24px"
     fontWeight: 600
     lineHeight: 1.3
   title:
-    fontFamily: "Inter Variable, sans-serif"
+    fontFamily: "Geist Variable, sans-serif"
     fontSize: "16px"
     fontWeight: 500
     lineHeight: 1.4
   body:
-    fontFamily: "Inter Variable, sans-serif"
+    fontFamily: "Geist Variable, sans-serif"
     fontSize: "14px"
     fontWeight: 400
     lineHeight: 1.5
   label:
-    fontFamily: "Inter Variable, sans-serif"
+    fontFamily: "Geist Variable, sans-serif"
     fontSize: "12px"
     fontWeight: 500
     lineHeight: 1.4
@@ -102,7 +102,7 @@ The system is token-first and theme-complete: one set of shadcn-style CSS custom
 - Warm paper neutrals everywhere; a single sienna accent on ≤10% of any screen.
 - Flat surfaces, 1px warm-sand borders, depth by tonal layering — no decorative shadows.
 - Compact control density: 32px buttons, 36px inputs, small radii (6–14px).
-- Inter Variable for everything; JetBrains Mono reserved for code, IDs, and keyboard hints.
+- Geist Variable for UI; Source Serif 4 Variable as the display voice (wordmark, auth titles); JetBrains Mono reserved for code, IDs, and keyboard hints.
 - Three themes (light / dark / hacker) from one token set; hacker styling is locked to the `.theme-hacker` class.
 
 ## Colors
@@ -133,10 +133,11 @@ Dark theme: warm near-black `oklch(0.147 0.004 49.25)` background, `oklch(0.216 
 
 ## Typography
 
-**Body Font:** Inter Variable (self-hosted via `@fontsource-variable/inter`), system sans fallback
+**Body Font:** Geist Variable (self-hosted via `@fontsource-variable/geist`), system sans fallback — swapped from Inter (2026-09): Inter read as the default-SaaS face and fought the desk identity; Geist was already in the bundle unused.
+**Brand Display Voice:** Source Serif 4 Variable (self-hosted via `@fontsource-variable/source-serif-4`, chosen over Fraunces/Newsreader for Cyrillic coverage — `ru` is a supported locale), exposed as the `font-display` utility. Reserved for the brand moments only — the chat wordmark, login/setup/force-change titles — never for dense UI chrome (`CardTitle` stays Geist).
 **Label/Mono Font:** JetBrains Mono → Fira Code → Cascadia Code → ui-monospace
 
-**Character:** One workmanlike grotesque carrying the entire UI, with mono as the technical counterpoint — a desk with one good pen and one pencil. Hierarchy is achieved with weight and size only; there are no display fonts and no letter-spaced display type.
+**Character:** One workmanlike grotesque (Geist) carrying the UI, with a single warm serif (Source Serif 4) reserved for brand moments and mono as the technical counterpoint — a desk with one good pen, one fountain pen for the letterhead, and one pencil. UI hierarchy is achieved with weight and size only; the serif is the only display voice and never letter-spaced.
 
 ### Hierarchy
 - **Display** (600, 24px / text-2xl, 1.3): page titles (Login, page headers). The largest type in the app; rarely used.
@@ -147,7 +148,7 @@ Dark theme: warm near-black `oklch(0.147 0.004 49.25)` background, `oklch(0.216 
 - **Mono** (400, 13px): code blocks, embed snippets, model IDs, keyboard shortcuts, hacker-theme chrome.
 
 ### Named Rules
-**The Single Pen Rule.** Inter carries everything; JetBrains Mono appears only where the content is literally technical (code, IDs, shortcuts, terminal chrome). No serif, no display face.
+**The Single Pen Rule.** Geist carries the UI; JetBrains Mono appears only where the content is literally technical (code, IDs, shortcuts, terminal chrome). Source Serif 4 appears only on the brand-voice surfaces listed above — never in dense UI chrome.
 
 ## Layout
 

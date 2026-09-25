@@ -18,6 +18,71 @@ import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
 import { disconnectMCPServer } from "../agent/mcpClient";
 import { unregisterSkillsForConnection } from "../agent/skills";
+import {
+  resolveProvider,
+} from "../services/oauthProviderRegistry";
+import {
+  decryptTokenBlob,
+  revokeProviderToken,
+} from "../services/oauthTokenLifecycle";
+
+/** Minimal row shape the revoke+wipe helper needs (D-08). */
+export interface McpConnectionForRevokeWipe {
+  id: string;
+  authType?: string | null;
+  oauthProvider?: string | null;
+  credentialsEncrypted?: string | null;
+}
+
+/**
+ * Phase 197 (MCPO-03 D-08): revoke + wipe the credential blob before a
+ * hard delete. Given a row that is authType='oauth' AND carries a stored
+ * blob AND a provider key:
+ *   resolveProvider → decryptTokenBlob → revokeProviderToken (best-effort).
+ *
+ * Fail-open-to-wipe contract:
+ * - revokeProviderToken NEVER throws by its own contract (oauthTokenLifecycle
+ *   D-14) — failures log provider + status text only, never token material.
+ * - A decrypt failure, unknown provider, or a non-oauth / no-blob row logs
+ *   and proceeds — the caller then hard-deletes the row, and the blob dies
+ *   with the row (no explicit null-write on delete paths; that is the
+ *   revoke-without-delete route's distinct shape).
+ * NEVER wrapped in a throwing try/catch: failing to revoke provider-side
+ * must not block the wipe (T-197-08).
+ */
+export async function revokeAndWipeCredentials(
+  connection: McpConnectionForRevokeWipe,
+): Promise<void> {
+  if (connection.authType !== "oauth" || !connection.credentialsEncrypted || !connection.oauthProvider) {
+    logger.debug("[mcpUninstall] Revoke+wipe skipped — not an oauth row with a stored blob", {
+      connectionId: connection.id,
+    });
+    return;
+  }
+
+  const def = resolveProvider(connection.oauthProvider);
+  if (!def) {
+    logger.warn("[mcpUninstall] Revoke+wipe skipped — unknown oauth provider", {
+      connectionId: connection.id,
+      provider: connection.oauthProvider,
+    });
+    return;
+  }
+
+  const decoded = decryptTokenBlob(connection.credentialsEncrypted);
+  if (!decoded.ok) {
+    logger.warn("[mcpUninstall] Revoke+wipe — credential blob could not be decrypted; proceeding to wipe", {
+      connectionId: connection.id,
+      provider: def.id,
+    });
+    return;
+  }
+
+  // NEVER throws (D-14 contract): no revokeUrl → { ok, skipped }; transport
+  // failures → { ok, errorDescription }. Failure to revoke provider-side
+  // must not block the wipe — no try/catch here by design (fail-open).
+  await revokeProviderToken(def, decoded.blob.accessToken);
+}
 
 export interface McpUninstallResult {
   success: boolean;
@@ -95,6 +160,10 @@ export async function uninstallMcpServer(
   // D-13: unregisterSkillsForConnection removes all Map entries with prefix "mcp_{connectionId}_"
   // using connection.id (UUID) — collision-free prefix matching (T-63-spoof mitigated).
   unregisterSkillsForConnection(connectionId);
+
+  // Step 3.5 (Phase 197 MCPO-03 D-08): revoke provider-side (best-effort,
+  // fail-open-to-wipe) BEFORE the hard delete — the blob dies with the row.
+  await revokeAndWipeCredentials(connection);
 
   // Step 4: Hard-delete the database record
   // D-05: hard delete, no soft-delete. D-07: record fully removed, so reinstall = just install again

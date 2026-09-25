@@ -26,21 +26,60 @@ import { logEvent } from "../services/eventLogService";
 import { getSetting } from "../services/systemConfigService";
 import { extractTextFromPdf, cleanupOcrTextFile } from "../services/ragOcrService";
 import { logger } from "../utils/logger";
+import {
+  sendError,
+  sendInternalServerError,
+  checkIfMatch,
+  encodeCursor,
+  decodeCursor,
+  keysetWhere,
+} from "../utils/httpError";
 import { getUniqueFilePath, isDraftsPath, isDraftStorageKey } from "../utils/fileUtils";
 import { getPdfStandardFontDataUrl } from "../utils/pdfjsFonts";
 import { describeFetchFailureCause } from "../utils/fetchDiagnostics";
 import { collectorDispatchAgent } from "../utils/collectorDispatchAgent";
+// Phase 207 (CLOUD-03, D-03 site 4): pre-collector ingest gate + 409 family.
+import { checkTokenQuota, QuotaError } from "../services/quotaService";
 import { getStorageProvider } from "../services/storageProvider";
-import { IngestStatusCallbackSchema, sanitizeFileName, bulkDeleteDocumentsSchema } from "@simmetric-chat/shared";
+import { IngestStatusCallbackSchema, sanitizeFileName, bulkDeleteDocumentsSchema, updateDocumentTextSchema, documentListQuerySchema } from "@simmetric-chat/shared";
 // Phase 192 (D-10): preview unmask query contract + entity-map re-composition.
 import { dlpUnmaskQuerySchema } from "@simmetric-chat/shared";
-import { buildRecompositionMap, buildPlaceholderRegex } from "../services/dlpEntityService";
+import { buildRecompositionMap, buildPlaceholderRegex, deleteEntityMap } from "../services/dlpEntityService";
 import { resolveWorkspaceRole } from "../middleware/rbac";
 import { getEffectivePermissions } from "../utils/auth";
 import { z } from "zod";
 import { isAdmin } from "../utils/auth";
 import { Prisma } from "@prisma/client";
 import { MULTI_CONFIG_TSVECTOR } from "../services/ftsService";
+
+/**
+ * Strip NUL bytes from text destined for a Postgres text/tsvector column
+ * (2026-09-21 AI-ACT.pdf incident). pdfjs/pdf-parse emit U+0000 for glyphs
+ * certain PDF font encodings cannot map; PostgreSQL rejects 0x00 with
+ * SQLSTATE 22021 (`invalid byte sequence for encoding "UTF8": 0x00`) and the
+ * non-blocking FTS insert failure left the document "completed" with ZERO
+ * document_chunks rows → viewer "No extracted text" + FTS silently blind.
+ * The collector now strips at parse time (parser.ts stripNulCharacters);
+ * these server-side call sites are defense-in-depth for the precheck text
+ * path (writeTempTextFile) and any chunk text crossing raw SQL.
+ */
+function stripNul(text: string): string {
+  return text.replaceAll("\u0000", "");
+}
+
+/**
+ * CR-01 (204-REVIEW) defense-in-depth: the DLP placeholder-token shape — the
+ * SAME bracket syntax the masker writes (dlpDocumentService) and the frontend
+ * probe reads (useDocuments DLP_PLACEHOLDER_REGEX). Case-insensitive to
+ * match the system's own tolerant matcher (buildPlaceholderRegex compiles
+ * with "gi" flags): a hand-written [person_1] variant is a placeholder to
+ * the unmask path, so the fail-closed guard must reject it too. Kept local
+ * by design: shared pins only the CLASS vocabulary (dlpDocumentScan.schema.ts
+ * D-03 note) — placeholder matching must never re-declare the class list per
+ * package, but the token-shape regex has three existing copies (masker
+ * prefilter / frontend probe / here).
+ */
+const DLP_PLACEHOLDER_TOKEN_RE = /\[\s*[A-Z][A-Z_]*\s*_\s*\d+\s*\]/i;
 
 const UPLOADS_DIR = "storage/uploads/";
 
@@ -102,10 +141,10 @@ function uploadSingle(field: string) {
   return (req: Request, res: Response, next: NextFunction) => {
     upload.single(field)(req, res, (err: unknown) => {
       if (err instanceof MulterError && err.code === "LIMIT_FILE_SIZE") {
-        return res.status(413).json({ error: "File too large", limit: "100MB" });
+        return sendError(res, 413, "file_too_large", "File too large", { limit: "100MB" });
       }
       if (err) {
-        return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+        return sendError(res, 400, "upload_rejected", "Upload rejected", { cause: err instanceof Error ? err.message : String(err) });
       }
       next();
     });
@@ -142,7 +181,7 @@ router.put("/:documentId/status", async (req: Request, res: Response) => {
   try {
     const secret = String(req.headers["x-collector-secret"] ?? "");
     if (!secretEquals(secret, getEnv().COLLECTOR_SECRET)) {
-      res.status(401).json({ error: "Unauthorized" });
+      sendError(res, 401, "unauthorized", "Unauthorized");
       return;
     }
 
@@ -256,8 +295,7 @@ router.put("/:documentId/status", async (req: Request, res: Response) => {
 
     res.json(document);
   } catch (err: unknown) {
-  const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: message });
+  sendInternalServerError(res, err);
   }
 });
 
@@ -272,7 +310,7 @@ router.get("/:documentId/status", async (req: Request, res: Response) => {
   try {
     const secret = String(req.headers["x-collector-secret"] ?? "");
     if (!secretEquals(secret, getEnv().COLLECTOR_SECRET)) {
-      res.status(401).json({ error: "Unauthorized" });
+      sendError(res, 401, "unauthorized", "Unauthorized");
       return;
     }
 
@@ -286,13 +324,12 @@ router.get("/:documentId/status", async (req: Request, res: Response) => {
       select: { status: true, progress: true },
     });
     if (!document) {
-      res.status(404).json({ error: "Document not found" });
+      sendError(res, 404, "document_not_found", "Document not found");
       return;
     }
     res.json({ status: document.status, progress: document.progress });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: message });
+    sendInternalServerError(res, err);
   }
 });
 
@@ -316,9 +353,44 @@ router.use(tenantContextMiddleware);
  *       500: { description: Server error }
  */
 // GET /api/documents — list all documents accessible to user
+/**
+ * @openapi
+ * /documents:
+ *   get:
+ *     tags: [Document]
+ *     summary: List documents visible to the caller (workspace-access filtered)
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - name: workspaceId
+ *         in: query
+ *         schema: { type: string, format: uuid }
+ *       - name: limit
+ *         in: query
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+ *         description: "Opt-in cursor mode — presence of limit or cursor switches the response to the items/nextCursor envelope"
+ *       - name: cursor
+ *         in: query
+ *         schema: { type: string }
+ *         description: "Opaque keyset cursor from a previous page (base64url v1|createdAt|id)"
+ *     responses:
+ *       200: { description: Legacy bare array (no cursor/limit) OR {items, nextCursor} envelope (cursor mode) }
+ *       400: { description: Invalid query parameters }
+ *       500: { description: Internal error }
+ */
 router.get("/", async (req: Request, res: Response) => {
   try {
-    const workspaceId = req.query.workspaceId as string | undefined;
+    // api-design sweep (2026-09-24): opt-in keyset pagination. The bare-array
+    // legacy response is preserved byte-identical when NO query params are
+    // present (existing consumers keep working); passing `cursor` or `limit`
+    // switches to the {items, nextCursor} envelope (docs/API.md pagination).
+    const listQuery = documentListQuerySchema.safeParse(req.query);
+    if (!listQuery.success) {
+      sendError(res, 400, "invalid_query", "Invalid query parameters", listQuery.error.flatten().fieldErrors);
+      return;
+    }
+    const { workspaceId, cursor, limit: rawLimit } = listQuery.data;
+    const envelopeMode = cursor !== undefined || rawLimit !== undefined;
+    const limit = rawLimit ?? 50;
 
     const where: Prisma.DocumentWhereInput = { deletedAt: null };
 
@@ -338,6 +410,20 @@ router.get("/", async (req: Request, res: Response) => {
       { workspace: { project: { accessGrants: { some: { userId: req.userId! } } } } },
     ];
 
+    // Keyset predicate (cursor mode only): merged under AND so it composes
+    // with the access OR-filter above — rows strictly AFTER the cursor in
+    // (createdAt DESC, id DESC) order. The id tiebreaker makes the order
+    // total (bulk-upload rows share createdAt milliseconds).
+    let cursorWhere: Record<string, unknown> | null = null;
+    if (cursor) {
+      const decoded = decodeCursor(cursor);
+      if (!decoded) {
+        sendError(res, 400, "invalid_cursor", "Invalid cursor");
+        return;
+      }
+      cursorWhere = keysetWhere("createdAt", decoded);
+    }
+
     // Phase 192 plan 10 (Gap 3 — UI-SPEC surface 3): one query arm maps the
     // DlpEntity relation count onto each served row as dlpEntityCount — no
     // per-row client fan-out, no N+1. COUNT ONLY (no-PII discipline): entity
@@ -346,23 +432,31 @@ router.get("/", async (req: Request, res: Response) => {
     // dlpScanState first). The Prisma _count wrapper is stripped before
     // res.json; the response stays additive (an extra field per row).
     const documents = await prisma.document.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
+      where: cursorWhere ? { AND: [cursorWhere, where] } : where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: envelopeMode ? limit : undefined,
       include: {
         _count: {
           select: { dlpEntities: true },
         },
       },
     });
-    res.json(
-      documents.map(({ _count, ...doc }) => ({
-        ...doc,
-        dlpEntityCount: _count.dlpEntities,
-      })),
-    );
+    const rows = documents.map(({ _count, updatedAt, ...doc }) => ({
+      ...doc,
+      dlpEntityCount: _count.dlpEntities,
+      // api-design sweep: rows now carry updatedAt (the If-Match validator
+      // for PUT /text) — additive field, legacy consumers ignore it.
+      updatedAt,
+    }));
+    if (!envelopeMode) {
+      res.json(rows);
+      return;
+    }
+    const last = documents[documents.length - 1];
+    const nextCursor = documents.length === limit && last ? encodeCursor(last.createdAt, last.id) : null;
+    res.json({ items: rows, nextCursor });
   } catch (err: unknown) {
-  const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: message });
+    sendInternalServerError(res, err);
   }
 });
 
@@ -393,13 +487,13 @@ router.get("/", async (req: Request, res: Response) => {
 router.post("/upload", uploadSingle("file"), requirePermission("document:write"), requireWorkspaceWriteAccess({ bypassAdmin: false }), async (req: Request, res: Response) => {
   try {
     if (!req.file) {
-      res.status(400).json({ error: "No file uploaded" });
+      sendError(res, 400, "no_file", "No file uploaded");
       return;
     }
 
     const workspaceId = req.body.workspaceId;
     if (!workspaceId) {
-      res.status(400).json({ error: "workspaceId is required" });
+      sendError(res, 400, "workspace_required", "workspaceId is required");
       return;
     }
 
@@ -423,7 +517,7 @@ router.post("/upload", uploadSingle("file"), requirePermission("document:write")
     const embeddingModel = modelSetting.value;
 
     if (!embeddingModel) {
-      res.status(400).json({ error: "Embedding model not configured. Please set an embedding model in Settings > LLM & Embedding." });
+      sendError(res, 400, "embedding_not_configured", "Embedding model not configured. Please set an embedding model in Settings > LLM & Embedding.");
       return;
     }
 
@@ -441,7 +535,7 @@ router.post("/upload", uploadSingle("file"), requirePermission("document:write")
       // WR-01: multer already wrote the file; clean it up before rejecting so
       // repeated bad-workspaceId requests don't accumulate orphans on disk.
       unlinkUploadIfPresent(req);
-      res.status(404).json({ error: "Workspace not found" });
+      sendError(res, 404, "workspace_not_found", "Workspace not found");
       return;
     }
 
@@ -457,7 +551,7 @@ router.post("/upload", uploadSingle("file"), requirePermission("document:write")
     if (!isProjectOwner && !hasWorkspaceAccess && !hasProjectAccess) {
       // WR-01: clean up the multer upload before rejecting.
       unlinkUploadIfPresent(req);
-      res.status(403).json({ error: "Access denied to this workspace" });
+      sendError(res, 403, "access_denied", "Access denied to this workspace");
       return;
     }
 
@@ -470,7 +564,7 @@ router.post("/upload", uploadSingle("file"), requirePermission("document:write")
     if (!(await assertNonAdminUploadAllowed(req, workspace, admin))) {
       // WR-01: clean up the multer upload before rejecting.
       unlinkUploadIfPresent(req);
-      res.status(403).json({ error: "Uploads are restricted to admins in this workspace" });
+      sendError(res, 403, "admin_only_uploads", "Uploads are restricted to admins in this workspace");
       return;
     }
 
@@ -480,6 +574,23 @@ router.post("/upload", uploadSingle("file"), requirePermission("document:write")
     // see the same sanitized name). The multer disk filename already routes
     // through getUniqueFilePath -> sanitizeFileName.
     const safeName = sanitizeFileName(req.file.originalname);
+
+    // Phase 207 (CLOUD-03, D-03 site 4 / D-06): INGEST gate — pre-collector
+    // token check on the requesting user BEFORE the document row is created
+    // (no zombie pending rows when breached). Ingestion counts against the
+    // actor's token quota exactly like generation (SC-1: "ferma la generazione
+    // E l'ingestione"). Pre-turn semantics — nothing in flight is killed
+    // (D-06); the NEXT dispatch is blocked.
+    try {
+      await checkTokenQuota(req.userId!);
+    } catch (err: unknown) {
+      if (err instanceof QuotaError) {
+        unlinkUploadIfPresent(req);
+        res.status(err.status).json(err.payload);
+        return;
+      }
+      throw err;
+    }
 
     // Determine document type from file extension
     const ext = path.extname(safeName).toLowerCase().replace(".", "");
@@ -559,8 +670,7 @@ router.post("/upload", uploadSingle("file"), requirePermission("document:write")
     // is cleaned here so the only durable residue is the recoverable
     // pending row. WR-01 semantics: best-effort, never masks the 500.
     unlinkUploadIfPresent(req);
-    const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: message });
+    sendInternalServerError(res, err);
   }
 });
 
@@ -573,7 +683,7 @@ router.get("/:documentId", async (req: Request, res: Response) => {
     });
 
     if (!document) {
-      res.status(404).json({ error: "Document not found" });
+      sendError(res, 404, "document_not_found", "Document not found");
       return;
     }
 
@@ -588,14 +698,13 @@ router.get("/:documentId", async (req: Request, res: Response) => {
       where: { userId: req.userId!, projectId: document.workspace?.projectId },
     });
     if (!isProjectOwner && !hasWorkspaceAccess && !hasProjectAccess) {
-      res.status(403).json({ error: "Access denied to this document" });
+      sendError(res, 403, "access_denied", "Access denied to this document");
       return;
     }
 
     res.json(document);
   } catch (err: unknown) {
-  const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: message });
+  sendInternalServerError(res, err);
   }
 });
 
@@ -618,7 +727,7 @@ router.get("/:documentId/text", async (req: Request, res: Response) => {
     });
 
     if (!document) {
-      res.status(404).json({ error: "Document not found" });
+      sendError(res, 404, "document_not_found", "Document not found");
       return;
     }
 
@@ -631,7 +740,7 @@ router.get("/:documentId/text", async (req: Request, res: Response) => {
       where: { userId: req.userId!, projectId: document.workspace?.projectId },
     });
     if (!isProjectOwner && !hasWorkspaceAccess && !hasProjectAccess) {
-      res.status(403).json({ error: "Access denied to this document" });
+      sendError(res, 403, "access_denied", "Access denied to this document");
       return;
     }
 
@@ -650,7 +759,7 @@ router.get("/:documentId/text", async (req: Request, res: Response) => {
     const unmaskQuery = dlpUnmaskQuerySchema.safeParse(req.query);
     let unmaskRequested = false;
     if (!unmaskQuery.success) {
-      res.status(400).json({ error: "Invalid query parameter", details: unmaskQuery.error.flatten().fieldErrors });
+      sendError(res, 400, "invalid_query", "Invalid query parameter", unmaskQuery.error.flatten().fieldErrors);
       return;
     }
     unmaskRequested = unmaskQuery.data.unmask === true;
@@ -705,8 +814,316 @@ router.get("/:documentId/text", async (req: Request, res: Response) => {
       status: document.status,
     });
   } catch (err: unknown) {
+    sendInternalServerError(res, err);
+  }
+});
+
+/**
+ * @openapi
+ * /documents/:documentId/text:
+ *   put:
+ *     tags: [Documents]
+ *     summary: Edit a document's extracted text (body-only) and re-index
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { name: documentId, in: path, required: true, schema: { type: string } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [body]
+ *             properties:
+ *               body: { type: string, minLength: 1, description: The edited full text }
+ *     responses:
+ *       202: { description: Edit accepted — re-index dispatched (async completion via the collector callback) }
+ *       400: { description: Invalid request body (missing/empty body) or an edited body that still contains DLP placeholders on a scanned document }
+ *       403: { description: Access denied (workspace access triple-check with owner/editor role grading, admin does NOT bypass) }
+ *       404: { description: Document not found (or soft-deleted) }
+ *       409: { description: Document is not completed, or a DLP scan is currently in progress (fail-closed) }
+ */
+// PUT /api/documents/:documentId/text — body-only edit + stored-file rewrite
+// through the storage provider + FULL re-dispatch via forwardToCollector
+// (Phase 204, DEBT-SW-05 / FEAT-01 SHIP v1.6).
+//
+// The edit loop: edited text → os.tmpdir() ingress buffer → provider.put
+// (NEVER direct fs — S3 rows break; uploads.ts:542-547 seam) → re-dispatch
+// through forwardToCollector so the collector re-chunks, the status callback
+// rebuilds FTS chunks (documents.ts:1464-1511) and the DLP enqueue hook fires
+// (documents.ts:1532). Text-type rows (md/txt/csv) overwrite the SAME
+// storageKey (LocalFS put is overwrite-idempotent); binary-type rows ride the
+// pdf→txt swap precedent (documents.ts:1283-1288) — a NEW .txt key + row
+// { storageKey, filePath, type: "txt" } persisted BEFORE dispatch (the status
+// callback's updateData never touches `type`).
+//
+// DLP re-scan arm (Phase 192 × edit — the P2 landmine): scanDocument skips
+// on the dlpScannedAt marker (dlpDocumentService.ts:358-361) and nothing on
+// the live path ever cleared it — an edit of a scanned document would land
+// the (possibly PII-bearing) edited text UNMASKED in FTS/vectors. The update
+// therefore clears dlpScannedAt + dlpScanState IN THE SAME UPDATE as the
+// edit, and deleteEntityMap refreshes the stale placeholder rows — the
+// completion hook's enqueue re-scans the edited text (marker-clear is
+// paired with the re-dispatch, never a bare clear). Toggle-off workspaces
+// are inert: the hook reads the toggle, no branch needed here.
+router.put("/:documentId/text", requirePermission("document:write"), async (req: Request, res: Response) => {
+  try {
+    // 1. Body validation (archivePages.ts:205 shape — shared schema, safeParse)
+    const parsed = updateDocumentTextSchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendError(res, 400, "invalid_body", "Invalid request body", parsed.error.flatten().fieldErrors);
+      return;
+    }
+    const editedBody = parsed.data.body;
+
+    // Phase 207 (CLOUD-03, D-03 site 4): re-ingestion rides the same quota
+    // contract as the first dispatch — gate BEFORE the row mutation and the
+    // 202 (a breached re-dispatch must not stage work it will never run).
+    try {
+      await checkTokenQuota(req.userId!);
+    } catch (err: unknown) {
+      if (err instanceof QuotaError) {
+        res.status(err.status).json(err.payload);
+        return;
+      }
+      throw err;
+    }
+
+    // 2. IDOR/soft-delete gate — mirrors the /text read route EXACTLY
+    // (workspace + project include for the D-04 access triple-check).
+    const document = await prisma.document.findFirst({
+      where: withSoftDelete({ id: req.params.documentId as string, deletedAt: null }),
+      include: { workspace: { include: { project: true } } },
+    });
+    if (!document) {
+      sendError(res, 404, "document_not_found", "Document not found");
+      return;
+    }
+
+    // api-design sweep (2026-09-24): optional optimistic concurrency — the
+    // caller MAY pass `If-Match: "<updatedAt>"` (the value every serialized
+    // row carries) to refuse silent last-write-wins over a concurrent edit.
+    // Absent header = check skipped (non-breaking); mismatch = 409 with the
+    // current state so the caller can re-read and retry.
+    const precondition = checkIfMatch(req.header("if-match"), document.updatedAt);
+    if (precondition === "stale") {
+      sendError(res, 409, "stale_version", "Document was modified by another editor", {
+        currentUpdatedAt: document.updatedAt.toISOString(),
+      });
+      return;
+    }
+
+    // D-04 (T-78-01): workspace access check applies to ALL users including
+    // admins — mirrored from the GET /:documentId/text gate, PLUS the WR-02
+    // role grading: a workspaceAccess row with role "viewer" (the column
+    // default) must NOT grant text rewrites — the edit re-enters the RAG
+    // corpus with attacker-supplied text. This mirrors the upload path's
+    // editor-grade intent (requireWorkspaceWriteAccess under graded
+    // enforcement) without mounting it: the middleware resolves the
+    // workspaceId from the path/body/query (resolveRequestWorkspaceId), and
+    // this route carries only :documentId. Role resolution stays through the
+    // single-resolver columns (owner/editor filter here; the project-owner
+    // arm below covers the implicit owner).
+    const isProjectOwner = document.workspace?.project?.createdBy === req.userId;
+    const hasWorkspaceAccess = await prisma.workspaceAccess.findFirst({
+      where: {
+        userId: req.userId!,
+        workspaceId: document.workspaceId,
+        role: { in: ["owner", "editor"] },
+      },
+    });
+    const hasProjectAccess = await prisma.projectAccess.findFirst({
+      where: { userId: req.userId!, projectId: document.workspace?.projectId },
+    });
+    if (!isProjectOwner && !hasWorkspaceAccess && !hasProjectAccess) {
+      sendError(res, 403, "access_denied", "Access denied to this document");
+      return;
+    }
+
+    // 3. Only settled "completed" documents are editable — a pending/
+    // processing row is mid-ingest (the re-dispatch would race it), a failed
+    // row needs a re-upload/reindex first.
+    if (document.status !== "completed") {
+      sendError(res, 409, "document_not_completed", "Document is not completed");
+      return;
+    }
+
+    // WR-03 (204-REVIEW) fail-closed race guard: the DLP marker
+    // (dlpScannedAt) is stamped only at scan END (dlpDocumentService:514),
+    // so an edit issued while a scan is IN FLIGHT would pass the completed
+    // check with isDlpScanned === false — no marker clear, no re-scan — and
+    // the racing scan's masked-chunk UPDATEs (keyed on the OLD chunk ids)
+    // can miss the freshly rewritten chunks, persisting unmasked PII with
+    // dlpScannedAt subsequently set so nothing ever re-scans it. An active
+    // scan makes the row non-editable (fail-closed 409, mirroring the
+    // eval-gate 409 shape).
+    if (document.dlpScanState === "scanning") {
+      sendError(res, 409, "document_scanning", "Document is being DLP-scanned");
+      return;
+    }
+
+    // 4. DLP re-scan arm (P2 + CR-01): a previously-scanned row MUST have its
+    // marker cleared in the same update as the edit, paired with the
+    // re-dispatch below — clearing alone (no re-scan) would reintroduce
+    // unmasked PII (T-204-06). The entity-map refresh (deleteEntityMap,
+    // below) deletes stale placeholder rows so the re-scan's writeEntityMap
+    // rebuilds a clean map.
+    // CR-01 fail-closed guard (the UI is never the gate): a scanned row whose
+    // edited body still CONTAINS placeholder tokens is rejected — saving the
+    // masked-text skeleton would persist it as the new source AND (before
+    // this guard) delete the entity map, the only copy of the originals, with
+    // no re-scan recovery (scanDocument's prefilter skips placeholder-bearing
+    // chunks as "already masked"). Unmask-right holders get the real text via
+    // the frontend's unmask prefill (DocumentViewerPage startEdit); without
+    // unmask rights the masked skeleton is simply not editable.
+    const isDlpScanned = Boolean(document.dlpScannedAt);
+    if (isDlpScanned) {
+      if (DLP_PLACEHOLDER_TOKEN_RE.test(editedBody)) {
+        sendError(res, 400, "dlp_placeholder_edit", "Edited body still contains DLP placeholders");
+        return;
+      }
+      // WR-01 (204-REVIEW): deleteEntityMap runs AFTER the successful
+      // provider.put + row update (step 6 below) — never here. A failed
+      // provider.put must leave the entity map intact: the row stays
+      // completed with dlpScannedAt set, so the map is still the ONLY
+      // re-composition source for the (unmodified) masked text; deleting it
+      // up front would brick unmask on a retryable failure. The window where
+      // the map is stale relative to the edited text (until the re-scan
+      // rewrites it) is tolerated by buildRecompositionMap's duplicate-row
+      // map-overwrite (dlpEntityService.ts:113-114).
+    }
+
+    // 5. Stored-file rewrite through the storage provider (T-204-07: keys
+    // compose ONLY from server-side values — org id + uuid + sanitized name;
+    // the schema is body-only so no client input ever reaches the key).
+    const workspace = document.workspace;
+    const TEXT_TYPES = new Set(["md", "txt", "csv"]);
+    const isTextType = TEXT_TYPES.has(document.type);
+    // Legacy null-key rows (pre-M6 backfill) carry the cwd-relative filePath
+    // as the effective key (LocalFS legacy arm resolves it).
+    const sameKey = document.storageKey ?? document.filePath;
+    const newStorageKey = `${document.organizationId}/uploads/${crypto.randomUUID()}-${sanitizeFileName(
+      isTextType ? document.name : document.name.replace(/\.[^.]+$/, "") + ".txt",
+    )}`;
+    const targetKey = isTextType ? sameKey : newStorageKey;
+
+    // Edited text → os.tmpdir() ingress buffer (writeSourceBufferToTemp
+    // precedent). The only fs writes on this route are the buffer + its
+    // best-effort unlink — every durable byte rides provider.put.
+    const tmpPath = path.join(os.tmpdir(), `doc-edit-${crypto.randomUUID()}.txt`);
+    fs.writeFileSync(tmpPath, editedBody, "utf-8");
+
+    try {
+      const provider = await getStorageProvider(document.organizationId);
+      await provider.put(tmpPath, targetKey);
+
+      // 6. Persist the edit bookkeeping BEFORE dispatch: the re-index reset
+      // (status "pending" — forwardToCollector's guarded processing claim
+      // flips pending→processing, and a completed row would count 0 and
+      // silently skip the dispatch), the binary-type swap (the status
+      // callback's updateData never touches type/storageKey/filePath), and
+      // the DLP marker-clear for scanned rows.
+      const updateData: Record<string, unknown> = {
+        status: "pending",
+        statusMessage: null,
+      };
+      if (!isTextType) {
+        // filePath mirrors the LocalFS legacy-arm resolution of the new key
+        // (path.resolve("storage/uploads", key)) — S3-backed rows don't rely
+        // on filePath; the column stays additive-correct for LocalFS reads.
+        updateData.storageKey = targetKey;
+        updateData.filePath = `storage/uploads/${targetKey}`;
+        updateData.type = "txt";
+      }
+      if (isDlpScanned) {
+        updateData.dlpScannedAt = null;
+        updateData.dlpScanState = null;
+      }
+      await prisma.document.update({
+        where: { id: document.id },
+        data: updateData,
+      });
+
+      // WR-01: the entity-map refresh lands HERE — only after the put + the
+      // marker-clear update both succeeded (the marker-clear rides the same
+      // update as the edit, so a failure before this point leaves the row
+      // completed + dlpScannedAt set with the map intact; the edit is simply
+      // retryable). Non-fatal: a failed refresh must not 500 an edit whose
+      // durable bytes already landed — the re-scan rebuilds the map from the
+      // edited text regardless; until then stale rows are tolerated (see the
+      // WR-01 comment in step 4).
+      if (isDlpScanned) {
+        try {
+          await deleteEntityMap(document.id);
+        } catch (mapErr: unknown) {
+          logger.error("[documents] deleteEntityMap refresh failed after edit (continuing)", {
+            documentId: document.id,
+            error: mapErr instanceof Error ? mapErr.message : String(mapErr),
+          });
+        }
+      }
+
+      if (isTextType) {
+        // The ingress buffer is not storage: the dispatch reads the row's key
+        // through the provider (sourceKey set), so the tmp is unlinked
+        // best-effort once the bytes are in the provider (uploads.ts:542-547
+        // precedent). Binary swaps keep the tmp until after dispatch too —
+        // same rule applies below via the shared best-effort unlink.
+        try { fs.unlinkSync(tmpPath); } catch { /* best-effort ingress cleanup */ }
+      }
+
+      await logEvent("document", document.id, "document.edited", req.userId!);
+
+      // 7. FULL re-dispatch (fire-and-forget) — the response is 202 BEFORE
+      // the collector answers; async completion rides the status callback.
+      // deleteSourceOnFailure:false — the just-edited stored source MUST
+      // survive a transient dispatch failure (the forwardToCollector failure
+      // arm provider.deletes the sourceKey when true; the edit flow's
+      // recovery path is admin reembed-documents re-reading the STORED file
+      // — Pitfall 3 — so destroying it would brick the edit). Same
+      // opt-out the draft leg chose for draft-owned sources (260829-fty).
+      // WR-03: defensive .catch at the call site (Node ≥24 unhandled
+      // rejections) — a rejection never 500s the already-written 202.
+      void forwardToCollector(
+        document.id,
+        tmpPath,
+        isTextType ? document.name : newStorageKey.split("/").pop() ?? document.name,
+        document.workspaceId,
+        workspace?.name ?? "",
+        document.embeddingModel,
+        "txt",
+        "",
+        {
+          deleteSourceOnFailure: false,
+          storageKey: targetKey,
+          organizationId: document.organizationId,
+        },
+      )
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          logger.error("[documents] forwardToCollector unhandled (document text edit)", {
+            documentId: document.id,
+            error: msg,
+          });
+        })
+        .finally(() => {
+          // Best-effort ingress cleanup for BOTH arms (text/binary) — the
+          // dispatch read the source through the provider (sourceKey set).
+          try { fs.unlinkSync(tmpPath); } catch { /* best-effort */ }
+        });
+
+      res.status(202).json({ documentId: document.id, status: "reindexing" });
+    } catch (putErr: unknown) {
+      // An interrupted provider.put (before any dispatch) must not leave a
+      // dangling ingress buffer; the row is untouched (still completed) —
+      // the edit simply failed, retryable.
+      try { fs.unlinkSync(tmpPath); } catch { /* best-effort */ }
+      throw putErr;
+    }
+  } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: message });
+    logger.error("[documents] Document text edit failed:", { documentId: req.params.documentId, error: message });
+    sendInternalServerError(res, err);
   }
 });
 
@@ -722,7 +1139,7 @@ router.post("/bulk-delete", requirePermission("document:delete"), async (req: Re
   try {
     const parsed = bulkDeleteDocumentsSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "Invalid request body", details: parsed.error.flatten() });
+      sendError(res, 400, "invalid_body", "Invalid request body", parsed.error.flatten());
       return;
     }
     const { documentIds } = parsed.data;
@@ -833,8 +1250,7 @@ router.post("/bulk-delete", requirePermission("document:delete"), async (req: Re
     const deleted = toDelete.map((d) => d.id);
     res.json({ deleted, failed });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: message });
+    sendInternalServerError(res, err);
   }
 });
 
@@ -858,7 +1274,7 @@ router.post("/:documentId/cancel", requirePermission("document:write"), async (r
       select: { id: true, status: true, workspaceId: true, workspace: { include: { project: true } } },
     });
     if (!document) {
-      res.status(404).json({ error: "Document not found" });
+      sendError(res, 404, "document_not_found", "Document not found");
       return;
     }
 
@@ -872,14 +1288,14 @@ router.post("/:documentId/cancel", requirePermission("document:write"), async (r
       where: { userId: req.userId!, projectId: document.workspace?.projectId },
     });
     if (!isProjectOwner && !hasWorkspaceAccess && !hasProjectAccess) {
-      res.status(403).json({ error: "Access denied to this document" });
+      sendError(res, 403, "access_denied", "Access denied to this document");
       return;
     }
 
     // Only in-flight rows are cancellable — completed/failed/cancelled rows
     // get a 409 so a stale UI cannot flip a settled row.
     if (document.status !== "pending" && document.status !== "processing") {
-      res.status(409).json({ error: "Document is not processing" });
+      sendError(res, 409, "document_not_processing", "Document is not processing");
       return;
     }
 
@@ -901,8 +1317,7 @@ router.post("/:documentId/cancel", requirePermission("document:write"), async (r
     });
     res.json({ id: document.id, status: "cancelled" });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: message });
+    sendInternalServerError(res, err);
   }
 });
 
@@ -918,7 +1333,7 @@ router.delete("/:documentId", requirePermission("document:delete"), async (req: 
       select: { id: true, workspaceId: true, workspace: { include: { project: true } } },
     });
     if (!document) {
-      res.status(404).json({ error: "Document not found" });
+      sendError(res, 404, "document_not_found", "Document not found");
       return;
     }
 
@@ -935,7 +1350,7 @@ router.delete("/:documentId", requirePermission("document:delete"), async (req: 
       where: { userId: req.userId!, projectId: document.workspace?.projectId },
     });
     if (!isProjectOwner && !hasWorkspaceAccess && !hasProjectAccess) {
-      res.status(403).json({ error: "Access denied to this document" });
+      sendError(res, 403, "access_denied", "Access denied to this document");
       return;
     }
 
@@ -1002,8 +1417,7 @@ router.delete("/:documentId", requirePermission("document:delete"), async (req: 
 
     res.json({ message: "Document deleted" });
   } catch (err: unknown) {
-  const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: message });
+  sendInternalServerError(res, err);
   }
 });
 
@@ -1246,6 +1660,9 @@ export async function forwardToCollector(
         } else {
           pdfText = await extractPdfTextFirstPass(filePath);
         }
+        // NUL-byte sanitize (0x00) before the text is written to the temp
+        // .txt file and forwarded to the collector (mirrors parser.ts).
+        pdfText = stripNul(pdfText);
         pdfTextLength = pdfText.length;
       } catch (precheckErr: unknown) {
         const msg = precheckErr instanceof Error ? precheckErr.message : String(precheckErr);
@@ -1472,7 +1889,7 @@ export async function forwardToCollector(
           const batch = result.chunks.slice(i, i + FTS_BATCH_SIZE);
           const ids = batch.map((c) => `${documentId}-${c.chunkIndex}`);
           const docIds = batch.map(() => documentId);
-          const texts = batch.map((c) => c.chunkText);
+          const texts = batch.map((c) => stripNul(c.chunkText));
           const metas = batch.map((c) =>
             JSON.stringify({ paragraph: c.paragraph, charStart: c.charStart, charEnd: c.charEnd }),
           );

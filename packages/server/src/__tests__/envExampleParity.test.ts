@@ -51,10 +51,34 @@ describe("server envSchema ↔ root .env.example parity", () => {
     expect(missing).toEqual([]);
   });
 
-  it("introspects the full server schema (94 keys)", () => {
+  it("introspects the full server schema (118 keys)", () => {
     // Structural sentinel: if this drifts, the schema changed and the root
     // .env.example must be re-checked against the new surface. Phase 193
-    // (D-05): 84 → 94 with the 10 optional LDAP_* keys.
-    expect(schemaKeys.length).toBe(94);
+    // (D-05): 84 → 94 with the 10 optional LDAP_* keys. Phase 195 (MCPO-01):
+    // 94 → 103 with the 4 client-cred + 5 OAUTH_* override keys. Phase 198
+    // (ECCO-01): 103 → 105 with TELEGRAM_API_URL + CONNECTOR_POLL_INTERVAL_MS.
+    // Phase 196 (MCPO-04): 105 → 107 with GDRIVE_API_BASE_URL +
+    // GRAPH_API_BASE_URL (connector API base-URL overrides, air-gap lever).
+    // Post-198 docs commit: 107 → 108 with WIKI_EMBED_TIMEOUT_MS (collector
+    // wiki-embed axios wait cap, ENV-only infra key — documented in the
+    // [server] section).
+    // Phase 197 (MCPO-05): 108 → 109 with GMAIL_API_BASE_URL (Gmail API
+    // base-URL override, air-gap lever for the gmail_* connector tools).
+    // Phase 199 (ECCO-04): 109 → 111 with DISCORD_API_URL +
+    // DISCORD_GATEWAY_URL (Discord connector transport endpoints, air-gap
+    // lever — the WIKI_EMBED_TIMEOUT_MS 108 ancestor line stays in the
+    // chain above).
+    // Phase 200 (ECCO-06, 200-01): 111 → 114 with SLACK_API_URL (connector
+    // Web API base URL, .default() schema key) + SLACK_CLIENT_ID +
+    // SLACK_CLIENT_SECRET (OAuth client credentials, .optional() — the
+    // 109→111 pattern).
+    // Phase 200 (ECCO-06, 200-02): 114 → 115 with WHATSAPP_API_URL (the
+    // WhatsApp Cloud API Graph base URL, .default() — D-06 air-gap lever).
+    // Phase 200 (ECCO-06, 200-03): 115 → 117 with OAUTH_SLACK_AUTH_URL +
+    // OAUTH_SLACK_TOKEN_URL (Slack endpoint overrides, .url().optional() —
+    // the 195 D-05 air-gap lever pattern extended to the Slack provider).
+    // Phase 205 (OCR-02, 205-01): 117 → 118 with OCR_NUM_CTX (runtime
+    // num_ctx override, 0 = registry fallback — D-09).
+    expect(schemaKeys.length).toBe(118);
   });
 });

@@ -4,15 +4,21 @@
 // See LICENSE and NOTICE at the repository root for full terms.
 
 /**
- * AppSidebarNav — persistent navigation inside the AppSidebar (UI revision
- * R-6). Presentational: the group model comes from `sidebar/navModel.tsx`
- * (byte-identical RBAC semantics with the AppNavOverlay), rendering reuses
- * the Feature 7.2 sidebar primitives.
+ * AppSidebarNav — the inline menu content inside the AppSidebar (UI revision
+ * R-7): the project/workspace selectors + the RBAC-filtered nav groups.
+ * Rendered ONLY while the footer Menu button holds the menu open (hidden
+ * completely otherwise); presentational, byte-identical RBAC semantics with
+ * the AppNavOverlay dialog via `sidebar/navModel.tsx`. Rendering reuses the
+ * Feature 7.2 sidebar primitives.
  *
  * Layout contract (shape brief):
  *  - flex-none block with its own `overflow-y-auto`, capped at ~45% height,
  *    `border-t` separator (ChatSidebar above scrolls independently);
  *  - persist keys `sidebar-nav:<groupId>` via SidebarSection;
+ *  - the workspace selector rides on top of the nav groups — it is the
+ *    former sidebar dropdown (R-5 moved it into the dialog; R-7 brings it
+ *    back inline) and only renders when a project is selected (workspaces
+ *    are project-scoped; without a project there is nothing to switch);
  *  - rail mode (`collapsed`): icon-only SidebarItems with `title` tooltips
  *    and a tiny corner lock for license-gated entries (no group icons —
  *    each entry already renders its own, so a group icon would double it);
@@ -30,8 +36,11 @@ import { useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import SidebarSection from "./SidebarSection";
 import SidebarItem from "./SidebarItem";
+import SidebarDropdown from "./SidebarDropdown";
+import { preloadRoute } from "../routePreload";
 import { buildNavGroups, isActiveNavPath, LockBadge } from "./navModel";
 import type { NavEntry } from "./navModel";
+import type { SidebarDropdownItem } from "./SidebarDropdown";
 import { cn } from "@/lib/utils";
 
 export interface AppSidebarNavProps {
@@ -44,6 +53,24 @@ export interface AppSidebarNavProps {
   t: (key: string) => string;
   /** Rail mode: icon-only items with title tooltips + corner lock. */
   collapsed?: boolean;
+  /** R-7: project selector (rendered only when projects exist). */
+  projects?: SidebarDropdownItem[];
+  /** R-7: selected project id (empty = none selected). */
+  selectedProjectId?: string;
+  /** R-7: project selection handler. */
+  onProjectSelect?: (id: string) => void;
+  /** R-7: workspaces of the selected project (selector hidden without a project). */
+  workspaces?: SidebarDropdownItem[];
+  /** R-7: selected workspace id (empty = none selected). */
+  selectedWorkspaceId?: string;
+  /** R-7: workspace selection handler. */
+  onWorkspaceSelect?: (id: string) => void;
+  /**
+   * R-7: fired after any entry navigation so the caller can close the
+   * inline menu (the destination is the primary surface; the menu hides
+   * completely after use).
+   */
+  onNavigate?: () => void;
 }
 
 export default function AppSidebarNav({
@@ -53,6 +80,13 @@ export default function AppSidebarNav({
   primaryColor,
   t,
   collapsed = false,
+  projects,
+  selectedProjectId = "",
+  onProjectSelect,
+  workspaces,
+  selectedWorkspaceId = "",
+  onWorkspaceSelect,
+  onNavigate,
 }: AppSidebarNavProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -66,6 +100,7 @@ export default function AppSidebarNav({
 
   const handleSelect = (entry: NavEntry) => {
     navigate(entry.path);
+    onNavigate?.();
   };
 
   return (
@@ -73,6 +108,30 @@ export default function AppSidebarNav({
       aria-label={t("nav.menu")}
       className="flex-none max-h-[45%] overflow-y-auto overflow-x-hidden border-t border-input/60"
     >
+      {/*
+        R-7: workspace selector — project-scoped, so it only makes sense
+        once a project is chosen. With no project there is nothing to list
+        (App filters `sidebarWorkspaces` by `selectedProjectId`); rendering
+        a dead control would be a disabled row with no path forward.
+      */}
+      {projects && projects.length > 0 && (
+        <SidebarDropdown
+          label={t("sidebar.project")}
+          value={selectedProjectId}
+          onValueChange={onProjectSelect ?? (() => {})}
+          items={projects}
+          placeholder={t("sidebar.selectProject")}
+        />
+      )}
+      {workspaces && workspaces.length > 0 && selectedProjectId && (
+        <SidebarDropdown
+          label={t("sidebar.workspace")}
+          value={selectedWorkspaceId}
+          onValueChange={onWorkspaceSelect ?? (() => {})}
+          items={workspaces}
+          placeholder={t("sidebar.selectWorkspace")}
+        />
+      )}
       {groups.map((group) => (
         <SidebarSection
           key={group.id}
@@ -90,6 +149,7 @@ export default function AppSidebarNav({
               isActive={isActive(entry.path)}
               collapsed={collapsed}
               onClick={() => handleSelect(entry)}
+              onHover={() => preloadRoute(entry.path)}
               className="max-lg:min-h-[44px]"
               badge={
                 entry.locked ? (

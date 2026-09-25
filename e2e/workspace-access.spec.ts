@@ -584,9 +584,15 @@ test.describe("E2E workspace access grants (WSIS-04, D-13 duality)", () => {
 
     // Second context re-login → the wizard does NOT re-show (Pitfall 4 E2E
     // half — the server cache invalidation + fresh /auth/me hold).
+    // 201-02 D-07 small-delta fix: headerExpected=true — an onboarded user
+    // re-logging in lands on the app SHELL (the wizard never renders), so
+    // the login wait must expect the header, not the wizard. The previous
+    // `false` made the wait REQUIRE the wizard to appear while the very next
+    // assertion requires it to be absent — a paradox that only passed when
+    // a stale auth cache flashed the wizard (correct behavior = timeout).
     const context2 = await browser.newContext();
     const page2 = await context2.newPage();
-    await loginViaUi(page2, WIZARD_USERNAME, WIZARD_PASSWORD, false);
+    await loginViaUi(page2, WIZARD_USERNAME, WIZARD_PASSWORD, true);
     await expect(
       page2.getByTestId("onboarding-wizard"),
       "the wizard must NOT re-show after onboarding (Pitfall 4, both halves)",

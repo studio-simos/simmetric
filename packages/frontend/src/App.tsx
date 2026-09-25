@@ -3,7 +3,7 @@
 // This file is part of the Simmetric Chat community build.
 // See LICENSE and NOTICE at the repository root for full terms.
 
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   Routes,
   Route,
@@ -27,13 +27,11 @@ import { useWorkspaces } from "./queries/useWorkspaces";
 import { apiGet } from "./utils/api";
 import { useBootOffline } from "./hooks/useBootOffline";
 import ChatPanel from "./components/ChatPanel";
-import AnalyticsPanel from "./components/AnalyticsPanel";
 import EnterpriseSpinner from "./components/EnterpriseSpinner";
 import WorkspaceCreatePanel from "./components/WorkspaceCreatePanel";
 import WorkspacesPage from "./components/WorkspacesPage";
 import ProjectsPanel from "./components/ProjectsPanel";
 import WidgetsPage from "./components/WidgetsPage";
-import WidgetDetailPage from "./components/WidgetDetailPage";
 import DocumentsPage from "./components/DocumentsPage";
 import LoginPage from "./components/LoginPage";
 import BootOfflineBanner from "./components/BootOfflineBanner";
@@ -51,21 +49,17 @@ import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import DashboardPage from "./components/DashboardPage";
 import KnowledgeBasePage from "./components/KnowledgeBasePage";
-import MarketplacePage from "./components/MarketplacePage";
-import MarketplaceDetail from "./components/MarketplaceDetail";
 import ArchivesPage from "./components/ArchivesPage";
-import ArchiveDetailPage from "./components/ArchiveDetailPage";
 // Phase 190 (SKIL-01, D-19) — dedicated /skills management page.
+import PluginPage from "./components/PluginPage";
 import SkillsPage from "./components/SkillsPage";
-import DocumentViewerPage from "./components/DocumentViewerPage";
-import SynthesisDashboard from "./components/SynthesisDashboard";
-import SynthesisRunDetail from "./components/SynthesisRunDetail";
-import UnifiedUploadPage from "./components/UnifiedUploadPage";
 import AppSidebar from "./components/AppSidebar";
 import type { SidebarShareTarget } from "./components/AppSidebar";
+// UI revision R-7 — the nav dialog (AppNavOverlay) is no longer opened from
+// the sidebar footer: the menu (AppSidebarNav: project/workspace selectors +
+// nav groups) expands inline in the sidebar, toggled by the footer button.
+// The dialog remains reachable via the Cmd/Ctrl+/ shortcut.
 import AppNavOverlay from "./components/AppNavOverlay";
-// UI revision R-6 — persistent sidebar navigation (same nav model as the
-// AppNavOverlay; RBAC semantics byte-identical).
 import AppSidebarNav from "./components/sidebar/AppSidebarNav";
 import UserMenuDialog from "./components/ui/UserMenuDialog";
 import ChatSidebar from "./components/ChatSidebar";
@@ -80,7 +74,6 @@ import { getOnSelectModel } from "./hooks/usePaletteCallbacks";
 import { cn } from "@/lib/utils";
 import TopBar from "./components/TopBar";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import SettingsPage from "./components/SettingsPage";
 import RightPanel from "./components/RightPanel";
 
 // Phase 147 (EPA-11 — D-07): React.lazy at MODULE TOP (NOT inside App —
@@ -93,6 +86,92 @@ const EventLogPanel = lazy(() => import("./components/EventLogPanel"));
 // on-demand ONLY when the /sso route is hit AND isAdmin AND
 // enterpriseInstalled && tier === "enterprise".
 const SsoSettingsPanel = lazy(() => import("./components/SsoSettingsPanel"));
+
+// bundle-dynamic-imports (Vercel React best practices): the heavy
+// admin/KB surfaces below are lazy-split so their third-party payloads
+// stay OUT of the main chunk, which currently also paints LoginPage and
+// the home chat route:
+//   • AnalyticsPanel + WidgetAnalyticsTab → recharts (and its redux/
+//     immer/decimal.js passengers) — the heaviest non-hljs dependency.
+//   • SettingsPage → zod (via SettingsProviders form schemas) + the full
+//     settings console.
+//   • ArchiveDetailPage → d3 (force graph, brush/zoom/time-format).
+//   • WidgetDetailPage / MarketplacePage(+Detail) / Synthesis* /
+//     UnifiedUploadPage / DocumentViewerPage — infrequent admin/KB
+//     surfaces with large app code of their own.
+// Same module-top pattern as the enterprise panels above (Pitfall 2:
+// lazy() inside a component body remounts the subtree every parent
+// render). Hover/focus preload for these routes is wired via
+// components/routePreload.ts (`bundle-preload`) so navigation feels
+// instant despite the chunk fetch.
+const LazyAnalyticsPanel = lazy(() => import("./components/AnalyticsPanel"));
+const LazySettingsPage = lazy(() => import("./components/SettingsPage"));
+const LazyArchiveDetailPage = lazy(() => import("./components/ArchiveDetailPage"));
+const LazyWidgetDetailPage = lazy(() => import("./components/WidgetDetailPage"));
+const LazyMarketplacePage = lazy(() => import("./components/MarketplacePage"));
+const LazyMarketplaceDetail = lazy(() => import("./components/MarketplaceDetail"));
+const LazySynthesisDashboard = lazy(() => import("./components/SynthesisDashboard"));
+const LazySynthesisRunDetail = lazy(() => import("./components/SynthesisRunDetail"));
+const LazyDocumentViewerPage = lazy(() => import("./components/DocumentViewerPage"));
+const LazyUnifiedUploadPage = lazy(() => import("./components/UnifiedUploadPage"));
+
+/**
+ * PageFallback — per-route Suspense fallback while a lazy page chunk
+ * resolves. Mirrors the `initializing` skeleton UI (centered skeleton
+ * block) so a slow chunk fetch renders the same loading world as boot.
+ */
+function PageFallback() {
+  return (
+    <div className="h-full min-h-[50vh] flex items-center justify-center bg-background">
+      <div className="flex flex-col items-center gap-3">
+        <Skeleton className="h-8 w-48 rounded-md" />
+        <Skeleton className="h-4 w-32 rounded-md" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * LazyPage — thin Suspense wrapper for lazy route elements. One boundary
+ * per route (NOT one around the whole <Routes>): navigating to a lazy
+// page suspends only the entering page, leaving the chrome (sidebar,
+ * top bar, right panel) painted and interactive.
+ */
+function LazyPage({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<PageFallback />}>{children}</Suspense>;
+}
+
+/**
+ * applyPrimaryColor — module-scope DOM helper (no component state): writes
+ * the branding accent as CSS custom properties on :root. Hoisted out of App
+ * so `fetchBranding` can be a stable useCallback (exhaustive-deps clean).
+ */
+function applyPrimaryColor(color: string | null) {
+  const root = document.documentElement.style;
+  if (!color) {
+    root.removeProperty("--primary");
+    root.removeProperty("--primary-foreground");
+    root.removeProperty("--ring");
+    root.removeProperty("--accent");
+    root.removeProperty("--accent-foreground");
+    root.removeProperty("--sidebar-primary");
+    root.removeProperty("--sidebar-primary-foreground");
+    root.removeProperty("--sidebar-accent");
+    root.removeProperty("--sidebar-accent-foreground");
+    root.removeProperty("--sidebar-ring");
+    return;
+  }
+  root.setProperty("--primary", color);
+  root.setProperty("--primary-foreground", `color-mix(in oklab, ${color} 15%, white)`);
+  root.setProperty("--ring", `color-mix(in oklab, ${color} 50%, transparent)`);
+  root.setProperty("--accent", `color-mix(in oklab, ${color} 12%, var(--background))`);
+  root.setProperty("--accent-foreground", `color-mix(in oklab, ${color} 70%, var(--foreground))`);
+  root.setProperty("--sidebar-primary", color);
+  root.setProperty("--sidebar-primary-foreground", `color-mix(in oklab, ${color} 15%, white)`);
+  root.setProperty("--sidebar-accent", `color-mix(in oklab, ${color} 10%, var(--background))`);
+  root.setProperty("--sidebar-accent-foreground", `color-mix(in oklab, ${color} 70%, var(--foreground))`);
+  root.setProperty("--sidebar-ring", `color-mix(in oklab, ${color} 50%, transparent)`);
+}
 
 function App() {
   const { setWorkspaceId, currentWorkspaceId, setChatId, currentChatId, setNewChatArchiveId } = useChatNav();
@@ -136,7 +215,8 @@ function App() {
   const user = meData ?? null;
   const isAuthenticated = !!meData;
   const isAdmin = meData?.permissions?.includes("admin:settings") ?? false;
-  const menuSections = menuSectionsData ?? [];
+  // Phase 206 (VIS-01, D-15): server-resolved payload shape.
+  const menuSections = menuSectionsData?.menuSections ?? [];
   const { t } = useTranslation();
   // Phase 147 (EPA-11 — D-08): enterprise gate. `enterpriseInstalled` is
   // the FIRST gate (plugin present); `tier === "enterprise"` is the tier
@@ -162,9 +242,11 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteFilter, setPaletteFilter] = useState("");
   // UI revision R-5: nav dialog (project/workspace selectors + nav groups)
-  // and user menu dialog, both opened from the sidebar footer.
+  // and user menu dialog. R-7: the dialog opens ONLY via the Cmd/Ctrl+/
+  // shortcut — the sidebar footer button toggles the inline menu instead.
   const [navOverlayOpen, setNavOverlayOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [sidebarMenuOpen, setSidebarMenuOpen] = useState(false);
   // UI revision R-5: settings is a dialog, not a routed page — opened from the
   // nav dialog's Settings entry (and kept reachable via /settings deep links).
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -233,6 +315,18 @@ function App() {
       }
 
       if (lastWorkspaceId) {
+        // async-dependencies (Vercel React best practices): the /chats URL
+        // depends only on localStorage (lastWorkspaceId), not on the
+        // workspace fetch result — only its CONSUMPTION is gated by the
+        // workspace check. Start both requests concurrently and await the
+        // chats response last; a cold boot then pays one round-trip instead
+        // of two. `.catch(() => null)` preserves the old behavior exactly:
+        // a failed chats fetch → lastChatId cleanup below.
+        const chatsPromise = lastChatId
+          ? apiGet<Array<{ id: string }>>(
+              `/workspaces/${lastWorkspaceId}/chats`,
+            ).catch(() => null)
+          : Promise.resolve(null);
         try {
           const workspace = await apiGet<{ id: string }>(
             `/workspaces/${lastWorkspaceId}`,
@@ -243,10 +337,8 @@ function App() {
 
             if (lastChatId) {
               try {
-                const chatList = await apiGet<Array<{ id: string }>>(
-                  `/workspaces/${lastWorkspaceId}/chats`,
-                );
-                if (chatList.some((c) => c.id === lastChatId)) {
+                const chatList = await chatsPromise;
+                if (chatList && chatList.some((c) => c.id === lastChatId)) {
                   setChatId(lastChatId);
                 } else {
                   localStorage.removeItem("lastChatId");
@@ -270,14 +362,44 @@ function App() {
     restore();
   }, [meLoading, menuSectionsLoading, meData, systemInitLoading, setWorkspaceId, setChatId]);
 
-  // Load branding after auth; remove inline override on logout
+  const fetchBranding = useCallback(async () => {
+    try {
+      const token = localStorage.getItem("token");
+      const headers: Record<string, string> = token
+        ? { Authorization: `Bearer ${token}` }
+        : {};
+      const res = await fetch("/api/system/settings", { headers });
+      if (!res.ok) return;
+      const settings: { key: string; value: string }[] = await res.json();
+      const appNameEntry = settings.find((s) => s.key === "BRANDING_APP_NAME");
+      const colorEntry = settings.find(
+        (s) => s.key === "BRANDING_PRIMARY_COLOR",
+      );
+      const subtitleEntry = settings.find((s) => s.key === "BRANDING_APP_SUBTITLE");
+      const iconEntry = settings.find((s) => s.key === "BRANDING_APP_ICON_URL");
+      if (appNameEntry?.value) setAppName(appNameEntry.value);
+      if (subtitleEntry?.value !== undefined) setAppSubtitle(subtitleEntry.value);
+      if (iconEntry?.value !== undefined) setAppIconUrl(iconEntry.value);
+      if (colorEntry?.value) {
+        setPrimaryColor(colorEntry.value);
+        applyPrimaryColor(colorEntry.value);
+      }
+    } catch {
+      // Branding not configured yet
+    }
+  }, []);
+
+  // Load branding after auth; remove inline override on logout.
+  // fetchBranding is a stable useCallback (setState setters + the
+  // module-scope applyPrimaryColor are unchanging) so listing it in the
+  // deps keeps exhaustive-deps honest without re-subscribing per render.
   useEffect(() => {
     if (isAuthenticated) {
-      fetchBranding();
+      void fetchBranding();
     } else {
       applyPrimaryColor(null);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, fetchBranding]);
 
   // Listen for real-time branding changes from settings
   useEffect(() => {
@@ -314,59 +436,6 @@ function App() {
     }
   }, [currentChatId]);
 
-  const fetchBranding = async () => {
-    try {
-      const token = localStorage.getItem("token");
-      const headers: Record<string, string> = token
-        ? { Authorization: `Bearer ${token}` }
-        : {};
-      const res = await fetch("/api/system/settings", { headers });
-      if (!res.ok) return;
-      const settings: { key: string; value: string }[] = await res.json();
-      const appNameEntry = settings.find((s) => s.key === "BRANDING_APP_NAME");
-      const colorEntry = settings.find(
-        (s) => s.key === "BRANDING_PRIMARY_COLOR",
-      );
-      const subtitleEntry = settings.find((s) => s.key === "BRANDING_APP_SUBTITLE");
-      const iconEntry = settings.find((s) => s.key === "BRANDING_APP_ICON_URL");
-      if (appNameEntry?.value) setAppName(appNameEntry.value);
-      if (subtitleEntry?.value !== undefined) setAppSubtitle(subtitleEntry.value);
-      if (iconEntry?.value !== undefined) setAppIconUrl(iconEntry.value);
-      if (colorEntry?.value) {
-        setPrimaryColor(colorEntry.value);
-        applyPrimaryColor(colorEntry.value);
-      }
-    } catch {
-      // Branding not configured yet
-    }
-  };
-
-  const applyPrimaryColor = (color: string | null) => {
-    const root = document.documentElement.style;
-    if (!color) {
-      root.removeProperty("--primary");
-      root.removeProperty("--primary-foreground");
-      root.removeProperty("--ring");
-      root.removeProperty("--accent");
-      root.removeProperty("--accent-foreground");
-      root.removeProperty("--sidebar-primary");
-      root.removeProperty("--sidebar-primary-foreground");
-      root.removeProperty("--sidebar-accent");
-      root.removeProperty("--sidebar-accent-foreground");
-      root.removeProperty("--sidebar-ring");
-      return;
-    }
-    root.setProperty("--primary", color);
-    root.setProperty("--primary-foreground", `color-mix(in oklab, ${color} 15%, white)`);
-    root.setProperty("--ring", `color-mix(in oklab, ${color} 50%, transparent)`);
-    root.setProperty("--accent", `color-mix(in oklab, ${color} 12%, var(--background))`);
-    root.setProperty("--accent-foreground", `color-mix(in oklab, ${color} 70%, var(--foreground))`);
-    root.setProperty("--sidebar-primary", color);
-    root.setProperty("--sidebar-primary-foreground", `color-mix(in oklab, ${color} 15%, white)`);
-    root.setProperty("--sidebar-accent", `color-mix(in oklab, ${color} 10%, var(--background))`);
-    root.setProperty("--sidebar-accent-foreground", `color-mix(in oklab, ${color} 70%, var(--foreground))`);
-    root.setProperty("--sidebar-ring", `color-mix(in oklab, ${color} 50%, transparent)`);
-  };
 
   const handleLogout = () => {
     logoutMutation.mutate();
@@ -408,6 +477,7 @@ function App() {
     if (p.startsWith("/logs")) return t("sidebar.eventLog");
     if (p.startsWith("/analytics")) return t("sidebar.analytics");
     if (p.startsWith("/mcp-marketplace")) return t("sidebar.marketplace");
+    if (p.startsWith("/plugins")) return t("sidebar.plugins");
     if (p.startsWith("/archives")) return t("archives.title");
     if (p.startsWith("/synthesis")) return "Synthesis";
     if (p.startsWith("/sso")) return t("sidebar.sso");
@@ -419,6 +489,43 @@ function App() {
     onOpenComparison: handleOpenComparison,
     onOpenNavOverlay: () => setNavOverlayOpen((v) => !v),
   });
+
+  // R-7: any navigation from the inline sidebar menu closes it again —
+  // the destination is the primary surface, the menu hides completely.
+  const handleSidebarNavNavigate = useCallback(() => {
+    setSidebarMenuOpen(false);
+  }, []);
+
+  // R-7: inline menu selectors — same semantics as the AppNavOverlay rail
+  // (project select resets the workspace; workspace select switches context
+  // and closes the menu; "+ add workspace" navigates and closes).
+  const handleSidebarProjectSelect = useCallback(
+    (value: string) => {
+      setSelectedProjectId(value);
+      setSelectedWorkspaceId("");
+      setWorkspaceId("");
+      if (value) localStorage.setItem("lastProjectId", value);
+      else localStorage.removeItem("lastProjectId");
+    },
+    [setWorkspaceId],
+  );
+
+  const handleSidebarWorkspaceSelect = useCallback(
+    (workspaceId: string) => {
+      if (workspaceId === "__add__") {
+        setSidebarMenuOpen(false);
+        navigate("/create-workspace");
+        return;
+      }
+      setSelectedWorkspaceId(workspaceId);
+      if (workspaceId) {
+        setWorkspaceId(workspaceId);
+        localStorage.setItem("lastWorkspaceId", workspaceId);
+      }
+      setSidebarMenuOpen(false);
+    },
+    [navigate, setWorkspaceId],
+  );
 
   // UI revision R-5: open the settings dialog on a /settings deep link
   // (nav items + legacy bookmarks still land here), then normalize the URL.
@@ -450,7 +557,7 @@ function App() {
   if (initializing) {
     return (
       <TooltipProvider>
-        <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="min-h-[100dvh] flex items-center justify-center bg-background">
           <div className="flex flex-col items-center gap-3">
             <Skeleton className="h-8 w-48 rounded-md" />
             <Skeleton className="h-4 w-32 rounded-md" />
@@ -527,7 +634,7 @@ function App() {
   if (workspacesError) {
     return (
       <TooltipProvider>
-        <div className="min-h-screen flex items-center justify-center bg-background" data-testid="workspaces-load-error">
+        <div className="min-h-[100dvh] flex items-center justify-center bg-background" data-testid="workspaces-load-error">
           <div className="max-w-md text-center space-y-3 p-6">
             <h1 className="text-xl font-semibold text-foreground">{t("onboarding.loadError")}</h1>
             <Button onClick={() => void refetchWorkspaces()} aria-label={t("onboarding.retry")}>
@@ -542,7 +649,7 @@ function App() {
   if (workspacesLoading) {
     return (
       <TooltipProvider>
-        <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="min-h-[100dvh] flex items-center justify-center bg-background">
           <div className="flex flex-col items-center gap-3">
             <Skeleton className="h-8 w-48 rounded-md" />
             <Skeleton className="h-4 w-32 rounded-md" />
@@ -590,7 +697,8 @@ function App() {
           appSubtitle={appSubtitle}
           appIconUrl={appIconUrl}
           user={user}
-          onOpenNavOverlay={() => setNavOverlayOpen(true)}
+          onMenuOpenChange={setSidebarMenuOpen}
+          menuOpen={sidebarMenuOpen}
           onOpenUserMenu={() => setUserMenuOpen(true)}
           t={t}
           sidebarOpen={sidebarOpen}
@@ -604,6 +712,13 @@ function App() {
               primaryColor={primaryColor}
               t={t}
               collapsed={!sidebarOpen}
+              projects={sidebarProjects}
+              selectedProjectId={selectedProjectId}
+              onProjectSelect={handleSidebarProjectSelect}
+              workspaces={sidebarWorkspaces}
+              selectedWorkspaceId={selectedWorkspaceId}
+              onWorkspaceSelect={handleSidebarWorkspaceSelect}
+              onNavigate={handleSidebarNavNavigate}
             />
           }
         >
@@ -628,7 +743,9 @@ function App() {
         </AppSidebar>
         {/* UI revision R-5 — nav dialog. Project/workspace selectors +
             grouped nav entries; RBAC filtering unchanged (same
-            effectiveMenuSections + isAdmin + locks). */}
+            effectiveMenuSections + isAdmin + locks). R-7: opened only by
+            the Cmd/Ctrl+/ shortcut — the sidebar footer button toggles
+            the inline menu instead. */}
         <AppNavOverlay
           open={navOverlayOpen}
           onClose={() => setNavOverlayOpen(false)}
@@ -662,7 +779,9 @@ function App() {
           >
             <DialogTitle className="sr-only">{t("sidebar.settings")}</DialogTitle>
             <div className="h-full min-h-0 min-w-0">
-              <SettingsPage embedded />
+              <LazyPage>
+                <LazySettingsPage embedded />
+              </LazyPage>
             </div>
           </DialogContent>
         </Dialog>
@@ -700,6 +819,19 @@ function App() {
             <Route path="/documents" element={<DocumentsPage />} />
             {/* Phase 190 (SKIL-01, D-19) — /skills management page, gated by
                 the "skills" menu section (Plan 01's MENU_SECTIONS addition). */}
+            {/* Phase 202 (PLGM-05, UI-SPEC §1) — /plugins management page,
+                gated by the "plugins" menu section (the skills additive
+                pattern; MENU_SECTIONS entry is the 15th). */}
+            <Route
+              path="/plugins"
+              element={
+                effectiveMenuSections.includes("plugins") ? (
+                  <PluginPage />
+                ) : (
+                  <Navigate to="/" />
+                )
+              }
+            />
             <Route
               path="/skills"
               element={
@@ -714,7 +846,7 @@ function App() {
               path="/workspace/:workspaceId/documents"
               element={<DocumentsPage />}
             />
-            <Route path="/documents/:id" element={<DocumentViewerPage />} />
+            <Route path="/documents/:id" element={<LazyPage><LazyDocumentViewerPage /></LazyPage>} />
             <Route
               path="/create-workspace"
               element={<WorkspaceCreatePanel />}
@@ -745,7 +877,9 @@ function App() {
               path="/mcp-marketplace"
               element={
                 effectiveMenuSections.includes("marketplace") ? (
-                  <MarketplacePage />
+                  <LazyPage>
+                    <LazyMarketplacePage />
+                  </LazyPage>
                 ) : (
                   <Navigate to="/" />
                 )
@@ -755,7 +889,9 @@ function App() {
               path="/mcp-marketplace/:entryId"
               element={
                 effectiveMenuSections.includes("marketplace") ? (
-                  <MarketplaceDetail />
+                  <LazyPage>
+                    <LazyMarketplaceDetail />
+                  </LazyPage>
                 ) : (
                   <Navigate to="/" />
                 )
@@ -777,7 +913,9 @@ function App() {
               path="/archives/:archiveId/*"
               element={
                 effectiveMenuSections.includes("knowledgeBase") ? (
-                  <ArchiveDetailPage />
+                  <LazyPage>
+                    <LazyArchiveDetailPage />
+                  </LazyPage>
                 ) : (
                   <Navigate to="/" />
                 )
@@ -789,7 +927,9 @@ function App() {
               path="/uploads"
               element={
                 effectiveMenuSections.includes("uploads") ? (
-                  <UnifiedUploadPage />
+                  <LazyPage>
+                    <LazyUnifiedUploadPage />
+                  </LazyPage>
                 ) : (
                   <Navigate to="/" replace />
                 )
@@ -801,7 +941,9 @@ function App() {
               path="/synthesis"
               element={
                 effectiveMenuSections.includes("knowledgeBase") ? (
-                  <SynthesisDashboard />
+                  <LazyPage>
+                    <LazySynthesisDashboard />
+                  </LazyPage>
                 ) : (
                   <Navigate to="/chat" replace />
                 )
@@ -811,7 +953,9 @@ function App() {
               path="/synthesis/:runId"
               element={
                 effectiveMenuSections.includes("knowledgeBase") ? (
-                  <SynthesisRunDetail />
+                  <LazyPage>
+                    <LazySynthesisRunDetail />
+                  </LazyPage>
                 ) : (
                   <Navigate to="/chat" replace />
                 )
@@ -853,7 +997,9 @@ function App() {
               path="/analytics"
               element={
                 effectiveMenuSections.includes("analytics") ? (
-                  <AnalyticsPanel />
+                  <LazyPage>
+                    <LazyAnalyticsPanel />
+                  </LazyPage>
                 ) : (
                   <Navigate to="/" />
                 )
@@ -873,7 +1019,9 @@ function App() {
               path="/widgets/new"
               element={
                 effectiveMenuSections.includes("widget") ? (
-                  <WidgetDetailPage />
+                  <LazyPage>
+                    <LazyWidgetDetailPage />
+                  </LazyPage>
                 ) : (
                   <Navigate to="/" />
                 )
@@ -883,7 +1031,9 @@ function App() {
               path="/widgets/:id"
               element={
                 effectiveMenuSections.includes("widget") ? (
-                  <WidgetDetailPage />
+                  <LazyPage>
+                    <LazyWidgetDetailPage />
+                  </LazyPage>
                 ) : (
                   <Navigate to="/" />
                 )

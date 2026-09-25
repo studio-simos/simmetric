@@ -664,10 +664,12 @@ router.patch("/session/:token/increment", async (req: Request, res: Response) =>
 
     // Check rate limits before incrementing (D-10, SEC-02)
     if (field === "messageCount" && session.messageCount >= 20) {
+      res.set("Retry-After", "3600");
       res.status(429).json({ error: "Hourly message limit exceeded", retryAfter: "3600" });
       return;
     }
     if (field === "conversationCount" && session.conversationCount >= 5) {
+      res.set("Retry-After", "86400");
       res.status(429).json({ error: "Daily conversation limit exceeded", retryAfter: "86400" });
       return;
     }

@@ -273,10 +273,10 @@ export default function SetupWizard() {
   const probingVector = probeVectorMutation.isPending;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+    <div className="min-h-[100dvh] flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-md">
         {/* Controls bar — theme toggle + language selector (mirror LoginPage §72-98) */}
-        <div className="flex items-center justify-end gap-2 mb-4">
+        <div className="auth-enter flex items-center justify-end gap-2 mb-4">
           <ThemeToggle />
           {enabledLanguages.length > 1 && (
             <Select
@@ -304,9 +304,9 @@ export default function SetupWizard() {
           )}
         </div>
 
-        <Card>
+        <Card className="auth-enter auth-enter-1">
           <CardHeader className="text-center">
-            <CardTitle className="text-2xl font-bold">{t("setup.wizard.title")}</CardTitle>
+            <CardTitle className="font-display text-2xl font-medium tracking-tight">{t("setup.wizard.title")}</CardTitle>
             <CardDescription>{t("setup.wizard.subtitle")}</CardDescription>
             {/* Stepper — composed from div + circles + Separator (UI-SPEC §UI Considerations — no new Stepper component) */}
             <div className="flex items-center justify-center gap-2 mt-4">

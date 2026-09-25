@@ -69,6 +69,7 @@ Guides for end users and administrators. These are NOT part of the 9 canonical d
 | [USAGE.md](USAGE.md) | Feature guide: chat, documents, widgets, MCP, settings, analytics |
 | [ADMIN.md](ADMIN.md) | RBAC, roles, license management, and admin tasks |
 | [MCP_MARKETPLACE.md](MCP_MARKETPLACE.md) | MCP Marketplace: browse, install, and manage MCP servers |
+| [CONNECTORS.md](CONNECTORS.md) | Connector setup: Google Drive & M365 Graph first-party tools, OAuth clients, verification paths |
 
 ---
 

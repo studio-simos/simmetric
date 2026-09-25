@@ -15,8 +15,9 @@ import type { SourceCitation } from "../../hooks/useChat";
  * Feature 4.2.4: each citation shows document name + page + score + a 2-line
  * snippet (`chunkText`, line-clamped). Feature 4.7.2: expand AND collapse
  * animate — the list stays mounted and the `.chat-citation-list` / `.is-open`
- * classes (chat-theme.css) drive a max-height + opacity transition in both
- * directions (the old one-shot animation only handled expand).
+ * classes (chat-theme.css) drive a grid-template-rows (0fr → 1fr) + opacity
+ * transition in both directions (the old one-shot animation only handled
+ * expand).
  * Feature 4.9.1: role="region" aria-label="Sources"; the chevron rotates
  * ▸ → ▾ and carries aria-expanded/aria-controls.
  *
@@ -52,9 +53,18 @@ export function ChatCitations({ sources, onOpenPanel }: ChatCitationsProps) {
         </span>
       </button>
 
-      <ul id={regionId} className={cn("chat-citation-list mt-1.5 space-y-1.5", expanded && "is-open")}>
-        {sources.map((source, i) => (
-          <li key={`${source.documentId}-${i}`}>
+      {/* Expand/collapse is CSS-driven via .chat-citation-list (grid-template-rows
+          0fr → 1fr + opacity, chat-theme.css) — a single wrapper child so the
+          interpolation targets the real content height with no clipping cap.
+          div+role pattern: a <ul> cannot host the required single wrapper child. */}
+      <div
+        id={regionId}
+        role="list"
+        className={cn("chat-citation-list mt-1.5", expanded && "is-open")}
+      >
+        <div className="chat-citation-list-inner space-y-1.5">
+          {sources.map((source, i) => (
+            <div role="listitem" key={`${source.documentId}-${i}`}>
             <button
               type="button"
               onClick={() => onOpenPanel?.(sources)}
@@ -87,9 +97,10 @@ export function ChatCitations({ sources, onOpenPanel }: ChatCitationsProps) {
                 )}
               </span>
             </button>
-          </li>
-        ))}
-      </ul>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

@@ -23,6 +23,8 @@ import { HighlightedName } from "./HighlightedName";
 import ChatBadgeMenu from "./ChatBadgeMenu";
 import FolderAccordion from "./FolderAccordion";
 import { DndContext, PointerSensor, KeyboardSensor, TouchSensor, useSensor, useSensors, DragEndEvent, useDraggable, useDroppable } from "@dnd-kit/core";
+import { MessageCircle } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -32,8 +34,21 @@ import {
   groupChatsByDate,
   DATE_BUCKET_ORDER,
 } from "../utils/groupChatsByDate";
+import { PLATFORM_GLYPHS } from "./SettingsConnectors";
 
 type SidebarView = "folders" | "date";
+
+/** Chat-row badge platform set (199-04, UI-SPEC A-11): the D-10 server field
+ * carries the connector's platform enum value; only implemented platforms
+ * ever reach a chat row, but the map keys defensively on the full enum so a
+ * forward-compatible value renders its glyph instead of crashing. The map
+ * itself is the ONE per-app map (imported from SettingsConnectors — 199-02
+ * decision); this helper only narrows lookup + localizes the name. */
+function platformGlyph(platform: string): { Glyph: typeof MessageCircle; nameKey: string } | null {
+  const Glyph = PLATFORM_GLYPHS[platform as keyof typeof PLATFORM_GLYPHS];
+  if (!Glyph) return null;
+  return { Glyph, nameKey: `settings.connectors.platform.${platform}` };
+}
 
 function readSidebarView(): SidebarView {
   if (typeof localStorage === "undefined") return "folders";
@@ -278,6 +293,13 @@ export default function ChatSidebar({ workspaceId, currentChatId, onSelectChat, 
   // Render a single chat row (used across sections)
   const renderChatRow = (chat: ChatSummary) => {
     const isActive = currentChatId === chat.id;
+    // Phase 199 (199-04, D-10/A-11): the badge branch keys ONLY on the
+    // nullable field's presence — a non-empty string renders the glyph;
+    // absent/undefined/null render nothing.
+    const badge =
+      typeof chat.connectorPlatform === "string" && chat.connectorPlatform.length > 0
+        ? platformGlyph(chat.connectorPlatform)
+        : null;
     return (
       <div
         key={chat.id}
@@ -309,9 +331,35 @@ export default function ChatSidebar({ workspaceId, currentChatId, onSelectChat, 
               />
             </form>
           ) : (
-            <p className="text-sm truncate" title={chat.name}>
-              <HighlightedName name={chat.name} query={searchQuery} />
-            </p>
+            <>
+              {/* Phase 199 (199-04, UI-SPEC A-11): icon-only platform badge
+                  BEFORE the name — a text label would fight the truncate
+                  (A-11). Renders ONLY when connectorPlatform is a non-empty
+                  string; absent/undefined/null render nothing (plain chats
+                  pixel-identical to today). 16px glyph, text-muted-foreground
+                  (no per-platform brand colors — UI-SPEC Color), wrapped in a
+                  Tooltip with the localized platform name and carrying
+                  role="img" + a localized aria-label (UI-SPEC Accessibility:
+                  never color/icon alone). Lives INSIDE the shared row
+                  renderer, so both panel and sheet variants inherit it. */}
+              {badge && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <badge.Glyph
+                        role="img"
+                        aria-label={t(badge.nameKey)}
+                        className="h-4 w-4 shrink-0 text-muted-foreground"
+                      />
+                    </TooltipTrigger>
+                    <TooltipContent>{t(badge.nameKey)}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
+              <p className="text-sm truncate" title={chat.name}>
+                <HighlightedName name={chat.name} query={searchQuery} />
+              </p>
+            </>
           )}
           <p className="text-xs text-secondary-foreground">
             {formatDate(chat.updatedAt)}

@@ -24,7 +24,7 @@ import { logger } from "../utils/logger";
 import { validateArchivePath } from "../utils/archivePath";
 import { getOcrJob, parseOcrJobResult } from "../services/ocrJobService";
 import { getSetting } from "../services/systemConfigService";
-import { renderPageToPng } from "./pdfRenderer";
+import { renderPageToPng, PAGE_RENDER_SCALE } from "./pdfRenderer";
 import { ocrPage } from "./ollamaVisionClient";
 import { resolveModelConfig } from "./modelRegistry";
 import { applyHallucinationGuard } from "./hallucinationGuard";
@@ -145,12 +145,24 @@ export async function repairOcrPages(
     }
     const modelConfig = resolveModelConfig(effectiveModelName);
 
+    // Phase 205 D-11 (OCR-04): resolve OCR_PROMPT once before the retry loop —
+    // same fetch-with-fallback shape as the OCR_DEFAULT_MODEL resolution above.
+    // Empty string (unset/empty/whitespace) ⇒ ocrPage's byte-identical legacy path.
+    let ocrPrompt = "";
+    try {
+      const ocrPromptSetting = await getSetting("OCR_PROMPT");
+      ocrPrompt = (ocrPromptSetting.value || "").trim();
+    } catch {
+      ocrPrompt = "";
+    }
+
     for (const target of targets) {
       const outcome = await repairSinglePage(
         job,
         target,
         effectiveModelName,
         modelConfig,
+        ocrPrompt,
       );
       repaired.push(outcome);
 
@@ -268,6 +280,7 @@ async function repairSinglePage(
   target: RepairPageEntry,
   effectiveModelName: string,
   modelConfig: ReturnType<typeof resolveModelConfig>,
+  ocrPrompt: string,
 ): Promise<RepairPageOutcome & { tokensUsed: number; durationMs: number }> {
   const { pageNumber } = target;
   const archiveBase = path.resolve(ARCHIVES_BASE, job.archiveId);
@@ -306,7 +319,7 @@ async function repairSinglePage(
     const sourcePath = path.resolve(archiveBase, sourceRelPath);
     try {
       validateArchivePath(archiveBase, sourceRelPath);
-      pngBuffer = await renderPageToPng(sourcePath, pageNumber, 2.0);
+      pngBuffer = await renderPageToPng(sourcePath, pageNumber, PAGE_RENDER_SCALE);
     } catch (renderErr: unknown) {
       const message = renderErr instanceof Error ? renderErr.message : String(renderErr);
       logger.warn("[ocr] Repair: could not re-render page from source PDF", {
@@ -345,6 +358,8 @@ async function repairSinglePage(
         true,
         (job.ocrMode as "text" | "table" | "figure" | "generic" | undefined) ?? undefined,
         job.customInstructions ?? undefined,
+        // Phase 205 D-11 (OCR-04): threaded resolved OCR_PROMPT ("" = legacy)
+        ocrPrompt || undefined,
       );
 
       let cleanMarkdown = call.markdown;

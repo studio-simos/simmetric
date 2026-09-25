@@ -95,7 +95,8 @@ describe("POST /api/documents/upload — 413 handler (T-61-04)", () => {
       .field("workspaceId", "ws-1");
 
     expect(res.status).toBe(413);
-    expect(res.body.error).toMatch(/file too large/i);
+    expect(res.body.error.message).toMatch(/file too large/i);
+    expect(res.body.error.code).toBe("file_too_large");
   });
 
   it("returns 400 on other multer errors (non-LIMIT_FILE_SIZE)", async () => {

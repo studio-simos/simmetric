@@ -14,8 +14,8 @@ import { PageMetaProvider } from "./contexts/PageMetaContext";
 import { EnterpriseModulesProvider } from "./contexts/EnterpriseModulesContext";
 import "./i18n";
 import "./index.css";
-import "@fontsource-variable/inter";
 import "@fontsource-variable/geist";
+import "@fontsource-variable/source-serif-4";
 import "@fontsource/jetbrains-mono";
 // FOUC-safe bootstrap: apply saved UI font scale + density to <html> BEFORE
 // React render. Module-level init in these libs mirrors ThemeContext.tsx —

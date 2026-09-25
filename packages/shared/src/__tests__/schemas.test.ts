@@ -401,6 +401,11 @@ describe("configKeySchema", () => {
     expect(configKeySchema.safeParse("OCR_DEFAULT_CUSTOM_INSTRUCTIONS").success).toBe(true);
   });
 
+  // Phase 205 D-11 (OCR-04) — standardized glm-ocr system prompt key.
+  it("accepts OCR_PROMPT config key", () => {
+    expect(configKeySchema.safeParse("OCR_PROMPT").success).toBe(true);
+  });
+
   it("accepts SYNTHESIS_LLM_PROVIDER_ID config key", () => {
     expect(configKeySchema.safeParse("SYNTHESIS_LLM_PROVIDER_ID").success).toBe(true);
   });

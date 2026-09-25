@@ -80,11 +80,86 @@ export const PERMISSION_NAMES = [
   // elevated capability, not a default user ability. Resolved per-request via
   // the Phase 189 resolveWorkspaceRole() machinery (never a parallel check).
   "dlp:unmask",
+  // Phase 195 (MCPO-01 D-15): MCP OAuth management permission — 37th. Gates the
+  // oauth start/revoke routes (POST /:id/oauth/start, DELETE /:id/oauth) via
+  // requirePermission — deliberately separate from the router's default
+  // requireAdmin so "configure but not authorize" delegations become possible.
+  // Colon-separated supersedes the dotted mcp.connection.oauth.manage label in
+  // ROADMAP SC-2 / spec §3.7 (Phase 198 D-04 precedent: colon wins, cosmetic).
+  // Admin role spreads [...PERMISSION_NAMES] so it auto-gains;
+  // DEFAULT_USER_ROLE intentionally does NOT include it — authorizing
+  // connections toward external providers is an elevated admin capability.
+  "mcp:oauth:manage",
+  // Phase 198 (ECCO-01 D-04): external chat-connector permissions — 38th/39th.
+  // Gates the connector CRUD + validate/webhook-setup/test-message routes
+  // (connector:manage) and the list/detail/status reads (connector:view).
+  // Colon-separated supersedes the dotted mcp.connection.oauth.manage
+  // placeholder label in the v0.25-ROADMAP doc (Phase 195 D-04 precedent:
+  // colon wins, cosmetic). Admin role spreads [...PERMISSION_NAMES] so both
+  // auto-gain; DEFAULT_USER_ROLE intentionally does NOT include either —
+  // configuring external chat channels is an elevated admin capability.
+  "connector:manage",
+  "connector:view",
+  // Phase 202 (PLGM-05 D-08): plugin-manager permission — 40th. Gates the
+  // /api/plugins CRUD/license/restart routes via requirePermission (202-04).
+  // The spec's "32nd" count is STALE — PERMISSION_NAMES.length is 39 today
+  // (skill:create..delete 32-35th, dlp:unmask 36th, mcp:oauth:manage 37th,
+  // connector:manage/view 38-39th), so this lands as the 40th entry.
+  // Admin role spreads [...PERMISSION_NAMES] so it auto-gains;
+  // DEFAULT_USER_ROLE intentionally does NOT include it — installing
+  // server-side plugins executes their code in-process (D6 trust model:
+  // the admin who uploads the zip is the trust boundary), an elevated
+  // admin capability by construction.
+  "plugins:manage",
+  // Phase 206 (AGENCY-01..03 D-07): web-agency sub-user management — 41st.
+  // Gates the /api/agency CRUD routes via requirePermission — deliberately
+  // NOT requireAdmin (that would exclude the exact audience this phase
+  // creates). Admin role spreads [...PERMISSION_NAMES] so it auto-gains;
+  // DEFAULT_USER_ROLE does NOT include it. DELEGATION_DENYLIST marks it
+  // non-delegable — an agency holding it must not be able to re-grant it
+  // (2-level hierarchy, D-03).
+  "agency:users:manage",
 ] as const;
 
 export type PermissionName = (typeof PERMISSION_NAMES)[number];
 
 export const permissionNameSchema = z.enum(PERMISSION_NAMES);
+
+// ===== Phase 206 (AGENCY-03 D-08): delegation denylist =====
+// THE lattice guard rail: permissions a Web Agency can NEVER grant to its
+// sub-users, on top of the subset-of-own rule (granted ⊆ own effective).
+// THE LANDMINE: isAdmin() (server utils/auth.ts) is keyed on admin:settings
+// — ANY role carrying it IS an admin to every middleware. The admin:* prefix
+// rule keeps admin terminal (AGENCY-03 "admin ruolo terminale"); the exact
+// set covers the other elevated/terminal capabilities. New elevated
+// permissions added in later phases MUST be appended here.
+export const DELEGATION_DENYLIST: {
+  prefixRules: readonly string[];
+  exact: readonly PermissionName[];
+} = {
+  prefixRules: ["admin:"],
+  exact: [
+    "plugins:manage",
+    "backup:destination:read",
+    "backup:destination:write",
+    "backup:job:read",
+    "backup:job:write",
+    "backup:log:read",
+    "backup:restore:write",
+    "dlp:unmask",
+    "mcp:oauth:manage",
+    "connector:manage",
+    "agency:users:manage",
+  ],
+} as const;
+
+/** Phase 206 (D-08): a permission is delegable when it is neither an exact
+ * denylist member nor under a denylist prefix rule. Failure mode is
+ * deny-by-default for unknown-shaped names (fail-closed). */
+export function isDelegatable(permission: PermissionName): boolean {
+  if (DELEGATION_DENYLIST.exact.includes(permission)) return false;
+  return !DELEGATION_DENYLIST.prefixRules.some((prefix) => permission.startsWith(prefix));
+}
 
 // ===== Default Role Definitions =====
 // These are seeded on first boot via prisma/seed.ts
@@ -125,6 +200,57 @@ const DEFAULT_USER_ROLE = {
   ] as PermissionName[],
 } as const;
 
+// Phase 206 (CLOUD-01 D-18): least-privilege cloud-user role — chat +
+// knowledge/RAG + own memories; NO project/workspace creation, NO uploads,
+// NO admin anything. Landing role for Phase 208 self-registration (CLOUD-05).
+const DEFAULT_CLOUD_USER_ROLE = {
+  name: "Utente Cloud",
+  description: "Cloud user — widget, knowledge/RAG and own memories (least privilege)",
+  isDefault: true,
+  permissions: [
+    "workspace:read",
+    "chat:read",
+    "chat:write",
+    "document:read",
+    "document:write",
+    "archive:read",
+    "provider:read",
+    "memory:read",
+    "memory:write",
+    "skill:read",
+  ] as PermissionName[],
+} as const;
+
+// Phase 206 (AGENCY-01..03 D-19): delegation-capable agency role. User-level
+// set + agency:users:manage; NEVER admin:* (isAdmin() flips on admin:settings
+// — the Web Agency must remain a non-admin role). Menu omits admin-only
+// sections (marketplace, mcpConnections, eventLog, analytics, plugins).
+const DEFAULT_WEB_AGENCY_ROLE = {
+  name: "Web Agency",
+  description: "Web agency — manages its own sub-users within its permission subset",
+  isDefault: false,
+  permissions: [
+    "workspace:read",
+    "workspace:write",
+    "chat:read",
+    "chat:write",
+    "document:read",
+    "document:write",
+    "archive:read",
+    "archive:write",
+    "provider:read",
+    "project:create",
+    "workspace:create",
+    "memory:read",
+    "memory:write",
+    "skill:create",
+    "skill:read",
+    "skill:write",
+    "skill:delete",
+    "agency:users:manage",
+  ] as PermissionName[],
+} as const;
+
 // Feature 3.4a — Settings reorganized into 5 top-level tabs (General / LLM
 // Providers / Appearance / Security / Advanced). Each top-level tab nests the
 // pre-existing sub-section components. Visibility = OR on the permissions of
@@ -147,9 +273,13 @@ export const SETTINGS_TAB_PERMISSIONS: Record<string, PermissionName[]> = {
   advanced: [],  // Chat Data (always visible) keeps the tab open to all; admin-only
                 // sub-sections (VectorDB, ApiKeys, Mcp, Maintenance, DLP, ResetDB,
                 // Backups) are gated individually via per-sub-section `show`.
+  // Phase 206 (AGENCY-01 D-10/UI-SPEC): agency team-management tab — visible
+  // to agency:users:manage holders (admin auto-gains). The component renders
+  // server-derived data only (D-10: the client never computes the lattice).
+  team: ["agency:users:manage"],
 };
 
-export const DEFAULT_ROLES = [DEFAULT_ADMIN_ROLE, DEFAULT_USER_ROLE] as const;
+export const DEFAULT_ROLES = [DEFAULT_ADMIN_ROLE, DEFAULT_USER_ROLE, DEFAULT_CLOUD_USER_ROLE, DEFAULT_WEB_AGENCY_ROLE] as const;
 
 // ===== Menu Sections =====
 // Controls which sidebar navigation items are visible per role.
@@ -178,6 +308,11 @@ export const MENU_SECTIONS = [
   // for both default roles at next boot so existing installs gain the nav
   // entry on restart). Dedicated /skills management page (D-19).
   "skills",
+  // Phase 202 (PLGM-05 D-08): 'plugins' is the 15th section (additive —
+  // stored as strings in RoleMenuSection, no migration; seedMenuSections
+  // upserts it for both default roles at next boot). Dedicated /plugins
+  // management page (202-05); menuSectionSchema widens automatically.
+  "plugins",
 ] as const;
 
 export type MenuSection = (typeof MENU_SECTIONS)[number];
@@ -188,6 +323,11 @@ export const DEFAULT_ROLE_MENU_SECTIONS: Record<string, MenuSection[]> = {
   admin: [...MENU_SECTIONS],
   // Phase 190 (SKIL-01 D-19): user gains the skills management entry.
   user: ["dashboard", "chat", "documents", "knowledgeBase", "workspaces", "widget", "uploads", "skills"],
+  // Phase 206 (CLOUD-01 D-18): Utente Cloud — widget + knowledge/RAG focus.
+  "Utente Cloud": ["dashboard", "chat", "knowledgeBase", "documents", "widget"],
+  // Phase 206 (D-19): Web Agency — user-level surfaces + settings (own
+  // profile); admin-only sections excluded.
+  "Web Agency": ["dashboard", "chat", "documents", "knowledgeBase", "workspaces", "projects", "widget", "uploads", "skills", "settings"],
 };
 
 // ===== Config Defaults =====
@@ -245,6 +385,12 @@ export const CONFIG_DEFAULTS: Record<string, string> = {
   OCR_DEFAULT_CUSTOM_INSTRUCTIONS: "",
   OCR_ENABLED: "true",
   OCR_PRECHECK_CHARS: "200",
+  // Phase 205 D-11 (OCR-04) — standardized glm-ocr system prompt. The
+  // seedConfigDefaults loop auto-seeds this row (overwrite:false — fresh
+  // installs get it immediately, upgraded installs get it on next boot;
+  // user edits preserved). Empty string resolves to the legacy per-mode
+  // prompts in buildGlmOcrPrompt (byte-identical fallback).
+  OCR_PROMPT: "Text recognition:",
   SYNTHESIS_LLM_PROVIDER_ID: "",
   SYNTHESIS_LLM_MODEL: "",
   // Phase 68 — UploadDraft retention + non-admin upload toggle defaults
@@ -287,4 +433,12 @@ export const CONFIG_DEFAULTS: Record<string, string> = {
   // "completed" (admin exists) on first boot. Mirrors the
   // chat_message_retention_days: "" precedent — "" means "boot owns it".
   setup_wizard_mode: "",
+
+  // Phase 207 (CLOUD-03/04, D-08) — quota presets. "0"/"" = NOT configured
+  // (the D-08 resolution chain falls through to unlimited); a positive value
+  // is the install-level default applied to users without a per-user
+  // override. UI-editable via the system-config area (Plan 207-04); the
+  // per-user override tier rides the User columns (207 schema, D-07).
+  QUOTA_TOKEN_DEFAULT: "0",
+  QUOTA_STORAGE_GB_DEFAULT: "",
 } as const;

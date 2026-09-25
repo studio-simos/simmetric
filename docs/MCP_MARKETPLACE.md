@@ -210,6 +210,6 @@ Below are common problems you may encounter and how to resolve them. Each entry 
 
 ## Further Help
 
-For technical documentation, see [DEVELOPMENT.md](DEVELOPMENT.md) and [ARCHITECTURE.md](ARCHITECTURE.md). For API-level details, visit the interactive Swagger documentation at `/api-docs` when the server is running or browse [API.md](API.md).
+For technical documentation, see [DEVELOPMENT.md](DEVELOPMENT.md) and [ARCHITECTURE.md](ARCHITECTURE.md). For API-level details, visit the interactive Swagger documentation at `/api-docs` when the server is running or browse [API.md](API.md). For the first-party Google Drive / M365 Graph connector tools (builtin skills, not marketplace entries), see [CONNECTORS.md](CONNECTORS.md).
 
 Return to the [documentation index](INDEX.md) or the [main README](../README.md) for an overview of all Simmetric Chat features.

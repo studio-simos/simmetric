@@ -63,6 +63,18 @@ jest.mock("../services/eventLogService", () => ({
   logEvent: jest.fn(() => Promise.resolve()),
 }));
 
+jest.mock("../services/oauthTokenLifecycle", () => ({
+  decryptTokenBlob: jest.fn(),
+  revokeProviderToken: jest.fn(),
+  encryptTokenBlob: jest.fn(),
+  refreshAccessToken: jest.fn(),
+  exchangeAuthorizationCode: jest.fn(),
+}));
+
+jest.mock("../services/oauthProviderRegistry", () => ({
+  resolveProvider: jest.fn(),
+}));
+
 // Conditional auth middleware: supports admin and non-admin tokens
 jest.mock("../middleware/auth", () => ({
   authMiddleware: (req: any, res: any, next: any) => {
@@ -285,6 +297,339 @@ describe("POST /api/mcp-marketplace/:entryId/install", () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error).toContain("already installed");
+  });
+});
+
+// ====================================================================
+// Phase 197 (MCPO-03 D-05): OAuth entry install branch
+// ====================================================================
+
+describe("POST /:entryId/install — oauth entry branch (Phase 197 D-05)", () => {
+  const oauthCatalogEntry = {
+    ...mockCatalogEntry,
+    authType: "oauth",
+    oauthProvider: "google",
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("creates the connection as oauth + pending + provider-copied with NO auto-connect", async () => {
+    (prisma.mcpCatalogEntry.findUnique as jest.Mock).mockResolvedValue(oauthCatalogEntry);
+    (prisma.mCPConnection.findFirst as jest.Mock).mockResolvedValue(null); // no duplicate
+    (prisma.mCPConnection.create as jest.Mock).mockResolvedValue({
+      ...mockConnection,
+      authType: "oauth",
+      oauthProvider: "google",
+      oauthStatus: "pending",
+    });
+
+    const res = await request(app)
+      .post("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001/install")
+      .set(adminAuth())
+      .send({ workspaceId: "550e8400-e29b-41d4-a716-446655440003" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.authType).toBe("oauth");
+    expect(res.body.oauthProvider).toBe("google");
+    expect(res.body.oauthStatus).toBe("pending");
+
+    // The created row carries the entry's OAuth identity + pending status.
+    const createData = (prisma.mCPConnection.create as jest.Mock).mock.calls[0][0].data;
+    expect(createData.authType).toBe("oauth");
+    expect(createData.oauthProvider).toBe("google");
+    expect(createData.oauthStatus).toBe("pending");
+
+    // D-05: NO auto-connect until the token exists.
+    expect(connectMCPServer).not.toHaveBeenCalled();
+  });
+
+  it("strips credentialsEncrypted/oauthError from the 201 response (Phase 197 leak pin)", async () => {
+    // A connection row that somehow carries a populated blob/error must
+    // never leak it through the install response (mcp.ts POST sanitizes —
+    // this route holds the same contract; T-197-06 posture).
+    (prisma.mcpCatalogEntry.findUnique as jest.Mock).mockResolvedValue(oauthCatalogEntry);
+    (prisma.mCPConnection.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.mCPConnection.create as jest.Mock).mockResolvedValue({
+      ...mockConnection,
+      authType: "oauth",
+      oauthProvider: "google",
+      oauthStatus: "pending",
+      credentialsEncrypted: "should-never-leak",
+      oauthError: "provider prose should never leak",
+    });
+
+    const res = await request(app)
+      .post("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001/install")
+      .set(adminAuth())
+      .send({ workspaceId: "550e8400-e29b-41d4-a716-446655440003" });
+
+    expect(res.status).toBe(201);
+    expect("credentialsEncrypted" in res.body).toBe(false);
+    expect("oauthError" in res.body).toBe(false);
+    // The non-secret oauth badge fields stay (the UI renders from them).
+    expect(res.body.authType).toBe("oauth");
+    expect(res.body.oauthStatus).toBe("pending");
+  });
+
+  it("keeps the non-oauth install byte-identical (auto-connect called exactly once)", async () => {
+    (prisma.mcpCatalogEntry.findUnique as jest.Mock).mockResolvedValue(mockCatalogEntry);
+    (prisma.mCPConnection.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.mCPConnection.create as jest.Mock).mockResolvedValue(mockConnection);
+
+    const res = await request(app)
+      .post("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001/install")
+      .set(adminAuth())
+      .send({ workspaceId: "550e8400-e29b-41d4-a716-446655440003" });
+
+    expect(res.status).toBe(201);
+    const createData = (prisma.mCPConnection.create as jest.Mock).mock.calls[0][0].data;
+    // Non-oauth entries carry no auth fields in the create data (defaults apply).
+    expect(createData.authType).toBeUndefined();
+    expect(createData.oauthProvider).toBeUndefined();
+    expect(createData.oauthStatus).toBeUndefined();
+    // Byte-identical arm: auto-connect fires.
+    expect(connectMCPServer).toHaveBeenCalledTimes(1);
+    expect(connectMCPServer).toHaveBeenCalledWith("550e8400-e29b-41d4-a716-446655440002");
+  });
+});
+
+// ====================================================================
+// Phase 197 (MCPO-03 D-04): POST create validates through the shared schema
+// ====================================================================
+
+describe("POST /api/mcp-marketplace — createMcpCatalogEntrySchema validation (Phase 197)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("creates a valid oauth entry (201) persisting authType + oauthProvider", async () => {
+    (prisma.mcpCatalogEntry.create as jest.Mock).mockImplementation(
+      (args: { data: Record<string, unknown> }) =>
+        Promise.resolve({ id: "550e8400-e29b-41d4-a716-446655440001", ...args.data }),
+    );
+
+    const res = await request(app)
+      .post("/api/mcp-marketplace")
+      .set(adminAuth())
+      .send({
+        name: "Gmail MCP",
+        url: "https://mcp.example.com/sse",
+        authType: "oauth",
+        oauthProvider: "google",
+      });
+
+    expect(res.status).toBe(201);
+    const data = (prisma.mcpCatalogEntry.create as jest.Mock).mock.calls[0][0].data;
+    expect(data.authType).toBe("oauth");
+    expect(data.oauthProvider).toBe("google");
+  });
+
+  it("defaults authType to 'none' when omitted", async () => {
+    (prisma.mcpCatalogEntry.create as jest.Mock).mockResolvedValue(mockCatalogEntry);
+
+    const res = await request(app)
+      .post("/api/mcp-marketplace")
+      .set(adminAuth())
+      .send({ name: "Plain MCP", url: "https://mcp.example.com/sse" });
+
+    expect(res.status).toBe(201);
+    const data = (prisma.mcpCatalogEntry.create as jest.Mock).mock.calls[0][0].data;
+    expect(data.authType).toBe("none");
+    expect(data.oauthProvider).toBeNull();
+  });
+
+  it("rejects oauth without a provider (400 with details)", async () => {
+    const res = await request(app)
+      .post("/api/mcp-marketplace")
+      .set(adminAuth())
+      .send({
+        name: "Broken MCP",
+        url: "https://mcp.example.com/sse",
+        authType: "oauth",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid request body");
+    expect(res.body.details).toBeDefined();
+    expect(prisma.mcpCatalogEntry.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a provider without oauth authType (400 with details)", async () => {
+    const res = await request(app)
+      .post("/api/mcp-marketplace")
+      .set(adminAuth())
+      .send({
+        name: "Broken MCP",
+        url: "https://mcp.example.com/sse",
+        oauthProvider: "google",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid request body");
+    expect(res.body.details).toBeDefined();
+    expect(prisma.mcpCatalogEntry.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown authType value (400)", async () => {
+    const res = await request(app)
+      .post("/api/mcp-marketplace")
+      .set(adminAuth())
+      .send({
+        name: "Broken MCP",
+        url: "https://mcp.example.com/sse",
+        authType: "static",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid request body");
+  });
+
+  it("rejects a missing name/url through the schema (400 with details)", async () => {
+    const res = await request(app)
+      .post("/api/mcp-marketplace")
+      .set(adminAuth())
+      .send({ transportType: "sse" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid request body");
+    expect(res.body.details).toBeDefined();
+    expect(prisma.mcpCatalogEntry.create).not.toHaveBeenCalled();
+  });
+});
+
+// ====================================================================
+// Phase 197 (MCPO-03 D-08): uninstall revoke+wipe hook
+// ====================================================================
+
+describe("POST /:entryId/uninstall — revoke+wipe hook (Phase 197 D-08)", () => {
+  const { decryptTokenBlob, revokeProviderToken } = require("../services/oauthTokenLifecycle");
+  const { resolveProvider } = require("../services/oauthProviderRegistry");
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (prisma.mCPConnection.findFirst as jest.Mock).mockResolvedValue(mockConnection);
+    (prisma.mCPConnection.delete as jest.Mock).mockResolvedValue(mockConnection);
+  });
+
+  it("uninstall of an oauth row with a decryptable blob: revoke then delete (order pinned)", async () => {
+    (prisma.mCPConnection.findFirst as jest.Mock).mockResolvedValue({
+      ...mockConnection,
+      authType: "oauth",
+      oauthProvider: "google",
+      credentialsEncrypted: "iv:tag:ct",
+    });
+    (resolveProvider as jest.Mock).mockReturnValue({ id: "google", revokeUrl: "https://oauth2.googleapis.com/revoke" });
+    (decryptTokenBlob as jest.Mock).mockReturnValue({
+      ok: true,
+      blob: { accessToken: "at", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+    (revokeProviderToken as jest.Mock).mockResolvedValue({ ok: true });
+
+    const res = await request(app)
+      .post("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001/uninstall")
+      .set(adminAuth())
+      .send({ workspaceId: "550e8400-e29b-41d4-a716-446655440003" });
+
+    expect(res.status).toBe(200);
+    expect(revokeProviderToken).toHaveBeenCalledTimes(1);
+    expect(revokeProviderToken).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "google" }),
+      "at",
+    );
+    // Order: revoke BEFORE delete — the blob dies with the row.
+    expect(revokeProviderToken.mock.invocationCallOrder[0]!).toBeLessThan(
+      (prisma.mCPConnection.delete as jest.Mock).mock.invocationCallOrder[0]!,
+    );
+    // Hard delete removes the row — no row carrying credentialsEncrypted survives.
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "550e8400-e29b-41d4-a716-446655440002" } }),
+    );
+  });
+
+  it("non-oauth row: revoke NOT called (byte-identical cleanup order)", async () => {
+    (resolveProvider as jest.Mock).mockReturnValue({ id: "google", revokeUrl: "https://r" });
+
+    const res = await request(app)
+      .post("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001/uninstall")
+      .set(adminAuth())
+      .send({ workspaceId: "550e8400-e29b-41d4-a716-446655440003" });
+
+    expect(res.status).toBe(200);
+    expect(revokeProviderToken).not.toHaveBeenCalled();
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("decrypt-failure row: revoke NOT called AND delete STILL called (fail-open-to-wipe pin)", async () => {
+    (prisma.mCPConnection.findFirst as jest.Mock).mockResolvedValue({
+      ...mockConnection,
+      authType: "oauth",
+      oauthProvider: "google",
+      credentialsEncrypted: "iv:tag:ct",
+    });
+    (resolveProvider as jest.Mock).mockReturnValue({ id: "google", revokeUrl: "https://r" });
+    (decryptTokenBlob as jest.Mock).mockReturnValue({ ok: false, errorDescription: "undecryptable" });
+
+    const res = await request(app)
+      .post("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001/uninstall")
+      .set(adminAuth())
+      .send({ workspaceId: "550e8400-e29b-41d4-a716-446655440003" });
+
+    expect(res.status).toBe(200);
+    expect(revokeProviderToken).not.toHaveBeenCalled();
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("provider-side revoke failure (errorDescription arm) does not block the wipe", async () => {
+    (prisma.mCPConnection.findFirst as jest.Mock).mockResolvedValue({
+      ...mockConnection,
+      authType: "oauth",
+      oauthProvider: "google",
+      credentialsEncrypted: "iv:tag:ct",
+    });
+    (resolveProvider as jest.Mock).mockReturnValue({ id: "google", revokeUrl: "https://r" });
+    (decryptTokenBlob as jest.Mock).mockReturnValue({
+      ok: true,
+      blob: { accessToken: "at", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+    (revokeProviderToken as jest.Mock).mockResolvedValue({ ok: true, errorDescription: "provider revoke returned 400" });
+
+    const res = await request(app)
+      .post("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001/uninstall")
+      .set(adminAuth())
+      .send({ workspaceId: "550e8400-e29b-41d4-a716-446655440003" });
+
+    expect(res.status).toBe(200);
+    expect(revokeProviderToken).toHaveBeenCalledTimes(1);
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("microsoft row (def without revokeUrl): revoke called with skipped arm — delete proceeds", async () => {
+    (prisma.mCPConnection.findFirst as jest.Mock).mockResolvedValue({
+      ...mockConnection,
+      authType: "oauth",
+      oauthProvider: "microsoft",
+      credentialsEncrypted: "iv:tag:ct",
+    });
+    (resolveProvider as jest.Mock).mockReturnValue({ id: "microsoft", revokeUrl: null });
+    (decryptTokenBlob as jest.Mock).mockReturnValue({
+      ok: true,
+      blob: { accessToken: "ms", scope: "s", obtainedAt: new Date().toISOString() },
+    });
+    (revokeProviderToken as jest.Mock).mockResolvedValue({ ok: true, skipped: true });
+
+    const res = await request(app)
+      .post("/api/mcp-marketplace/550e8400-e29b-41d4-a716-446655440001/uninstall")
+      .set(adminAuth())
+      .send({ workspaceId: "550e8400-e29b-41d4-a716-446655440003" });
+
+    expect(res.status).toBe(200);
+    expect(revokeProviderToken).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "microsoft" }),
+      "ms",
+    );
+    expect(prisma.mCPConnection.delete).toHaveBeenCalledTimes(1);
   });
 });
 

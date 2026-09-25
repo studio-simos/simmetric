@@ -4,18 +4,24 @@
 // See LICENSE and NOTICE at the repository root for full terms.
 
 /**
- * AppSidebar — the permanent left rail (UI revision R-5).
+ * AppSidebar — the permanent left rail (UI revision R-7).
  *
  * Layout top-to-bottom:
  *  1. Header: app icon / Monogram fallback + collapse toggle
  *  2. Subtitle (expanded) — white-label aware
  *  3. New chat (routed only — the workspace chat actions live in ChatPanel)
  *  4. ChatSidebar — the conversation list, scoped to the active workspace
- *  5. Footer: "Menu" button → AppNavOverlay (large menu dialog), then the
- *     user block (avatar/initials + username) → UserMenuDialog
+ *  5. Inline menu region (R-7): the project/workspace selectors + nav groups,
+ *     hidden until the footer "Menu" button is pressed; pressing it again
+ *     hides it completely (content passed by the caller via `nav`)
+ *  6. Footer: "Menu" toggle button, then the user block (avatar/initials +
+ *     username) → UserMenuDialog
  *
- * The nav overlay + user menu are rendered by the caller (App.tsx) so this
- * component stays presentational; the footer buttons only fire the callbacks.
+ * The user menu is rendered by the caller (App.tsx) so this component stays
+ * presentational; the footer buttons only fire the callbacks. The large nav
+ * dialog (AppNavOverlay) is no longer opened from here — the menu lives in
+ * the sidebar itself; the dialog remains reachable via the Cmd/Ctrl+/
+ * shortcut owned by App.
  *
  * The branding render paths are unchanged from Feature 7.6/7.7 Slice D
  * (covered by AppSidebar.test.tsx): iconBust cache-busting, Monogram
@@ -23,7 +29,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { PanelLeftClose, PanelLeftOpen, Menu, Share2 } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, Menu, Share2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import Monogram from "./Monogram";
@@ -44,8 +50,12 @@ export interface AppSidebarProps {
     lastName?: string | null;
     avatar?: string | null;
   } | null;
-  /** Opens the nav dialog (AppNavOverlay). */
-  onOpenNavOverlay: () => void;
+  /**
+   * R-7: menu open-state change (the sidebar button toggles the inline
+   * menu region). The large nav dialog (AppNavOverlay) is no longer opened
+   * from the sidebar — the menu expands inside the sidebar itself.
+   */
+  onMenuOpenChange: (open: boolean) => void;
   /** Opens the user menu dialog (UserMenuDialog). */
   onOpenUserMenu: () => void;
   t: (key: string) => string;
@@ -53,11 +63,16 @@ export interface AppSidebarProps {
   setSidebarOpen: (open: boolean) => void;
   isMobile?: boolean;
   /**
-   * R-6: persistent navigation block (AppSidebarNav), rendered between the
-   * scrollable body (ChatSidebar) and the footer. Optional — the existing
-   * rail-only tests render without it. Present in BOTH modes: expanded it
-   * shows the grouped nav rows; in the collapsed rail it shows the
-   * icon-only entries (title tooltips + corner locks) above the footer.
+   * R-7: menu open state — when false the `nav` region is completely
+   * unmounted (hidden since the menu button was last pressed; pressing the
+   * button again hides it completely).
+   */
+  menuOpen: boolean;
+  /**
+   * R-6 → R-7: the inline menu content (project/workspace selectors + nav
+   * groups via AppSidebarNav). Rendered between the scrollable body
+   * (ChatSidebar) and the footer, ONLY while `menuOpen` is true — hidden
+   * completely otherwise. Previously (`navOpen`, R-6) it was always visible.
    */
   nav?: React.ReactNode;
   children?: React.ReactNode;
@@ -81,12 +96,13 @@ export default function AppSidebar({
   appSubtitle,
   appIconUrl,
   user,
-  onOpenNavOverlay,
+  onMenuOpenChange,
   onOpenUserMenu,
   t,
   sidebarOpen,
   setSidebarOpen,
   isMobile = false,
+  menuOpen = false,
   shareTarget = null,
   nav,
   children,
@@ -124,6 +140,16 @@ export default function AppSidebar({
   // Rail mode = desktop sidebar collapsed to 60px icon-only. Mobile is always
   // full-width (rendered inside App.tsx's Sheet).
   const collapsed = !isMobile && !sidebarOpen;
+
+  // R-7: the inline menu needs the expanded sidebar to be usable. Opening
+  // the menu from the collapsed rail expands the sidebar (one click, no
+  // dead end); closing the menu never force-collapses — the user stays in
+  // control of the rail via the header toggle.
+  useEffect(() => {
+    if (menuOpen && !isMobile && !sidebarOpen) {
+      setSidebarOpen(true);
+    }
+  }, [menuOpen, isMobile, sidebarOpen, setSidebarOpen]);
 
   const displayName =
     user?.firstName && user?.lastName
@@ -186,7 +212,12 @@ export default function AppSidebar({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
+            onClick={() => {
+              // R-7: collapsing the rail hides the open menu with it —
+              // the auto-open effect must not fight the user's collapse.
+              if (sidebarOpen) onMenuOpenChange(false);
+              setSidebarOpen(!sidebarOpen);
+            }}
             aria-label={sidebarOpen ? t("sidebar.toggleClose") : t("sidebar.toggleOpen")}
             title={sidebarOpen ? t("sidebar.toggleClose") : t("sidebar.toggleOpen")}
             className="text-muted-foreground hover:text-foreground flex-shrink-0"
@@ -227,14 +258,13 @@ export default function AppSidebar({
         {children}
       </div>
 
-      {/* R-6: persistent nav block (AppSidebarNav) — flex-none with its own
-          scroll, sits between the conversation list and the footer. Rendered
-          in both modes (the rail shows the icon-only variant), so the
-          primary navigation stays one click away without the overlay. */}
-      {nav}
+      {/* R-7: inline menu region — the Menu button's target. Completely
+          unmounted while closed (hidden since the button was last pressed);
+          the button toggles it open/closed. */}
+      {menuOpen && nav}
 
-      {/* Footer: menu button → AppNavOverlay, then the user block →
-          UserMenuDialog. Always present, all breakpoints. */}
+      {/* Footer: menu toggle button (R-7 → inline menu), then the user
+          block → UserMenuDialog. Always present, all breakpoints. */}
       <div
         className={cn(
           "border-t border-input flex flex-col",
@@ -244,15 +274,17 @@ export default function AppSidebar({
         <Button
           variant="ghost"
           size="sm"
-          onClick={onOpenNavOverlay}
-          aria-label={t("nav.openMenu")}
-          title={t("nav.openMenu")}
+          onClick={() => onMenuOpenChange(!menuOpen)}
+          aria-label={menuOpen ? t("nav.closeMenu") : t("nav.openMenu")}
+          title={menuOpen ? t("nav.closeMenu") : t("nav.openMenu")}
+          aria-expanded={menuOpen}
           className={cn(
             "w-full text-muted-foreground hover:text-foreground justify-start gap-2",
+            menuOpen && "text-foreground",
             collapsed && "justify-center px-0",
           )}
         >
-          <Menu className="w-4 h-4 flex-none" />
+          {menuOpen ? <X className="w-4 h-4 flex-none" /> : <Menu className="w-4 h-4 flex-none" />}
           {!collapsed && <span className="text-sm truncate">{t("nav.menu")}</span>}
         </Button>
         <Button

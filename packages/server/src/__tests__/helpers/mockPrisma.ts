@@ -178,6 +178,9 @@ export function createMockPrisma() {
       count: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      // Phase 195 (WR-01): the CAS pending→authorized transition rides
+      // updateMany — default resolves { count: 1 } (CAS won).
+      updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
       delete: jest.fn(),
     },
     mcpCatalogEntry: {
@@ -265,6 +268,12 @@ export function createMockPrisma() {
       aggregate: jest.fn(),
       create: jest.fn(),
       findMany: jest.fn(),
+    },
+    // Phase 207 (D-02): quota reset ledger delegate — suites stub the arms
+    // they need; jest.fn() default keeps non-quota suites unchanged.
+    quotaReset: {
+      findFirst: jest.fn(),
+      create: jest.fn(),
     },
     archive: {
       findFirst: jest.fn(),
@@ -389,6 +398,22 @@ export function createMockPrisma() {
       // seedService) upserts the built-in rows keyed (organizationId, name).
       upsert: jest.fn(),
     },
+    // Phase 204 (DEBT-SW-05): the DlpEntity delegate — the document text-edit
+    // route's re-scan arm calls dlpEntityService.deleteEntityMap
+    // (prisma.dlpEntity.deleteMany) to refresh stale entity rows; without the
+    // delegate the deep mock hands back undefined and the documentsTextEdit
+    // suite crashes with "deleteMany is not a function" (the missing-delegate
+    // class documented in server AGENTS.md).
+    dlpEntity: {
+      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      deleteMany: jest.fn(),
+      count: jest.fn(),
+    },
     // Phase 190 (SKIL-01, Pitfall 7): the AgentSkill delegate — Plan 02
     // (skillService/skills.routes/registry suites) and Plan 03
     // (chatStreamSkillDlp) drive prisma.agentSkill.* through this factory;
@@ -402,6 +427,22 @@ export function createMockPrisma() {
       create: jest.fn(),
       update: jest.fn(),
       delete: jest.fn(),
+      count: jest.fn(),
+    },
+    // Phase 202 (PLGM-01/02): the PluginInstall delegate — the 202-01 tracer
+    // battery (pluginManager.test.ts: installFromZip + loadManagedPlugins)
+    // and the 202-02+ route/loader suites drive prisma.pluginInstall.*
+    // through this factory; without it the deep mock hands back undefined
+    // and those suites crash (the missing-delegate class above).
+    pluginInstall: {
+      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      updateMany: jest.fn(),
+      delete: jest.fn(),
+      deleteMany: jest.fn(),
       count: jest.fn(),
     },
     $connect: jest.fn(),

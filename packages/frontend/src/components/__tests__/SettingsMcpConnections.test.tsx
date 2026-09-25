@@ -27,11 +27,42 @@ const mockDeleteConnection = jest.fn();
 const mockToggleConnection = jest.fn();
 const mockTestConnection = jest.fn();
 
+// 196-03: the OAuth lifecycle hooks + TanStack's useQueryClient joined the
+// component — this pre-existing suite mocks the hook module, so the new
+// exports must be present here too (else every render throws on the missing
+// export). mutateAsync resolves; no lifecycle buttons exist without
+// permissions (mocked useMe grants mcp:oauth:manage via the useMe mock
+// below, keeping legacy rows authType-free and badgeless).
 jest.mock("../../queries/useMcpConnections", () => ({
   useMcpConnections: () => ({ data: mockConnections, isLoading: false }),
   useDeleteMcpConnection: () => ({ mutateAsync: mockDeleteConnection }),
   useToggleMcpConnection: () => ({ mutateAsync: mockToggleConnection }),
   useTestMcpConnection: () => ({ mutateAsync: mockTestConnection }),
+  useStartMcpOauth: () => ({ mutateAsync: jest.fn().mockResolvedValue({ authorizeUrl: "https://prov" }), isPending: false }),
+  useRevokeMcpOauth: () => ({ mutateAsync: jest.fn().mockResolvedValue(undefined), isPending: false }),
+}));
+
+jest.mock("../../queries/useAuth", () => ({
+  useMe: () => ({ data: { permissions: [] } }),
+}));
+
+jest.mock("@tanstack/react-query", () => {
+  const actual = jest.requireActual("@tanstack/react-query");
+  return {
+    ...actual,
+    useQueryClient: () => ({
+      invalidateQueries: jest.fn(),
+    }),
+  };
+});
+
+jest.mock("react-router-dom", () => ({
+  useSearchParams: () => [new URLSearchParams(), jest.fn()],
+}));
+
+// Redirect seam stub (jsdom window.location is non-configurable).
+jest.mock("../../lib/redirect", () => ({
+  assignRedirect: jest.fn(),
 }));
 
 jest.mock("../../lib/toast", () => ({

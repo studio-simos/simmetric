@@ -328,15 +328,19 @@ describe("PATCH /api/filters/:name", () => {
 // ─── Permission constant ─────────────────────────────────────────────────
 
 describe("PERMISSION_NAMES — filters:manage (D-09)", () => {
-  it("includes 'filters:manage' at index 30 (after 'memory:write'; length 36 after the Phase 192 dlp:unmask addition)", () => {
+  it("includes 'filters:manage' at index 30 (after 'memory:write'; length 41 after the Phase 206 agency:users:manage append)", () => {
     expect(PERMISSION_NAMES).toContain("filters:manage");
     const idx = PERMISSION_NAMES.indexOf("filters:manage");
     const memoryWriteIdx = PERMISSION_NAMES.indexOf("memory:write");
     expect(idx).toBeGreaterThan(memoryWriteIdx);
     // 31st entry → index 30 (0-based) — still true: Phase 190 appended the
-    // skill:* rows AFTER filters:manage (indexes 31-34) and Phase 192 the
-    // dlp:unmask row last (index 35), so this pin holds.
+    // skill:* rows AFTER filters:manage (indexes 31-34), Phase 192 the
+    // dlp:unmask row (index 35), Phase 195 the mcp:oauth:manage row
+    // (index 36), Phase 198 the connector:manage/connector:view rows
+    // (indexes 37-38), and Phase 202 the plugins:manage row (index 39).
+    // Phase 206 (AGENCY-03 D-07): appends agency:users:manage (index 40,
+    // length 41) — filters:manage keeps its index-30 position.
     expect(idx).toBe(30);
-    expect(PERMISSION_NAMES).toHaveLength(36);
+    expect(PERMISSION_NAMES).toHaveLength(41);
   });
 });

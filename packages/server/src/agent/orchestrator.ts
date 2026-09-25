@@ -35,6 +35,13 @@
 import { resolveSkillsForChat, type AgentSkillDefinition, type SkillResult } from "./skills";
 import { dedupeCitations, filterGroundedCitations } from "./citationDedup";
 import prisma from "../utils/prisma";
+// Phase 207 (CLOUD-03, D-03 site 1): pre-turn token quota gate at the chat
+// consumption site. Service-level check, NOT middleware (206 D-13 — needs
+// domain data, not request shape).
+import { checkTokenQuota } from "../services/quotaService";
+// Phase 203 (MCC-02, D6): cost computed at the usage-write seams — snapshot
+// at run time, fail-open to no-cost (Pitfall 4), Decimal money math (T-203-01).
+import { getModelPricing, calculateCost, type ComputedCost } from "../services/modelPricingService";
 import { getEnv } from "../config/env";
 import { logger } from "../utils/logger";
 import { resolveSystemPrompt, resolveSkills, getTemplateForWorkspace } from "../services/templateService";
@@ -108,6 +115,14 @@ export interface AgentRunParams {
   // OUTERMOST around the customInstructions composition so the widget prompt
   // leads. Additive-optional: absent/undefined → byte-identical.
   widgetSystemPrompt?: string;
+  // Phase 207 (D-05): quota principal override — the userId the QUOTA gate
+  // checks and the usage LEDGER attributes to, when it differs from the
+  // acting account. Chat callers omit it (acting user IS the principal);
+  // widget/connector callers resolve the real principal (org owner /
+  // Connector.createdBy — never widget-service@system) and pass it here so
+  // gate and ledger stay consistent by construction (Pitfall 2). Additive-
+  // optional: absent → byte-identical behavior (206-era callers untouched).
+  quotaPrincipal?: string;
   // Phase 190 (SKIL-04, D-12): explicit /slug skillCall payload built SERVER-
   // SIDE in routes/chat.ts (resolveInvocableSkill → DLP-masked params →
   // compileTemplate → wrapSpotlightedTemplate). Additive-optional: requests
@@ -147,6 +162,15 @@ export interface AgentRunResult {
   toolCalls?: ToolCallRecord[];
   iterations: number;
   tokenUsage?: TokenUsageSummary;
+  // Phase 203 (MCC-02, D4): JSON-safe cost snapshot (Decimal → number at
+  // this boundary; the DB row keeps full Decimal precision). Null = pricing
+  // unset at run time (N/A semantics — never "free").
+  cost?: {
+    promptCost: number;
+    completionCost: number;
+    totalCost: number;
+    currency: string;
+  } | null;
   providerType?: string;
   resolvedModel?: string;
   /** Why the ReAct loop exited — set by budget.setAbortReason(). Consumed
@@ -258,6 +282,14 @@ import {
 
 export async function runAgent(params: AgentRunParams): Promise<AgentRunResult> {
   const { workspaceId, userId, message, chatId, history = [], ragContext, disableRagSearch } = params;
+  const quotaPrincipal = params.quotaPrincipal ?? userId;
+
+  // Phase 207 (CLOUD-03, D-03 site 1 / D-06): pre-turn token quota gate —
+  // BEFORE the first LLM call; a stream in flight is never killed mid-run
+  // (REQUIREMENTS Out of Scope: pre-turn check + block next turn). Breach
+  // throws QuotaError(409, { error, quota: "tokens", ... }) which routes map
+  // 1:1 onto the HTTP response (D-04 family). Unset quota → unlimited (D-08).
+  await checkTokenQuota(quotaPrincipal);
 
   // Load workspace agent config
   let agentConfig = await prisma.workspaceAgentConfig.findUnique({
@@ -330,6 +362,9 @@ export async function runAgent(params: AgentRunParams): Promise<AgentRunResult> 
   // 260919 model-missing UX: strict resolution on user-facing chat paths —
   // a user-selected model that cannot be resolved throws a typed error the
   // frontend turns into a "choose a model" prompt (no silent substitute).
+  // Phase 203 (MCC-02, D4): the run's cost — computed in the finally
+  // (snapshot at run time), surfaced on the result for the done payload.
+  let runCost: ComputedCost | null = null;
   let providerConfig: ProviderConfig;
   if (params.strictModelResolution) {
     const { config, requestedModel } = await resolveProviderConfigStrict(params.providerId, params.model);
@@ -680,15 +715,40 @@ export async function runAgent(params: AgentRunParams): Promise<AgentRunResult> 
     // single source of truth (NOT dead-code `let` accumulators).
     const snap = budget.snapshot();
     if (snap.totalTokens > 0) {
+      // Phase 203 (MCC-02, D1/Pitfall 4): cost snapshot AT RUN TIME — the
+      // pricing lookup is fail-open (a cache/DB throw writes the usage row
+      // with null costs and the run continues; NEVER wrong cost, never a
+      // failed run). Local models carry $0.00 (the migration backfill);
+      // unpriced models carry null (N/A).
+      try {
+        const pricing = await getModelPricing(providerConfig.providerId, providerConfig.model);
+        if (pricing) {
+          runCost = calculateCost(pricing, snap.tokensPrompt, snap.tokensCompletion);
+        }
+      } catch (err: unknown) {
+        logger.warn(`[orchestrator] Pricing lookup failed — usage saved without cost: ${(err instanceof Error ? err.message : String(err))}`);
+      }
       prisma.workspaceTokenUsage.create({
         data: {
-          userId,
+          // Phase 207 (D-05): ledger attributes to the QUOTA principal —
+          // defaults to the acting userId (absent quotaPrincipal keeps the
+          // 206-era behavior byte-identical). Widget/connector callers pass
+          // the real principal (never widget-service@system — P2).
+          userId: quotaPrincipal,
           workspaceId,
           model: providerConfig.model,
           modelDisplayName: providerConfig.displayName || null,
           promptTokens: snap.tokensPrompt,
           completionTokens: snap.tokensCompletion,
           totalTokens: snap.totalTokens,
+          ...(runCost
+            ? {
+                promptCost: runCost.promptCost,
+                completionCost: runCost.completionCost,
+                totalCost: runCost.totalCost,
+                currency: runCost.currency,
+              }
+            : {}),
         },
       }).catch((err: unknown) => {
         logger.warn(`[orchestrator] Failed to save token usage: ${(err instanceof Error ? err.message : String(err))}`);
@@ -798,6 +858,16 @@ export async function runAgent(params: AgentRunParams): Promise<AgentRunResult> 
       totalTokens: finalSnap.totalTokens,
       model: env.LLM_PROVIDER,
     } : undefined,
+    // Phase 203 (MCC-02, D4): JSON-safe cost snapshot (Decimal → number at
+    // this boundary; the DB row keeps full Decimal precision).
+    cost: runCost
+      ? {
+          promptCost: runCost.promptCost.toNumber(),
+          completionCost: runCost.completionCost.toNumber(),
+          totalCost: runCost.totalCost.toNumber(),
+          currency: runCost.currency,
+        }
+      : null,
     providerType: providerConfig.type,
     resolvedModel: providerConfig.model,
     abortReason: budget.getAbortReason(),
@@ -838,6 +908,11 @@ export async function runAgentStreaming(
   onThinking?: OnThinkingCallback,
 ): Promise<AgentRunResult> {
   const { workspaceId, userId, message, chatId, history = [], ragContext, disableRagSearch } = params;
+  const quotaPrincipal = params.quotaPrincipal ?? userId;
+
+  // Phase 207 (CLOUD-03, D-03 site 1 / D-06): pre-turn token quota gate —
+  // BEFORE the first LLM call (see runAgent for the full contract).
+  await checkTokenQuota(quotaPrincipal);
 
   // Load workspace agent config
   let agentConfig = await prisma.workspaceAgentConfig.findUnique({
@@ -899,6 +974,9 @@ export async function runAgentStreaming(
 
   // Resolve provider config: per-request override > workspace config > default > env fallback
   // 260919 model-missing UX: streaming twin of the runAgent strict arm.
+  // Phase 203 (MCC-02, D4): the run's cost — computed in the finally
+  // (snapshot at run time), surfaced on the result for the done payload.
+  let runCost: ComputedCost | null = null;
   let providerConfig: ProviderConfig;
   if (params.strictModelResolution) {
     const { config, requestedModel } = await resolveProviderConfigStrict(params.providerId, params.model);
@@ -1311,15 +1389,38 @@ export async function runAgentStreaming(
     // as the single source of truth.
     const snap = budget.snapshot();
     if (snap.totalTokens > 0) {
+      // Phase 203 (MCC-02, D1/Pitfall 4): cost snapshot AT RUN TIME — the
+      // pricing lookup is fail-open (a cache/DB throw writes the usage row
+      // with null costs and the run continues; NEVER wrong cost, never a
+      // failed run). Local models carry $0.00 (the migration backfill);
+      // unpriced models carry null (N/A).
+      try {
+        const pricing = await getModelPricing(providerConfig.providerId, providerConfig.model);
+        if (pricing) {
+          runCost = calculateCost(pricing, snap.tokensPrompt, snap.tokensCompletion);
+        }
+      } catch (err: unknown) {
+        logger.warn(`[orchestrator] Pricing lookup failed — usage saved without cost: ${(err instanceof Error ? err.message : String(err))}`);
+      }
       prisma.workspaceTokenUsage.create({
         data: {
-          userId,
+          // Phase 207 (D-05): ledger attributes to the QUOTA principal (see
+          // runAgent's seam for the full contract; identical here).
+          userId: quotaPrincipal,
           workspaceId,
           model: providerConfig.model,
           modelDisplayName: providerConfig.displayName || null,
           promptTokens: snap.tokensPrompt,
           completionTokens: snap.tokensCompletion,
           totalTokens: snap.totalTokens,
+          ...(runCost
+            ? {
+                promptCost: runCost.promptCost,
+                completionCost: runCost.completionCost,
+                totalCost: runCost.totalCost,
+                currency: runCost.currency,
+              }
+            : {}),
         },
       }).catch((err: unknown) => {
         logger.warn(`[orchestrator] Failed to save token usage: ${(err instanceof Error ? err.message : String(err))}`);
@@ -1429,6 +1530,16 @@ export async function runAgentStreaming(
       totalTokens: finalSnap.totalTokens,
       model: env.LLM_PROVIDER,
     } : undefined,
+    // Phase 203 (MCC-02, D4): JSON-safe cost snapshot (Decimal → number at
+    // this boundary; the DB row keeps full Decimal precision).
+    cost: runCost
+      ? {
+          promptCost: runCost.promptCost.toNumber(),
+          completionCost: runCost.completionCost.toNumber(),
+          totalCost: runCost.totalCost.toNumber(),
+          currency: runCost.currency,
+        }
+      : null,
     providerType: providerConfig.type,
     resolvedModel: providerConfig.model,
     abortReason: budget.getAbortReason(),

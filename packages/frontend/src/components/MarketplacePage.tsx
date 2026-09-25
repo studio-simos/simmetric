@@ -17,6 +17,7 @@ import {
 import { showSuccess, showError } from "../lib/toast";
 import MarketplaceCard from "./MarketplaceCard";
 import MarketplaceInstallDialog from "./MarketplaceInstallDialog";
+import CatalogEntryFormDialog from "./CatalogEntryFormDialog";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,6 +33,10 @@ export default function MarketplacePage() {
   const deferredQuery = useDeferredValue(searchQuery);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [installTarget, setInstallTarget] = useState<{ id: string; name: string } | null>(null);
+  // Phase 197 (MCPO-03 D-06/UI-SPEC §5): create-only catalog entry dialog.
+  // Admin-gated by the page's existing requireAdmin route guard — no new
+  // permission UI here.
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
 
   const currentWorkspaceId = useChatNav().currentWorkspaceId;
 
@@ -68,9 +73,21 @@ export default function MarketplacePage() {
   const confirmInstall = async (headers: Record<string, string>) => {
     if (!currentWorkspaceId || !installTarget) return;
     const { id: entryId, name } = installTarget;
+    // Phase 197 (MCPO-03 D-05/D-06, UI-SPEC §4): the entry's authType picks
+    // the toast — OAuth entries get the completion-guidance copy; non-OAuth
+    // entries keep the existing installSuccess byte-identically.
+    const entry = entries.find((e) => e.id === entryId);
+    const providerDisplayName =
+      entry?.oauthProvider === "google" ? "Google" : "Microsoft";
     try {
       await installMutation.mutateAsync({ entryId, workspaceId: currentWorkspaceId, headers });
-      showSuccess(t("marketplace.toast.installSuccess", { name }));
+      if (entry?.authType === "oauth") {
+        showSuccess(
+          t("marketplace.toast.installSuccessOAuth", { name, provider: providerDisplayName })
+        );
+      } else {
+        showSuccess(t("marketplace.toast.installSuccess", { name }));
+      }
       setInstallTarget(null);
     } catch (err: unknown) {
       const status = (err as { status?: number }).status;
@@ -134,7 +151,7 @@ export default function MarketplacePage() {
         </div>
       )}
 
-      {/* Section 2 — Search bar */}
+      {/* Section 2 — Search bar + Add server (create-only, UI-SPEC §5) */}
       <div className="mb-[24px] max-w-[600px]">
         <div className="relative">
           <svg
@@ -158,6 +175,19 @@ export default function MarketplacePage() {
             className="pl-10 pr-4 py-2.5 text-sm"
           />
         </div>
+        {/* Phase 197 (MCPO-03 D-06): "Add server" ghost button — opens the
+            create-only CatalogEntryFormDialog. CREATE-ONLY per UI-SPEC §5:
+            no PUT route exists — the edit arm ships when the server exposes
+            PUT /:entryId; do not invent the route. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-2"
+          data-testid="marketplace-add-server"
+          onClick={() => setShowCreateDialog(true)}
+        >
+          {t("marketplace.form.addServer")}
+        </Button>
       </div>
 
       {/* Section 3 — Category filter pills */}
@@ -251,6 +281,12 @@ export default function MarketplacePage() {
         entryName={installTarget?.name ?? ""}
         installing={installMutation.isPending}
         onConfirm={confirmInstall}
+      />
+
+      {/* Create-only catalog entry dialog (Phase 197 D-06/UI-SPEC §5) */}
+      <CatalogEntryFormDialog
+        open={showCreateDialog}
+        onOpenChange={setShowCreateDialog}
       />
     </div>
   );

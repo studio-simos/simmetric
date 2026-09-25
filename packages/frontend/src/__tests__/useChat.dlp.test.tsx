@@ -66,8 +66,11 @@ Object.defineProperty(window, "localStorage", { value: localStorageMock, writabl
 /**
  * Dispatch one token event per timer tick so the test can assert the
  * intermediate `streamingContent` state between events (progressive).
+ * `spacingMs` spaces tokens BEYOND the hook's batched flush window (60ms,
+ * rendering-perf coalescing) so each coalesced flush surfaces exactly one
+ * new token.
  */
-function simulateProgressiveTokens(tokens: string[]) {
+function simulateProgressiveTokens(tokens: string[], spacingMs = 250) {
   return (
     _url: string,
     options: {
@@ -78,7 +81,7 @@ function simulateProgressiveTokens(tokens: string[]) {
     tokens.forEach((tk, idx) => {
       setTimeout(() => {
         options.onmessage({ event: "token", data: JSON.stringify(tk) });
-      }, (idx + 1) * 10);
+      }, (idx + 1) * spacingMs);
     });
     setTimeout(() => {
       options.onmessage({
@@ -86,7 +89,7 @@ function simulateProgressiveTokens(tokens: string[]) {
         data: JSON.stringify({ chatId: "chat-prog", messageId: "msg-prog" }),
       });
       options.onclose();
-    }, (tokens.length + 1) * 10);
+    }, (tokens.length + 1) * spacingMs);
     return Promise.resolve();
   };
 }
@@ -119,21 +122,22 @@ describe("useChat D-01 DLP progressive flush canary", () => {
     // Before any token events fire, streamingContent is empty (sendMessage resets it).
     expect(result.current.streamingContent).toBe("");
 
-    // First token -> "A"
+    // First token lands at t=250ms and schedules a batched flush ~60ms out
+    // (t=310) — advancing past it surfaces exactly that one token.
     act(() => {
-      jest.advanceTimersByTime(10);
+      jest.advanceTimersByTime(310);
     });
     expect(result.current.streamingContent).toBe("A");
 
-    // Second token -> "AB"
+    // Second token (t=500) + its flush (t=560) -> "AB"
     act(() => {
-      jest.advanceTimersByTime(10);
+      jest.advanceTimersByTime(250);
     });
     expect(result.current.streamingContent).toBe("AB");
 
-    // Third token -> "ABC"
+    // Third token (t=750) + its flush (t=810) -> "ABC"
     act(() => {
-      jest.advanceTimersByTime(10);
+      jest.advanceTimersByTime(250);
     });
     expect(result.current.streamingContent).toBe("ABC");
   });
@@ -143,11 +147,13 @@ describe("useChat D-01 DLP progressive flush canary", () => {
     // when JSON.parse throws. Verify progressive accumulation in that path too.
     mockFetchEventSource.mockImplementation(
       (_url: string, options: { onmessage: (msg: { event: string; data: string }) => void; onclose: () => void }) => {
+        // Token spacing (250ms) exceeds the 60ms flush window so each
+        // coalesced flush surfaces exactly one token.
         ["X", "Y"].forEach((tk, idx) => {
           setTimeout(() => {
             // Non-JSON raw payload — triggers the catch branch
             options.onmessage({ event: "token", data: tk });
-          }, (idx + 1) * 10);
+          }, (idx + 1) * 250);
         });
         setTimeout(() => {
           options.onmessage({
@@ -155,7 +161,7 @@ describe("useChat D-01 DLP progressive flush canary", () => {
             data: JSON.stringify({ chatId: "chat-raw", messageId: "msg-raw" }),
           });
           options.onclose();
-        }, 30);
+        }, 600);
         return Promise.resolve();
       }
     );
@@ -167,12 +173,12 @@ describe("useChat D-01 DLP progressive flush canary", () => {
     });
 
     act(() => {
-      jest.advanceTimersByTime(10);
+      jest.advanceTimersByTime(310);
     });
     expect(result.current.streamingContent).toBe("X");
 
     act(() => {
-      jest.advanceTimersByTime(10);
+      jest.advanceTimersByTime(250);
     });
     expect(result.current.streamingContent).toBe("XY");
   });

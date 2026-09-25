@@ -50,11 +50,17 @@ export function usePushNotifications() {
         return { ok: false, error: "Notification permission denied" };
       }
 
-      // 2. Get VAPID public key from server
+      // 2 + 3 in parallel — async-parallel (Vercel React best practices):
+      // the VAPID-key fetch and the service-worker registration probe are
+      // independent of each other (only `subscribe` below depends on both
+      // results), so they run concurrently instead of two sequential awaits.
       const token = localStorage.getItem("token");
-      const keyRes = await fetch("/api/system/push/vapid-key", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const [keyRes, reg] = await Promise.all([
+        fetch("/api/system/push/vapid-key", {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        navigator.serviceWorker.ready,
+      ]);
       if (!keyRes.ok) {
         return { ok: false, error: "Failed to get VAPID key from server" };
       }
@@ -63,8 +69,7 @@ export function usePushNotifications() {
         return { ok: false, error: "Server returned empty VAPID key" };
       }
 
-      // 3. Subscribe via PushManager
-      const reg = await navigator.serviceWorker.ready;
+      // 3. Subscribe via PushManager (depends on both results above)
       const subscription = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,

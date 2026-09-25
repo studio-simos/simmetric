@@ -40,7 +40,7 @@ class ErrorBoundaryInner extends Component<ErrorBoundaryProps, ErrorBoundaryStat
     if (this.state.hasError) {
       const { t } = this.props;
       return (
-        <div className="flex min-h-screen items-center justify-center bg-[var(--bg)] p-4">
+        <div className="flex min-h-[100dvh] items-center justify-center bg-[var(--bg)] p-4">
           <div className="w-full max-w-md rounded-lg border border-[var(--border)] bg-[var(--surface)] p-8 text-center shadow-lg">
             <div className="mb-4 text-4xl" aria-hidden="true">
               ⚠️

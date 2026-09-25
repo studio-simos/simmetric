@@ -67,7 +67,7 @@ jest.mock("../contexts/ThemeContext", () => ({
 // Mock the auth/license hooks UserDropdown calls internally (Feature 7.4).
 jest.mock("../queries/useAuth", () => ({
   useMe: () => ({ data: { permissions: ["admin:settings"] } }),
-  useMenuSections: () => ({ data: ["analytics", "settings"] }),
+  useMenuSections: () => ({ data: { menuSections: ["analytics", "settings"], settingsSections: [] } }),
 }));
 jest.mock("../queries/useLicense", () => ({
   useLicenseInfo: () => ({ data: { tier: "enterprise" } }),

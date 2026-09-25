@@ -74,6 +74,43 @@ jest.mock("@/components/ui/collapsible", () => {
   };
 });
 
+// Passthrough Select (same pattern as sidebar-primitives.test.tsx): the R-7
+// project/workspace selector assertions need the items rendered inline.
+jest.mock("@/components/ui/select", () => ({
+  Select: ({
+    children,
+    value,
+    onValueChange,
+  }: {
+    children?: React.ReactNode;
+    value?: string;
+    onValueChange?: (value: string) => void;
+  }) => (
+    <div data-testid="select" data-value={value}>
+      <select value={value} onChange={(e) => onValueChange?.(e.target.value)}>
+        {children}
+      </select>
+    </div>
+  ),
+  SelectTrigger: ({ children, ...rest }: Record<string, unknown>) => (
+    <button data-testid="select-trigger" role="combobox" {...rest}>
+      {children as React.ReactNode}
+    </button>
+  ),
+  SelectValue: ({ placeholder }: { placeholder?: string }) => (
+    <span data-testid="select-value">{placeholder}</span>
+  ),
+  SelectContent: ({ children }: { children?: React.ReactNode }) => (
+    <>{children}</>
+  ),
+  SelectItem: ({ children, value }: { children?: React.ReactNode; value?: string }) => (
+    <option value={value} data-testid="select-item">
+      {children}
+    </option>
+  ),
+  SelectSeparator: () => <div data-testid="select-separator" />,
+}));
+
 import AppSidebarNav from "../components/sidebar/AppSidebarNav";
 import type { AppSidebarNavProps } from "../components/sidebar/AppSidebarNav";
 
@@ -225,6 +262,82 @@ describe("AppSidebarNav", () => {
       );
       fireEvent.click(screen.getByRole("button", { name: "sidebar.widget" }));
       expect(pushMock).toHaveBeenCalledWith("/widgets");
+    });
+  });
+
+  describe("inline selectors (R-7)", () => {
+    it("renders the project selector with its label and items", () => {
+      render(
+        <AppSidebarNav
+          {...minimalProps()}
+          projects={[{ id: "p1", name: "Project One" }]}
+          onProjectSelect={jest.fn()}
+        />,
+      );
+      expect(screen.getByText("sidebar.project")).toBeInTheDocument();
+      expect(screen.getByText("Project One")).toBeInTheDocument();
+    });
+
+    it("hides the project selector when no projects exist", () => {
+      render(
+        <AppSidebarNav
+          {...minimalProps()}
+          projects={[]}
+          onProjectSelect={jest.fn()}
+        />,
+      );
+      expect(screen.queryByText("sidebar.project")).not.toBeInTheDocument();
+    });
+
+    it("hides the project selector when the projects prop is absent", () => {
+      render(<AppSidebarNav {...minimalProps()} />);
+      expect(screen.queryByText("sidebar.project")).not.toBeInTheDocument();
+    });
+
+    it("renders the workspace selector only when a project is selected", () => {
+      const props = {
+        ...minimalProps(),
+        workspaces: [{ id: "w1", name: "Workspace One" }],
+        onWorkspaceSelect: jest.fn(),
+      };
+      // No selected project → workspace selector hidden (nothing to list).
+      render(<AppSidebarNav {...props} selectedWorkspaceId="" />);
+      expect(screen.queryByText("sidebar.workspace")).not.toBeInTheDocument();
+    });
+
+    it("shows the workspace selector once a project is selected and fires selection", () => {
+      const onWorkspaceSelect = jest.fn();
+      render(
+        <AppSidebarNav
+          {...minimalProps()}
+          projects={[{ id: "p1", name: "Project One" }]}
+          selectedProjectId="p1"
+          workspaces={[
+            { id: "w1", name: "Workspace One" },
+            { id: "w2", name: "Workspace Two" },
+          ]}
+          selectedWorkspaceId="w1"
+          onWorkspaceSelect={onWorkspaceSelect}
+        />,
+      );
+      expect(screen.getByText("sidebar.workspace")).toBeInTheDocument();
+      expect(screen.getByText("Workspace One")).toBeInTheDocument();
+      // Both selectors are mounted (project + workspace) — the workspace
+      // one is the second mocked <select>.
+      const selects = screen.getAllByTestId("select");
+      const innerSelect = selects[selects.length - 1]!.querySelector("select")!;
+      fireEvent.change(innerSelect, {
+        target: { value: "w2" },
+      });
+      expect(onWorkspaceSelect).toHaveBeenCalledWith("w2");
+    });
+
+    it("fires onNavigate after a nav entry click (caller closes the menu)", () => {
+      const onNavigate = jest.fn();
+      render(<AppSidebarNav {...minimalProps({ menuSections: ["chat"] })} onNavigate={onNavigate} />);
+      fireEvent.click(screen.getByRole("button", { name: "sidebar.chat" }));
+      expect(pushMock).toHaveBeenCalledWith("/");
+      expect(onNavigate).toHaveBeenCalledTimes(1);
     });
   });
 });

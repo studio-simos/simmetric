@@ -131,7 +131,8 @@ function setupHooks(overrides?: {
       : { permissions: [] },
   });
   mockUseMenuSections.mockReturnValue({
-    data: overrides?.menuSections ?? [],
+    // Phase 206 (D-15): server-resolved payload shape.
+    data: { menuSections: overrides?.menuSections ?? [], settingsSections: [] },
   });
   mockUseLicenseInfo.mockReturnValue({
     data: overrides?.licenseTier ? { tier: overrides.licenseTier } : undefined,

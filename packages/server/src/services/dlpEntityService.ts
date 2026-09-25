@@ -131,8 +131,16 @@ export async function buildRecompositionMap(
  * Delete the entity rows for a document (used by the re-scan arm in plan 06
  * and the document-purge cascade tests; document deletion already cascades
  * via FK, this is the explicit re-scan refresh seam).
+ *
+ * Phase 204 (DEBT-SW-05): the designed re-scan refresh seam is now WIRED —
+ * the document text-edit route (PUT /:documentId/text) calls this in its DLP
+ * re-scan arm so a re-scan after an edit rebuilds a clean placeholder map
+ * instead of stacking duplicate entity rows on stale placeholders
+ * (writeEntityMap only creates; the read-side buildRecompositionMap tolerates
+ * duplicates by map-overwrite, so the delete-then-rewrite keeps the map
+ * exact rather than merely tolerated).
  */
-async function deleteEntityMap(documentId: string): Promise<number> {
+export async function deleteEntityMap(documentId: string): Promise<number> {
   const result = await prisma.dlpEntity.deleteMany({ where: { documentId } });
   return result.count;
 }

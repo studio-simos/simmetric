@@ -85,9 +85,14 @@ async function verifyDefaultOrgExists(): Promise<void> {
 // KEEP IN SYNC with PERMISSION_NAMES in @simmetric-chat/shared
 // The seed_rbac() SQL procedure is idempotent (ON CONFLICT DO NOTHING on all
 // INSERTs). Re-running prisma db seed produces no duplicate permissions or
-// role-permission links. The admin role is linked to all 36 PERMISSION_NAMES
+// role-permission links. The admin role is linked to all 41 PERMISSION_NAMES
 // (Phase 190 grew it to 35 with the skill-permission surface; Phase 192 added
-// the 36th, dlp:unmask — admin-only by DEFAULT_USER_ROLE exclusion); the user
+// the 36th, dlp:unmask — admin-only by DEFAULT_USER_ROLE exclusion; Phase 195
+// added the 37th, mcp:oauth:manage — admin-only by DEFAULT_USER_ROLE
+// exclusion; Phase 198 added the 38th/39th, connector:manage + connector:view
+// — admin-only by DEFAULT_USER_ROLE exclusion; Phase 202 added the 40th,
+// plugins:manage — admin-only by DEFAULT_USER_ROLE exclusion; Phase 206 added
+// the 41st, agency:users:manage — non-delegable via DELEGATION_DENYLIST); the user
 // role is linked to the 15 DEFAULT_USER_ROLE.permissions (11 base + 4 skill
 // grants — WR-04: skill:delete rides the user role too, owner-or-admin still
 // enforced server-side).
@@ -139,6 +144,41 @@ export async function seedRbac(): Promise<void> {
     {
       name: "dlp:unmask",
       description: "Unmask PII placeholders in document previews (elevated)",
+    },
+    // Phase 195 (MCPO-01 D-15): MCP OAuth management — 37th. Elevated
+    // capability: NOT in DEFAULT_USER_ROLE (admin role spreads
+    // [...PERMISSION_NAMES] and auto-gains it).
+    {
+      name: "mcp:oauth:manage",
+      description: "Authorize and revoke MCP OAuth connections",
+    },
+    // Phase 198 (ECCO-01 D-04): external chat-connector CRUD + reads —
+    // 38th/39th. Elevated capabilities: NOT in DEFAULT_USER_ROLE (admin role
+    // spreads [...PERMISSION_NAMES] and auto-gains both). Index-ordered:
+    // MUST match PERMISSION_NAMES order (the assert below is index-ordered).
+    {
+      name: "connector:manage",
+      description: "Manage external chat connectors (CRUD, token, webhook)",
+    },
+    {
+      name: "connector:view",
+      description: "View external chat connectors and their status",
+    },
+    // Phase 202 (PLGM-05 D-08) — 40th: plugin management (install/uninstall/
+    // enable/license/restart). Admin-only by DEFAULT_USER_ROLE exclusion —
+    // installing server-side plugins executes their code in-process (D6
+    // trust model), an elevated admin capability by construction.
+    {
+      name: "plugins:manage",
+      description: "Manage server plugins (install, enable, license, restart)",
+    },
+    // Phase 206 (AGENCY-03 D-07) — 41st: web-agency sub-user management.
+    // Non-delegable (DELEGATION_DENYLIST) — an agency holding it must not
+    // re-grant it (2-level hierarchy). Seeded for all roles that spread
+    // [...PERMISSION_NAMES]; DEFAULT_USER_ROLE and Utente Cloud exclude it.
+    {
+      name: "agency:users:manage",
+      description: "Create and manage own web-agency sub-users",
     },
   ];
   // Sanity check: the static list MUST match PERMISSION_NAMES from shared.

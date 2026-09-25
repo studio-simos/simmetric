@@ -40,6 +40,9 @@ interface UserWithPermissions {
  */
 export function getEffectivePermissions(user: unknown): PermissionName[] {
   const permSet = new Set<PermissionName>();
+  // Phase 206 (D-09): delegated overrides compose into the effective set
+  // (role defaults ∪ grants). The payload field is attached by
+  // authService.getUserWithRoles; absent = no overrides (fail-closed).
 
   // D-08: callers pass `req.user` (typed `unknown` in Express middlewares) or
   // the Prisma user payload. Narrow defensively — anything without a
@@ -52,6 +55,16 @@ export function getEffectivePermissions(user: unknown): PermissionName[] {
       if (PERMISSION_NAMES.includes(rp.permissionName as PermissionName)) {
         permSet.add(rp.permissionName as PermissionName);
       }
+    }
+  }
+
+  // Phase 206 (D-09): delegated grants ride `permissionOverrides` (attached
+  // by getUserWithRoles) — union into the effective set.
+  const overrides = (u as { permissionOverrides?: { permissionName: string }[] })
+    .permissionOverrides;
+  for (const override of overrides ?? []) {
+    if (PERMISSION_NAMES.includes(override.permissionName as PermissionName)) {
+      permSet.add(override.permissionName as PermissionName);
     }
   }
 

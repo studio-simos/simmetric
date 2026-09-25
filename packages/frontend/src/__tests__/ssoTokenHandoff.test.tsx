@@ -33,7 +33,7 @@ jest.mock("react-i18next", () => ({
 
 jest.mock("../queries/useAuth", () => ({
   useMe: () => ({ data: undefined, isLoading: false, error: undefined }),
-  useMenuSections: () => ({ data: [], isLoading: false }),
+  useMenuSections: () => ({ data: { menuSections: [], settingsSections: [] }, isLoading: false }),
   useLogout: () => ({ mutate: jest.fn(), isPending: false }),
 }));
 

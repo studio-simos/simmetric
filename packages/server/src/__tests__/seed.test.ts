@@ -99,7 +99,7 @@ describe("seedRbac", () => {
     expect(allSql).toContain('ON CONFLICT ("roleId", "permissionName") DO NOTHING');
   });
 
-  it("Test 4: the number of INSERT INTO \"permissions\" value tuples matches PERMISSION_NAMES.length (36, runtime-derived)", async () => {
+  it("Test 4: the number of INSERT INTO \"permissions\" value tuples matches PERMISSION_NAMES.length (41, runtime-derived)", async () => {
     const calls = captureExecuteRaw();
     await seedRbac();
     const allSql = calls.join("\n");
@@ -107,10 +107,13 @@ describe("seedRbac", () => {
     for (const name of permissionNames) {
       expect(allSql).toContain(name);
     }
-    expect(permissionNames.length).toBe(36);
+    // Phase 198 (ECCO-01 D-04): 37 → 39 with connector:manage + connector:view.
+    // Phase 202 (PLGM-05 D-08): 39 → 40 with plugins:manage.
+    // Phase 206 (AGENCY-03 D-07): 40 → 41 with agency:users:manage.
+    expect(permissionNames.length).toBe(41);
   });
 
-  it("Test 5: the admin role is linked to all 36 permissions, the user role to 15 (11 base + 4 Phase 190 skill grants — WR-04 includes skill:delete, DEFAULT_USER_ROLE.permissions length; Phase 192 dlp:unmask stays admin-only)", async () => {
+  it("Test 5: the admin role is linked to all 41 permissions, the user role to 15 (11 base + 4 Phase 190 skill grants — WR-04 includes skill:delete, DEFAULT_USER_ROLE.permissions length; Phase 192 dlp:unmask, Phase 195 mcp:oauth:manage, Phase 198 connector:manage/connector:view and Phase 202 plugins:manage stay admin-only)", async () => {
     const calls = captureExecuteRaw();
     await seedRbac();
     const allSql = calls.join("\n");
@@ -127,13 +130,26 @@ describe("seedRbac", () => {
       expect(allSql).toContain(p);
     }
     expect(userPerms.length).toBe(15);
-    // The elevated dlp:unmask grant (Phase 192) rides the ADMIN role only:
-    // it appears in the seed SQL and is NOT part of DEFAULT_USER_ROLE.
+    // The elevated dlp:unmask grant (Phase 192), the mcp:oauth:manage grant
+    // (Phase 195) and the connector:manage/connector:view grants (Phase 198)
+    // ride the ADMIN role only: they appear in the seed SQL and are NOT part
+    // of DEFAULT_USER_ROLE (D-04 — DEFAULT_USER_ROLE gains neither connector
+    // permission). The connector grants must appear in the permission-INSERT
+    // block but NOT in the user-role grant list (mirrors the dlp:unmask pin).
     expect(allSql).toContain("dlp:unmask");
+    expect(allSql).toContain("mcp:oauth:manage");
+    expect(allSql).toContain("connector:manage");
+    expect(allSql).toContain("connector:view");
+    const userGrantBlock = allSql.slice(allSql.indexOf('WHERE "name" IN'));
+    expect(userGrantBlock).not.toContain("connector:manage");
+    expect(userGrantBlock).not.toContain("connector:view");
     const userRole = DEFAULT_ROLES.find((r) => r.name === "user");
     expect(userRole?.permissions).toHaveLength(15);
     expect(userRole?.permissions).toContain("skill:delete");
     expect(userRole?.permissions).not.toContain("dlp:unmask");
+    expect(userRole?.permissions).not.toContain("mcp:oauth:manage");
+    expect(userRole?.permissions).not.toContain("connector:manage");
+    expect(userRole?.permissions).not.toContain("connector:view");
   });
 });
 

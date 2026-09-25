@@ -39,6 +39,12 @@ export interface SidebarItemProps {
   /** Click handler (caller navigates + closes mobile sheet). */
   onClick?: () => void;
   /**
+   * Hover/focus handler (`bundle-preload`): fires on mouseenter AND focus
+   * (keyboard parity) so the caller can warm the route's lazy chunk before
+   * the click. Optional — omitted for items with nothing to preload.
+   */
+  onHover?: () => void;
+  /**
    * Extra classes for the expanded row (caller-owned sizing, e.g. the
    * ≥44px touch-target floor below `lg`). Appended last so it can
    * override the defaults via tailwind-merge.
@@ -55,6 +61,7 @@ export default function SidebarItem({
   isActive = false,
   collapsed = false,
   onClick,
+  onHover,
   className,
 }: SidebarItemProps) {
   const activeStyle =
@@ -69,6 +76,8 @@ export default function SidebarItem({
       <Button
         variant="ghost"
         onClick={onClick}
+        onMouseEnter={onHover}
+        onFocus={onHover}
         title={label}
         aria-label={label}
         // `relative` hosts the caller's absolutely-positioned rail badge
@@ -87,6 +96,8 @@ export default function SidebarItem({
     <Button
       variant="ghost"
       onClick={onClick}
+      onMouseEnter={onHover}
+      onFocus={onHover}
       aria-label={label}
       className={cn(
         "w-full text-left px-3 py-2 rounded text-sm justify-start h-auto flex items-center gap-2",

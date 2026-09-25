@@ -168,8 +168,12 @@ describe("McpConnectionForm", () => {
     const projectSelect = selects[1];
     if (projectSelect) fireEvent.change(projectSelect, { target: { value: "p1" } }); // project
 
+    // 196-03: the headers editor renders only for authType=static — switch.
+    const authTypeSelect = selects[3];
+    if (authTypeSelect) fireEvent.change(authTypeSelect, { target: { value: "static" } });
+
     // Add a header row and type an invalid name (space + '!' break ^[A-Za-z0-9-]+$)
-    fireEvent.click(screen.getByText("settings.mcpConnections.headersAdd"));
+    fireEvent.click(await screen.findByText("settings.mcpConnections.headersAdd"));
     const nameInput = screen.getByPlaceholderText("settings.mcpConnections.headersNamePlaceholder");
     fireEvent.change(nameInput, { target: { value: "Bad Name!" } });
 
@@ -187,7 +191,13 @@ describe("McpConnectionForm", () => {
       expect(screen.getByPlaceholderText("settings.mcpConnections.namePlaceholder")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText("+ Authorization"));
+    // 196-03: switch to static first — the editor (and its presets) render
+    // only for authType=static.
+    const selects = screen.getAllByRole("combobox");
+    const authTypeSelect = selects[3];
+    if (authTypeSelect) fireEvent.change(authTypeSelect, { target: { value: "static" } });
+
+    fireEvent.click(await screen.findByText("+ Authorization"));
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("Authorization")).toBeInTheDocument();
@@ -208,6 +218,7 @@ describe("McpConnectionForm", () => {
       lastSyncAt: null,
       createdAt: "",
       updatedAt: "",
+      authType: "static" as const, // 196-03: static rows show the headers editor
     };
 
     render(<McpConnectionForm connection={connection} onClose={onClose} onSave={onSave} />);

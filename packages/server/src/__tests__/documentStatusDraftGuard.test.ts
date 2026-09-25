@@ -208,7 +208,7 @@ describe("PUT /api/documents/:id/status — draft-file callback guard (260829-jv
       .send({ status: "completed" });
 
     expect(res.status).toBe(401);
-    expect(res.body.error).toBe("Unauthorized");
+    expect(res.body.error.message).toBe("Unauthorized");
     expect(unlinkSpy).not.toHaveBeenCalled();
   });
 

@@ -53,6 +53,61 @@ describe("modelRegistry", () => {
       );
     });
 
+    // Phase 205 (OCR-01 / D-07): the tuned child model must resolve to the
+    // glm-ocr prompt family + chat endpoint + base64_array with the raised
+    // 16384 contextWindow — never the generic 4096 fallback (Pitfall 4).
+    it("resolves glm-ocr-optimized:latest to the glm-ocr family with contextWindow 16384", () => {
+      const config = resolveModelConfig("glm-ocr-optimized:latest");
+      expect(config.apiEndpoint).toBe("chat");
+      expect(config.inputMode).toBe("base64_array");
+      expect(config.promptTemplate).toBe("glm-ocr");
+      expect(config.contextWindow).toBe(16384);
+      expect(config.name).toBe("glm-ocr-optimized:latest");
+    });
+
+    it("resolves glm-ocr-optimized:q8_0 via the glm-ocr-optimized:* wildcard entry", () => {
+      const config = resolveModelConfig("glm-ocr-optimized:q8_0");
+      expect(config.apiEndpoint).toBe("chat");
+      expect(config.promptTemplate).toBe("glm-ocr");
+      expect(config.contextWindow).toBe(16384);
+    });
+
+    // Regression pin (Pitfall 4 guard): patternToRegex("glm-ocr:*") = ^glm-ocr:.*$
+    // must NOT match "glm-ocr-optimized:latest" — the name carries no
+    // "glm-ocr:" prefix. The dedicated registry entry is what makes the
+    // optimized model findable.
+    it("wildcard glm-ocr:* does NOT match glm-ocr-optimized:latest", () => {
+      for (const entry of OCR_MODEL_REGISTRY) {
+        if (entry.namePattern !== "glm-ocr:*") continue;
+        const wildcardRegex = new RegExp(
+          "^" +
+            entry.namePattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") +
+            "$",
+        );
+        expect(wildcardRegex.test("glm-ocr-optimized:latest")).toBe(false);
+      }
+    });
+
+    // Ordering pin: the optimized entry must sit between the exact
+    // glm-ocr:latest entry and the glm-ocr:* wildcard — resolveModelConfig
+    // checks exact, then wildcard, in array order.
+    it("glm-ocr-optimized entry precedes the glm-ocr:* wildcard entry", () => {
+      const optimizedIdx = OCR_MODEL_REGISTRY.findIndex(
+        (e) => e.namePattern === "glm-ocr-optimized:*",
+      );
+      const exactIdx = OCR_MODEL_REGISTRY.findIndex(
+        (e) => e.namePattern === "glm-ocr:latest",
+      );
+      const wildcardIdx = OCR_MODEL_REGISTRY.findIndex(
+        (e) => e.namePattern === "glm-ocr:*",
+      );
+      expect(optimizedIdx).toBeGreaterThan(-1);
+      expect(exactIdx).toBeGreaterThan(-1);
+      expect(wildcardIdx).toBeGreaterThan(-1);
+      expect(optimizedIdx).toBeGreaterThan(exactIdx);
+      expect(optimizedIdx).toBeLessThan(wildcardIdx);
+    });
+
     it("is case-sensitive", () => {
       const configLower = resolveModelConfig("glm-ocr:latest");
       const configUpper = resolveModelConfig("GLM-OCR:LATEST");

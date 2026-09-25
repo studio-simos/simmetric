@@ -48,6 +48,10 @@ import { assertNonAdminUploadAllowed } from "../middleware/uploadGate";
 import { assertArchiveAccess } from "../middleware/archiveAccess";
 import prisma from "../utils/prisma";
 import { getSetting } from "../services/systemConfigService";
+// Phase 207 (CLOUD-04, D-15): storage quota gates on the upload path —
+// declared-size pre-check (advisory, fail-fast) + post-upload actual-size
+// re-check INSIDE the row-persist transaction (T-207-07 race guard).
+import { checkStorageQuota, QuotaError } from "../services/quotaService";
 import { getStorageProvider } from "../services/storageProvider";
 import { getUniqueFilePath, isDraftStorageKey } from "../utils/fileUtils";
 import { isAdmin } from "../utils/auth";
@@ -483,6 +487,22 @@ router.post(
         return;
       }
 
+      // Phase 207 (CLOUD-04, D-15): PRE-upload declared-size check (advisory
+      // arm — the multer-staged bytes are the truth; the binding gate is the
+      // in-tx re-check below). Fail fast before provider work; the staged
+      // file is cleaned on rejection (unlinkUploadIfPresent — the WR-01
+      // disk-hygiene doctrine).
+      try {
+        await checkStorageQuota(prisma, req.userId!, parsed.data.fileSize);
+      } catch (err: unknown) {
+        if (err instanceof QuotaError) {
+          unlinkUploadIfPresent(req);
+          res.status(err.status).json(err.payload);
+          return;
+        }
+        throw err;
+      }
+
       // Phase 70 PRM-02 / D-02: toggle OR gate (global ALLOW_NON_ADMIN_UPLOAD
       // || workspace.allowMemberUploads). Admin bypasses the toggle only.
       // WR-01: unlinkUploadIfPresent BEFORE the 403 — multer already wrote the
@@ -508,27 +528,40 @@ router.post(
       // The drafts subpath ({orgId}/uploads/drafts/…) is what the reaper's
       // isDraftStorageKey prefix-guard arm keys on.
       const storageKey = `${workspace.organizationId}/uploads/drafts/${crypto.randomUUID()}-${sanitizeFileName(parsed.data.originalName)}`;
-      const draft = await prisma.uploadDraft.create({
-        data: {
-          uploadedBy: req.userId!,
-          workspaceId: parsed.data.workspaceId,
-          filePath: req.file.path,
-          storageKey,
-          // quick 260808-vzm: sanitize the staged name so the stored
-          // originalName matches the sanitized disk filename and the name
-          // shown in the UI. The URL branch (sourceType === "url") stores a
-          // URL sentinel and is intentionally NOT sanitized (T-05 accept).
-          originalName: sanitizeFileName(parsed.data.originalName),
-          fileSize: parsed.data.fileSize,
-          mimeType: parsed.data.mimeType,
-          expiresAt,
-          // CR-03 (185-05, D-04): explicit org stamp (file branch — same
-          // org-assertion class as the URL branch above).
-          organizationId: req.organizationId!,
-          // Prisma defaults: ragEnabled=false, kbEnabled=false,
-          // parseStatus="uploaded", ragJobId/kbJobId=null,
-          // assignedArchiveId=null
-        },
+      // Capture the multer-staged file: TS narrowing does not survive the
+      // async tx closure below.
+      const stagedFile = req.file;
+      // Phase 207 (CLOUD-04, D-15): BINDING gate — the actual-size re-check
+      // runs INSIDE the row-persist transaction so two parallel uploads
+      // cannot both consume the same remaining bytes (T-207-07; the second
+      // over-quota commit is rejected with the 409 storage family and its
+      // staged tmp is removed by the handler's unlink path). QuotaError
+      // propagates out of the transaction into the handler's catch → mapped
+      // below (unlike the 500 arm).
+      const draft = await prisma.$transaction(async (tx) => {
+        await checkStorageQuota(tx, req.userId!, parsed.data.fileSize);
+        return tx.uploadDraft.create({
+          data: {
+            uploadedBy: req.userId!,
+            workspaceId: parsed.data.workspaceId,
+            filePath: stagedFile.path,
+            storageKey,
+            // quick 260808-vzm: sanitize the staged name so the stored
+            // originalName matches the sanitized disk filename and the name
+            // shown in the UI. The URL branch (sourceType === "url") stores a
+            // URL sentinel and is intentionally NOT sanitized (T-05 accept).
+            originalName: sanitizeFileName(parsed.data.originalName),
+            fileSize: parsed.data.fileSize,
+            mimeType: parsed.data.mimeType,
+            expiresAt,
+            // CR-03 (185-05, D-04): explicit org stamp (file branch — same
+            // org-assertion class as the URL branch above).
+            organizationId: req.organizationId!,
+            // Prisma defaults: ragEnabled=false, kbEnabled=false,
+            // parseStatus="uploaded", ragJobId/kbJobId=null,
+            // assignedArchiveId=null
+          },
+        });
       });
 
       // Phase 184 (SAAS-03, T-184-06 — mirrors the landed documents.ts seam-1
@@ -539,9 +572,9 @@ router.post(
       // storage: it is unlinked best-effort once the bytes are in the
       // provider (WR-01 keeps guarding the pre-row rejection paths — D-08).
       const provider = await getStorageProvider(workspace.organizationId);
-      await provider.put(req.file.path, storageKey);
+      await provider.put(stagedFile.path, storageKey);
       try {
-        fs.unlinkSync(req.file.path);
+        fs.unlinkSync(stagedFile.path);
       } catch {
         // Best-effort ingress cleanup — the tmp is a buffer, never storage.
       }
@@ -549,6 +582,14 @@ router.post(
       // D-06 / T-69-e: NEVER include filePath in a response body.
       res.status(201).json(serializeDraftStage(draft));
     } catch (err: unknown) {
+      // Phase 207 (CLOUD-04, D-15): the binding in-tx storage gate throws the
+      // 409 family — map BEFORE the generic 500 arm; the staged tmp is
+      // removed by unlinkUploadIfPresent (bytes never retained on breach).
+      if (err instanceof QuotaError) {
+        unlinkUploadIfPresent(req);
+        res.status(err.status).json(err.payload);
+        return;
+      }
       unlinkUploadIfPresent(req);
       const message = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: message });

@@ -43,6 +43,14 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
       return;
     }
 
+    // Phase 206 (D-05): disabled accounts fail closed at the chain entry —
+    // the agency disable arm (subuser.disabled) and admin actions set
+    // User.disabledAt; re-enabling clears it.
+    if (user.disabledAt) {
+      res.status(401).json({ error: "Account is disabled" });
+      return;
+    }
+
     req.userId = payload.userId;
     req.user = user;
     next();

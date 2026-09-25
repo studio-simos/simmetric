@@ -193,7 +193,7 @@ describe("Document upload D-04 gate (admin requires workspace access, bypasses o
       .field("workspaceId", WS_ID);
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toMatch(/restricted to admins/i);
+    expect(res.body.error.message).toMatch(/restricted to admins/i);
   });
 
   it("admin bypasses allowMemberUploads (admin + workspaceAccess + allowMemberUploads=false) — not 403", async () => {
@@ -229,7 +229,7 @@ describe("Document upload D-04 gate (admin requires workspace access, bypasses o
       .field("workspaceId", WS_ID);
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toMatch(/access denied/i);
+    expect(res.body.error.message).toMatch(/access denied/i);
   });
 });
 
@@ -277,7 +277,7 @@ describe("POST /api/documents/upload — SC-1b toggle OR (Phase 70 D-04)", () =>
       .field("workspaceId", WS_ID);
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe("Uploads are restricted to admins in this workspace");
+    expect(res.body.error.message).toBe("Uploads are restricted to admins in this workspace");
   });
 
   it("non-admin with ALLOW_NON_ADMIN_UPLOAD=true + allowMemberUploads=false → not 403 (OR-inclusive)", async () => {

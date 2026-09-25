@@ -68,6 +68,19 @@ jest.mock("../utils/prisma", () => ({
 }));
 const mockPrisma = require("../utils/prisma").default;
 
+// --- dlpBackfillService destructure-mock (Phase 201 / DEBT-01) -------------
+// routes/workspaces.ts destructures assertEvalGatePassed at module load —
+// omitting this mock crashes suite boot (dlpBackfillService imports the real
+// prisma + jobQueue chain). All three exports mocked: a partial mock of
+// destructured exports leaves undefined bindings (dlpEvalRoutes.test.ts idiom).
+jest.mock("../services/dlpBackfillService", () => ({
+  __esModule: true,
+  assertEvalGatePassed: jest.fn(async () => true),
+  countEligibleDocuments: jest.fn(async () => 0),
+  enqueueDlpBackfillBatch: jest.fn(async () => ({ enqueued: 0, skipped: 0, totalEligible: 0, errors: [] })),
+}));
+const mockAssertEvalGatePassed = require("../services/dlpBackfillService").assertEvalGatePassed as jest.Mock;
+
 // --- eventLogService mock -------------------------------------------------
 jest.mock("../services/eventLogService", () => ({
   logEvent: jest.fn().mockResolvedValue(undefined),
@@ -237,6 +250,57 @@ describe("PUT /api/workspaces/:workspaceId — update data contract (260809-cxp)
     expect(data).not.toHaveProperty("skills");
     expect(data).not.toHaveProperty("templateId");
     expect(data).not.toHaveProperty("template");
+  });
+});
+
+describe("PUT /api/workspaces/:workspaceId — DLP-05 enable-arm eval gate (DEBT-01)", () => {
+  it("dlpDocumentScanEnabled=true + gate FALSE → 409 { error, gate: 'eval-not-passed' }, no update persisted", async () => {
+    mockAssertEvalGatePassed.mockResolvedValue(false);
+    const app = buildApp();
+    const res = await request(app).put("/api/workspaces/ws-1").send({ name: "W", dlpDocumentScanEnabled: true });
+
+    expect(res.status).toBe(409);
+    // D-02: the body carries ONLY the two keys — no totalEligible.
+    expect(Object.keys(res.body).sort()).toEqual(["error", "gate"]);
+    expect(res.body.gate).toBe("eval-not-passed");
+    expect(res.body.error).toContain("eval");
+    expect(mockAssertEvalGatePassed).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.workspace.update).not.toHaveBeenCalled();
+    expect(mockLogEvent).not.toHaveBeenCalled();
+  });
+
+  it("dlpDocumentScanEnabled=true + gate TRUE → 200, update proceeds with the toggle", async () => {
+    mockAssertEvalGatePassed.mockResolvedValue(true);
+    const app = buildApp();
+    const res = await request(app).put("/api/workspaces/ws-1").send({ name: "W", dlpDocumentScanEnabled: true });
+
+    expect(res.status).toBe(200);
+    expect(mockAssertEvalGatePassed).toHaveBeenCalledTimes(1);
+    const data = mockPrisma.workspace.update.mock.calls[0][0].data;
+    expect(data).toHaveProperty("dlpDocumentScanEnabled", true);
+  });
+
+  it("dlpDocumentScanEnabled=false → proceeds regardless of gate state (D-03: OFF never blocked)", async () => {
+    mockAssertEvalGatePassed.mockResolvedValue(false);
+    const app = buildApp();
+    const res = await request(app).put("/api/workspaces/ws-1").send({ name: "W", dlpDocumentScanEnabled: false });
+
+    expect(res.status).toBe(200);
+    // D-04 invocation pin: the gate fires on the true arm ONLY.
+    expect(mockAssertEvalGatePassed).not.toHaveBeenCalled();
+    const data = mockPrisma.workspace.update.mock.calls[0][0].data;
+    expect(data).toHaveProperty("dlpDocumentScanEnabled", false);
+  });
+
+  it("field omitted → proceeds (regression: other spread arms untouched); gate not invoked on non-true arms", async () => {
+    mockAssertEvalGatePassed.mockResolvedValue(false);
+    const app = buildApp();
+    const res = await request(app).put("/api/workspaces/ws-1").send({ name: "W" });
+
+    expect(res.status).toBe(200);
+    expect(mockAssertEvalGatePassed).not.toHaveBeenCalled();
+    const data = mockPrisma.workspace.update.mock.calls[0][0].data;
+    expect(data).not.toHaveProperty("dlpDocumentScanEnabled");
   });
 });
 

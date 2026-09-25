@@ -109,6 +109,12 @@ export const configKeySchema = z.enum([
   "OCR_DEFAULT_CUSTOM_INSTRUCTIONS",
   "OCR_ENABLED",
   "OCR_PRECHECK_CHARS",
+  // Phase 205 D-11 (OCR-04) — standardized glm-ocr system prompt, default
+  // "Text recognition:" (CONFIG_DEFAULTS). Admin-editable at runtime via
+  // PUT /api/system/settings (NOT ALWAYS_READONLY — DB > ENV > default);
+  // consumed by buildGlmOcrPrompt via ocrPage. Empty/whitespace value falls
+  // back to the legacy per-mode prompts (byte-identical behavior).
+  "OCR_PROMPT",
 
   // Synthesis Configuration
   "SYNTHESIS_LLM_PROVIDER_ID",
@@ -160,6 +166,16 @@ export const configKeySchema = z.enum([
   // chat_message_retention_days: "" precedent. NOT in ALWAYS_READONLY — the
   // initialize flow + boot derivation must be able to write it.
   "setup_wizard_mode",
+
+  // Phase 207 (CLOUD-03/04, D-08) — quota presets. "0"/"" sentinel = NOT
+  // configured (the D-08 resolution chain then falls through to unlimited);
+  // a positive value is the install-level default applied to every user
+  // without a per-user override. Admin-editable via PUT /api/system/settings
+  // (NOT ALWAYS_READONLY). Per-user overrides live on User (tokenQuotaLimit /
+  // storageQuotaGb — 207 schema); the preset is the middle tier of the chain:
+  // per-user override > preset > unlimited (fail-open).
+  "QUOTA_TOKEN_DEFAULT",
+  "QUOTA_STORAGE_GB_DEFAULT",
 ]);
 
 export const setConfigSchema = z.object({

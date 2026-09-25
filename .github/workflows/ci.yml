@@ -151,7 +151,7 @@ jobs:
             exit 1
           fi
           echo "OK: no english-only query literals outside ftsService.ts."
-      - name: Test-count guard (community suite ≤ 5200, recalibrated quick 260921-o5z)
+      - name: Test-count guard (community suite ≤ 6197, recalibrated 204-sweep)
         # Phase 148 SC-3 / D-07: cap community suite growth. The glob is top-level
         # __tests__/ files only (NOT recursive — Pitfall 6). The enterprise package's
         # own __tests__/ is a separate package and NOT counted (D-07).
@@ -164,17 +164,18 @@ jobs:
         #    (server 4042 + frontend 1003, measured 2026-09-21). New cap
         #    5200 ≈ 3% headroom over the audited 5045 — still an anti-bloat
         #    tripwire, not a permanent red. Re-audit when this trips again.
+        #  - 204-sweep: cap 5200 stale — suite grew through v0.26 lanes (195-199 + 201); new cap 6197 ≈ 3% headroom over audited 6016 (source-line mode; jest-run total 5792 measured 2026-09-23), measured 2026-09-23
         run: |
           COUNT=$(rg -c '^\s*(it|test|describe)\(' \
             packages/server/src/__tests__/*.test.ts \
             packages/frontend/src/__tests__/*.test.tsx \
             2>/dev/null | awk -F: '{s+=$2} END {print s}')
-          echo "Community suite test count: $COUNT (cap: 5200, recalibrated baseline: 5045)"
-          if [ "$COUNT" -gt 5200 ]; then
-            echo "::error::Test count $COUNT exceeds cap 5200 (recalibrated quick 260921-o5z over the audited 5045). Suite bloat — add tests only when the behavior demands it."
+          echo "Community suite test count: $COUNT (cap: 6197, recalibrated baseline: 6016)"
+          if [ "$COUNT" -gt 6197 ]; then
+            echo "::error::Test count $COUNT exceeds cap 6197 (recalibrated 204-sweep over the audited 6016). Suite bloat — add tests only when the behavior demands it."
             exit 1
           fi
-          echo "OK: $COUNT tests under cap 5200"
+          echo "OK: $COUNT tests under cap 6197"
     env:
       JWT_SECRET: ci-test-secret-key-32chars-long!!
       DATABASE_URL: postgresql://simmetricchat:simmetricchat@127.0.0.1:5432/simmetricchat_test

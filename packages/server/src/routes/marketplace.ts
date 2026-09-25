@@ -13,12 +13,17 @@ import {
   uninstallMcpServerSchema,
   mcpCatalogEntryIdParamSchema,
   mcpHeadersSchema,
+  createMcpCatalogEntrySchema,
 } from "@simmetric-chat/shared";
 import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
 import { logEvent } from "../services/eventLogService";
 import { connectMCPServer, disconnectMCPServer } from "../agent/mcpClient";
 import { unregisterSkillsForConnection } from "../agent/skills";
+// Phase 197 (MCPO-03 D-08): the shared revoke+wipe helper — the uninstall
+// route inlines its flow (it does not delegate to uninstallMcpServer), so
+// the hook inserts at the route between the skill unregister and the delete.
+import { revokeAndWipeCredentials } from "../services/mcpUninstallService";
 
 const router = Router();
 
@@ -105,35 +110,33 @@ router.use(authMiddleware, tenantContextMiddleware, requireAdmin);
 // POST / — Create a catalog entry (admin only, used by E2E tests and admin panel)
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const { name, url, transportType, description, category, version, author, verificationTier, headers } = req.body;
-    if (!name || !url || !transportType) {
-      res.status(400).json({ error: "name, url, and transportType are required" });
+    // T-197-06 (Phase 197 MCPO-03 D-04): the raw req.body destructure is the
+    // closed trust-boundary gap — every field now validates through the
+    // shared Zod schema (incl. the oauth⇔provider refines) before the DB.
+    const parsed = createMcpCatalogEntrySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "Invalid request body",
+        details: parsed.error.flatten().fieldErrors,
+      });
       return;
     }
+    const { name, url, transportType, description, category, version, author, verificationTier, headers, authType, oauthProvider } = parsed.data;
 
     // D-12 write-side parity: validate admin-supplied catalog headers against
     // mcpHeadersSchema (hop-by-hop blocklist, name regex, size limits) before
     // persisting. Without this, invalid headers could be copied verbatim into
     // MCPConnection.headers on every install that does not pass an override.
-    if (headers !== undefined && headers !== null && headers !== "{}") {
-      let parsedHeaders: unknown = headers;
-      if (typeof headers === "string") {
-        try {
-          parsedHeaders = JSON.parse(headers);
-        } catch {
-          res.status(400).json({ error: "Invalid MCP headers", details: ["headers must be valid JSON"] });
-          return;
-        }
-      }
-      if (parsedHeaders && typeof parsedHeaders === "object" && Object.keys(parsedHeaders as Record<string, unknown>).length > 0) {
-        const hdr = mcpHeadersSchema.safeParse(parsedHeaders);
-        if (!hdr.success) {
-          res.status(400).json({
-            error: "Invalid MCP headers",
-            details: hdr.error.issues.map((i) => i.message),
-          });
-          return;
-        }
+    // (Post-schema the field is Record<string,string> | undefined — the old
+    // string-form acceptance died with the raw destructure.)
+    if (headers !== undefined) {
+      const hdr = mcpHeadersSchema.safeParse(headers);
+      if (!hdr.success) {
+        res.status(400).json({
+          error: "Invalid MCP headers",
+          details: hdr.error.issues.map((i) => i.message),
+        });
+        return;
       }
     }
 
@@ -147,7 +150,11 @@ router.post("/", async (req: Request, res: Response) => {
         version: version || null,
         author: author || null,
         verificationTier: verificationTier || "unverified",
-        headers: headers || "{}",
+        headers: headers ? JSON.stringify(headers) : "{}",
+        // Phase 197 (D-04): additive OAuth fields — install-count/health
+        // columns stay admin/runtime-owned (never client-writable).
+        authType: authType ?? "none",
+        oauthProvider: oauthProvider ?? null,
       },
     });
 
@@ -242,6 +249,12 @@ router.post("/:entryId/install", async (req: Request, res: Response) => {
       // CR-03 (185-05, D-04): explicit org stamp (Tier-A model — same
       // self-visibility class as the mcp.ts create).
       organizationId: req.organizationId!,
+      // Phase 197 (MCPO-03 D-05): copy the entry's OAuth identity so the
+      // admin completes authorization through the 195 Connect flow. Non-oauth
+      // entries keep the column defaults (spread arm empty — byte-identical).
+      ...(catalogEntry.authType === "oauth"
+        ? { authType: "oauth", oauthProvider: catalogEntry.oauthProvider, oauthStatus: "pending" }
+        : {}),
     };
 
     if (overrideHeaders) {
@@ -284,17 +297,31 @@ router.post("/:entryId/install", async (req: Request, res: Response) => {
     });
 
     // 7. Fire-and-forget auto-connect (D-04: connection failure logged, NOT propagated to HTTP)
-    connectMCPServer(connection.id).catch((err: unknown) => {
-      logger.error("[marketplace] Auto-connect failed after install", {
-        connectionId: connection.id,
-        catalogEntryId: entryId,
-        error: (err instanceof Error ? err.message : String(err)),
+    // Phase 197 (MCPO-03 D-05): OAuth entries skip auto-connect — there is no
+    // URL to connect until the token exists; the admin completes via the 195
+    // Connect flow (oauth/start), then the callback reconnects. Skipping also
+    // avoids a pointless connectionErrors entry against the placeholder URL.
+    if (catalogEntry.authType !== "oauth") {
+      connectMCPServer(connection.id).catch((err: unknown) => {
+        logger.error("[marketplace] Auto-connect failed after install", {
+          connectionId: connection.id,
+          catalogEntryId: entryId,
+          error: (err instanceof Error ? err.message : String(err)),
+        });
       });
-    });
+    }
 
     // 8. Return 201 with connection (same shape as POST /api/mcp-connections)
+    // Phase 197 (T-197-06 posture): the secret-bearing oauth columns are
+    // stripped from the 201 response — mcp.ts POST returns the row through
+    // sanitizeMcpConnection (credentialsEncrypted/oauthError removed), and
+    // this route must hold the same leak-pin contract (the E2E leak pin
+    // asserts BOTH the connection-list AND the install response). The
+    // non-secret oauth badge fields (authType/oauthStatus/oauthProvider)
+    // stay — the UI renders from them.
+    const { credentialsEncrypted: _ce, oauthError: _oe, ...connectionPublic } = connection;
     res.status(201).json({
-      ...connection,
+      ...connectionPublic,
       headers: JSON.parse(connection.headers),
     });
   } catch (err: unknown) {
@@ -344,6 +371,10 @@ router.post("/:entryId/uninstall", async (req: Request, res: Response) => {
     // 4. Disconnect runtime + unregister skills (D-05: hard delete cleanup)
     await disconnectMCPServer(connection.id);
     unregisterSkillsForConnection(connection.id);
+
+    // Phase 197 (MCPO-03 D-08): best-effort provider-side revocation BEFORE
+    // the hard delete (fail-open-to-wipe) — the blob dies with the row.
+    await revokeAndWipeCredentials(connection);
 
     // 5. Hard delete DB record (D-05: no soft-delete, no tombstone -- D-07: reinstall = just install again)
     await prisma.mCPConnection.delete({ where: { id: connection.id } });

@@ -47,6 +47,25 @@ export const grantProjectAccessSchema = z.object({
 export const roleIdParamSchema = z.string().uuid("Invalid role ID");
 type RoleIdParam = z.infer<typeof roleIdParamSchema>;
 
+// ===== Phase 206 (VIS-01 D-14/D-16): per-role settings-section visibility =====
+// Admin toggle payload for PUT /api/roles/:roleId/visibility. sectionKey
+// values: SETTINGS_TAB_PERMISSIONS keys (profile/llm/appearance/security/
+// advanced) for settings sections; MENU_SECTIONS keys for menu sections.
+// Absent rows = permission-OR default (fail-open to CURRENT behavior).
+/** @latentByDesign — consumer = plan 03 PUT /api/roles/:roleId/visibility (VIS-01 D-14/D-16). */
+export const roleSectionVisibilitySchema = z.object({
+  sections: z
+    .array(
+      z.object({
+        sectionKey: z.string().min(1).max(100),
+        visible: z.boolean(),
+      }),
+    )
+    .min(1, "At least one section entry is required"),
+});
+/** @latentByDesign — paired type; consumer = plan 03 visibility PUT. */
+export type RoleSectionVisibilityInput = z.infer<typeof roleSectionVisibilitySchema>;
+
 type CreateRoleInput = z.infer<typeof createRoleSchema>;
 type UpdateRoleInput = z.infer<typeof updateRoleSchema>;
 type AssignRoleInput = z.infer<typeof assignRoleSchema>;

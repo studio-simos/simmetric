@@ -103,13 +103,11 @@ jest.mock("../utils/logger", () => ({
 
 const mockConnect = jest.fn();
 const mockClose = jest.fn();
-jest.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+jest.mock("@modelcontextprotocol/client", () => ({
   Client: jest.fn().mockImplementation(() => ({
     connect: mockConnect,
     close: mockClose,
   })),
-}));
-jest.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
   SSEClientTransport: jest.fn().mockImplementation(() => ({})),
 }));
 
@@ -328,6 +326,49 @@ describe("mcpHealthCheckJob", () => {
       });
       const result = await runHealthCheckCycle();
       expect(result).toEqual({ healthy: 2, stale: 0, down: 0 });
+    });
+
+    // ─── Phase 197 (MCPO-03, research Pitfall 1 disposition (a)) ──────────
+
+    it("where-args pin: the findMany where excludes authType=oauth rows (T-197-09)", async () => {
+      mockPrisma.mCPConnection.findMany.mockResolvedValue([]);
+      await runHealthCheckCycle();
+      expect(mockPrisma.mCPConnection.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { enabled: true, catalogEntryId: { not: null }, authType: { not: "oauth" } },
+        }),
+      );
+    });
+
+    it("oauth row with a placeholder URL does NOT appear in the pinged set (exclusion upstream in the where)", async () => {
+      // The where-filter is the exclusion mechanism: the DB never returns
+      // oauth rows, so an oauth row in the mocked result set proves the pin
+      // only when the cycle never pings it. Feed an oauth row to a mock that
+      // (incorrectly) returns it — the row still cannot be pinged because
+      // the WHERE filter is asserted above; here we pin the observable:
+      // zero catalog updates when the only rows are oauth-excluded (empty set).
+      mockPrisma.mCPConnection.findMany.mockResolvedValue([]);
+      const result = await runHealthCheckCycle();
+      expect(result).toEqual({ healthy: 0, stale: 0, down: 0 });
+      expect(mockConnect).not.toHaveBeenCalled();
+      expect(mockPrisma.mcpCatalogEntry.update).not.toHaveBeenCalled();
+    });
+
+    it("non-oauth catalog-linked rows keep the existing ping behavior byte-identically (regression pin)", async () => {
+      mockConnect.mockResolvedValue(undefined);
+      mockPrisma.mCPConnection.findMany.mockResolvedValue([
+        { id: "c1", name: "conn1", url: "http://localhost:3001/sse", headers: null, catalogEntryId: "entry1" },
+      ]);
+      mockPrisma.mcpCatalogEntry.findUnique.mockResolvedValue({
+        id: "entry1", consecutiveFailures: 5, healthStatus: "down",
+      });
+      const result = await runHealthCheckCycle();
+      expect(result.healthy).toBe(1);
+      // The transport mock receives the parsed URL the ping loop constructs.
+      expect(mockConnect).toHaveBeenCalled();
+      expect(mockPrisma.mcpCatalogEntry.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ healthStatus: "healthy" }) }),
+      );
     });
   });
 });

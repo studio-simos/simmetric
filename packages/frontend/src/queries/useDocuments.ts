@@ -16,8 +16,8 @@
  * the DocumentViewerPage toggle/notice (UI-SPEC surface 2).
  */
 
-import { useQuery } from "@tanstack/react-query";
-import { apiGet } from "../utils/api";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiGet, apiPut } from "../utils/api";
 
 /**
  * Response shape of `GET /api/documents/:id/text`.
@@ -66,5 +66,33 @@ export function useDocumentText(documentId: string | undefined, unmask = false) 
       ),
     enabled: !!documentId,
     staleTime: 30_000,
+  });
+}
+
+/**
+ * Phase 204 (DEBT-SW-05, FEAT-01) — PUT /documents/:documentId/text mutation.
+ *
+ * Mirrors `useUpdatePage` (useArchives.ts): apiPut + targeted invalidation in
+ * onSuccess. The server answers 202 { documentId, status: "reindexing" } and
+ * re-indexes asynchronously via the collector callback; invalidating the
+ * document text prefix (["documents", "text", documentId]) covers BOTH the
+ * masked and unmask query variants, and the list-key invalidation refreshes
+ * the doc-list status badges (the row flips pending → processing → completed
+ * while the existing 30s polling surface renders the async completion).
+ */
+export function useUpdateDocumentText() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { documentId: string; status: string },
+    Error,
+    { documentId: string; body: string }
+  >({
+    mutationFn: ({ documentId, body }) =>
+      apiPut<{ documentId: string; status: string }>(`/documents/${documentId}/text`, { body }),
+    onSuccess: (_, { documentId }) => {
+      queryClient.invalidateQueries({ queryKey: ["documents", "text", documentId] });
+      queryClient.invalidateQueries({ queryKey: ["documents", "list"] });
+    },
   });
 }

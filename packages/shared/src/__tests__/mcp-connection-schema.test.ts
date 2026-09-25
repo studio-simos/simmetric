@@ -3,6 +3,9 @@
 // This file is part of the Simmetric Chat community build.
 // See LICENSE and NOTICE at the repository root for full terms.
 
+import fs from "fs";
+import path from "path";
+
 import {
   createMcpConnectionSchema,
   updateMcpConnectionSchema,
@@ -10,6 +13,8 @@ import {
   mcpConnectionIdParamSchema,
   McpConnectionCreateInput,
   McpConnectionUpdateInput,
+  createMcpCatalogEntrySchema,
+  updateMcpCatalogEntrySchema,
 } from "../schemas/mcpConnection.schema";
 
 // ─── createMcpConnectionSchema ──────────────────────────────────
@@ -407,5 +412,135 @@ describe("mcpConnectionIdParamSchema", () => {
   it("rejects empty string connectionId", () => {
     const result = mcpConnectionIdParamSchema.safeParse({ connectionId: "" });
     expect(result.success).toBe(false);
+  });
+});
+
+// ─── createMcpCatalogEntrySchema (Phase 197, MCPO-03 D-04) ─────────
+
+describe("createMcpCatalogEntrySchema", () => {
+  const base = { name: "Example MCP Server", url: "https://mcp.example.com/sse" };
+
+  it("accepts a minimal entry with no auth fields (defaults cleanly)", () => {
+    const result = createMcpCatalogEntrySchema.safeParse(base);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.transportType).toBe("sse");
+      expect(result.data.authType).toBeUndefined();
+      expect(result.data.oauthProvider).toBeUndefined();
+    }
+  });
+
+  it("accepts an explicit authType 'none' with no provider", () => {
+    const result = createMcpCatalogEntrySchema.safeParse({ ...base, authType: "none" });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts an oauth entry with a non-empty provider", () => {
+    const result = createMcpCatalogEntrySchema.safeParse({
+      ...base,
+      authType: "oauth",
+      oauthProvider: "google",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects oauth without a provider (refine 1)", () => {
+    const result = createMcpCatalogEntrySchema.safeParse({ ...base, authType: "oauth" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects oauth with an empty-string provider (refine 1)", () => {
+    const result = createMcpCatalogEntrySchema.safeParse({
+      ...base,
+      authType: "oauth",
+      oauthProvider: "",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a provider on a non-oauth entry (refine 2)", () => {
+    const result = createMcpCatalogEntrySchema.safeParse({
+      ...base,
+      oauthProvider: "google",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a provider on an explicit authType 'none' (refine 2)", () => {
+    const result = createMcpCatalogEntrySchema.safeParse({
+      ...base,
+      authType: "none",
+      oauthProvider: "google",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an unknown authType value", () => {
+    const result = createMcpCatalogEntrySchema.safeParse({
+      ...base,
+      authType: "static",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an invalid URL", () => {
+    const result = createMcpCatalogEntrySchema.safeParse({ ...base, url: "not-a-url" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty name", () => {
+    const result = createMcpCatalogEntrySchema.safeParse({ ...base, name: "" });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ─── updateMcpCatalogEntrySchema (Phase 197, MCPO-03 D-04) ─────────
+
+describe("updateMcpCatalogEntrySchema", () => {
+  it("accepts a single-field update", () => {
+    const result = updateMcpCatalogEntrySchema.safeParse({ name: "Renamed" });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an empty object (at-least-one-field refine)", () => {
+    const result = updateMcpCatalogEntrySchema.safeParse({});
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts an oauth update carrying its provider", () => {
+    const result = updateMcpCatalogEntrySchema.safeParse({
+      authType: "oauth",
+      oauthProvider: "microsoft",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects authType 'oauth' without a provider", () => {
+    const result = updateMcpCatalogEntrySchema.safeParse({ authType: "oauth" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a provider alongside an explicit non-oauth authType", () => {
+    const result = updateMcpCatalogEntrySchema.safeParse({
+      authType: "none",
+      oauthProvider: "google",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ─── Update schema is its own z.object (source assertion — never .partial()) ──
+
+describe("updateMcpCatalogEntrySchema source form (Pitfall 4 — never .partial())", () => {
+  it("is defined as a z.object with refines, not derived via .partial()", () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, "../schemas/mcpConnection.schema.ts"),
+      "utf-8",
+    );
+    // The update schema carries the at-least-one refine in its own body.
+    expect(src).toContain("updateMcpCatalogEntrySchema = z");
+    expect(src).toContain("At least one field must be provided for update");
+    // .partial() never appears on the catalog update schema.
+    expect(src).not.toMatch(/updateMcpCatalogEntrySchema\s*=\s*createMcpCatalogEntrySchema\s*\.\s*partial\(/);
   });
 });

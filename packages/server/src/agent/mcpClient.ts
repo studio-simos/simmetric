@@ -10,6 +10,16 @@
  * this service connects to the MCP server, discovers available tools,
  * and registers them as skills in the Agent's skill registry.
  *
+ * MCP v2 (`2026-07-28`) notes:
+ * - Transport fallback: StreamableHTTP primary → 4xx → SSE fallback (D-09).
+ *   The client-side SSE transport REMAINS in v2 for connecting to legacy
+ *   SSE-only servers (server-side SSE is what v2 removed); it is a
+ *   grace-period fallback, not the primary path.
+ * - `callTool` no longer takes an explicit result schema parameter in v2.
+ * - Version negotiation defaults to `legacy` (initialize handshake) so we
+ *   remain compatible with v1 servers; servers advertising `2026-07-28`
+ *   upgrade transparently via the SDK's negotiation.
+ *
  * Security: MCP tool execution is sandboxed — tools run in the MCP server's
  * process, not in our server. We only pass the query and workspace context.
  *
@@ -23,13 +33,18 @@
  * - testMCPServerConnection honors transportType (D-17).
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client, SSEClientTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { mcpHeadersSchema } from "@simmetric-chat/shared";
 import { registerSkill, unregisterSkillsForConnection, type SkillParams, type SkillResult } from "../agent/skills";
 import prisma from "../utils/prisma";
 import { logger } from "../utils/logger";
+// Phase 195 (MCPO-01 D-11/D-13): OAuth header injection + reactive refresh
+// ride the Plan 01 services — decrypt the blob, build the Bearer SERVER-SIDE,
+// refresh through the provider registry. Never user input.
+import { decryptTokenBlob } from "../services/oauthTokenLifecycle";
+import { resolveProvider, hasClientConfigured, resolveScopes } from "../services/oauthProviderRegistry";
+import { encryptTokenBlob, refreshAccessToken } from "../services/oauthTokenLifecycle";
+import { getEnv } from "../config/env";
 
 export interface DiscoveredTool {
   name: string;
@@ -128,6 +143,23 @@ function is4xx(err: unknown): boolean {
   return typeof code === "number" && code >= 400 && code < 500;
 }
 
+/**
+ * Phase 195 (MCPO-01 D-13): detect a 401 from a thrown SDK error — the
+ * reactive-refresh trigger. Dual detection per RESEARCH Open Question 1:
+ * numeric status via the is4xx duck-typing shape (err.code ?? err.status)
+ * OR a message match /401|unauthorized/i (some SDK paths stringify the
+ * status into the message). A false positive costs at most one refresh +
+ * one retry (bounded by the caller's attempt flag); never a loop.
+ */
+function is401(err: unknown): boolean {
+  const code =
+    (err as { code?: number; status?: number }).code ??
+    (err as { status?: number }).status;
+  if (typeof code === "number" && code === 401) return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return /401|unauthorized/i.test(message);
+}
+
 type TransportKind = "sse" | "streamable-http";
 
 /**
@@ -223,6 +255,149 @@ function parseAndValidateHeaders(
 }
 
 /**
+ * Phase 195 (MCPO-01 D-11/D-15a): resolve the request headers for a
+ * connection, switching on authType.
+ *
+ * - "none"/"static" (and any legacy null/undefined): the EXISTING
+ *   parseAndValidateHeaders path verbatim — byte-identical behavior for
+ *   non-oauth rows (D-02).
+ * - "oauth": oauthStatus !== "authorized" → refuses to start with a clear
+ *   error (mirrors the parseAndValidateHeaders error posture: connectionErrors
+ *   + activeConnections.delete, never swallowed — T-63-swallow). Otherwise
+ *   decrypts the AES-256-GCM blob once and builds
+ *   `Authorization: Bearer <accessToken>` SERVER-SIDE (never from user
+ *   input), merging the row's static headers (still parsed through
+ *   mcpHeadersSchema for X-Project-style extras) UNDER the Bearer — the
+ *   OAuth token wins on collision (T-195-11: static headers still pass the
+ *   schema's hop-by-hop blocklist BEFORE merging; the Bearer is
+ *   server-constructed, never user input).
+ *   Decrypt failure → same not-started posture; the error message discloses
+ *   nothing about the blob contents (T-195-01 posture).
+ *
+ * Shared by connectMCPServer AND the routes/mcp.ts test-connection probe
+ * (D-15a — the admin validates the config the SAME way the live path will).
+ * Return shape matches parseAndValidateHeaders' family so callers handle
+ * both with one error path.
+ */
+export function resolveConnectionHeaders(connection: {
+  authType?: string | null;
+  oauthStatus?: string | null;
+  oauthProvider?: string | null;
+  oauthScopes?: string | null;
+  credentialsEncrypted?: string | null;
+  headers: string | null | undefined;
+  name: string;
+  id: string;
+}): { ok: true; headers: Record<string, string> } | { ok: false; error: string } {
+  // D-02: non-oauth rows keep the static path byte-identical (legacy null
+  // authType = "none" semantics — no header semantics change).
+  if (connection.authType !== "oauth") {
+    return parseAndValidateHeaders(connection.headers, connection.id, connection.name);
+  }
+
+  // OAuth arm — unauthorized rows refuse to start (D-11).
+  if (connection.oauthStatus !== "authorized") {
+    const msg = `OAuth connection is not authorized (status: ${connection.oauthStatus ?? "none"}) — authorize it before connecting`;
+    connectionErrors.set(connection.id, msg);
+    activeConnections.delete(connection.id);
+    return { ok: false, error: msg };
+  }
+
+  if (!connection.credentialsEncrypted) {
+    const msg = "OAuth connection has no stored credentials — re-authorize required";
+    connectionErrors.set(connection.id, msg);
+    activeConnections.delete(connection.id);
+    return { ok: false, error: msg };
+  }
+
+  const decoded = decryptTokenBlob(connection.credentialsEncrypted);
+  if (!decoded.ok) {
+    // Disclose nothing about the blob (T-195-01 posture) — the lifecycle
+    // service already normalized the message.
+    connectionErrors.set(connection.id, decoded.errorDescription);
+    activeConnections.delete(connection.id);
+    return { ok: false, error: decoded.errorDescription };
+  }
+
+  // Static headers still pass mcpHeadersSchema (T-195-11) — X-Project-style
+  // extras stay validated. OAuth Bearer is server-constructed below.
+  const staticResult = parseAndValidateHeaders(connection.headers, connection.id, connection.name);
+  if (!staticResult.ok) {
+    return staticResult; // error posture already applied by the helper
+  }
+
+  // Merge: the server-built Bearer WINS on collision (never overridable by
+  // user static headers — T-195-11).
+  const headers: Record<string, string> = { ...staticResult.headers, Authorization: `Bearer ${decoded.blob.accessToken}` };
+  return { ok: true, headers };
+}
+
+/**
+ * Phase 195 (MCPO-01 D-13): refresh an oauth connection's token blob
+ * synchronously (reactive 401 arm). Resolves the provider def + env client
+ * creds, decrypts the existing blob, calls refreshAccessToken, re-encrypts
+ * the CURRENT-key blob (rotation chain rides decrypt) and updates the row.
+ * Returns the new access token, or null with the failure already surfaced to
+ * the row (oauthStatus=error + oauthError, D-13 immediate surfacing).
+ */
+async function refreshConnectionToken(
+  connection: { id: string; oauthProvider?: string | null; oauthScopes?: string | null; credentialsEncrypted?: string | null }
+): Promise<string | null> {
+  const providerId = connection.oauthProvider ?? "";
+  if (!connection.credentialsEncrypted || !providerId) return null;
+  const def = resolveProvider(providerId);
+  if (!def || !hasClientConfigured(providerId)) {
+    await prisma.mCPConnection.update({
+      where: { id: connection.id },
+      data: { oauthStatus: "error", oauthError: "provider client not configured" },
+    });
+    return null;
+  }
+  const decoded = decryptTokenBlob(connection.credentialsEncrypted);
+  if (!decoded.ok || !decoded.blob.refreshToken) {
+    await prisma.mCPConnection.update({
+      where: { id: connection.id },
+      data: { oauthStatus: "error", oauthError: "no refresh token available — re-authorize the connection" },
+    });
+    return null;
+  }
+  const env = getEnv();
+  const clientId = providerId === "google" ? env.GOOGLE_CLIENT_ID ?? "" : env.MICROSOFT_CLIENT_ID ?? "";
+  const clientSecret = providerId === "google" ? env.GOOGLE_CLIENT_SECRET ?? "" : env.MICROSOFT_CLIENT_SECRET ?? "";
+  const result = await refreshAccessToken(def, {
+    refreshToken: decoded.blob.refreshToken,
+    clientId,
+    clientSecret,
+    // The row's stored scopes only — never an input that could amplify
+    // (T-195-02 backstop).
+    scopes: resolveScopes(def, connection.oauthScopes ?? undefined),
+  });
+  if (!result.ok) {
+    // D-13: immediate surfacing — no strike counter; the stale token keeps
+    // the tool path alive until the next 401; log provider + status only.
+    await prisma.mCPConnection.update({
+      where: { id: connection.id },
+      data: { oauthStatus: "error", oauthError: result.errorDescription },
+    });
+    logger.error("[mcp-client] OAuth refresh failed", { connectionId: connection.id, provider: providerId });
+    return null;
+  }
+  // Re-encrypt CURRENT-key blob (rotation chain rides decrypt — spec §9-5);
+  // tokenExpiresAt advanced ~1h (providers report ~3600 expires_in).
+  const tokenExpiresAt = new Date(Date.parse(result.blob.obtainedAt) + 3600 * 1000);
+  await prisma.mCPConnection.update({
+    where: { id: connection.id },
+    data: {
+      credentialsEncrypted: encryptTokenBlob(result.blob),
+      tokenExpiresAt,
+      oauthStatus: "authorized",
+      oauthError: null,
+    },
+  });
+  return result.blob.accessToken;
+}
+
+/**
  * Connect to an external MCP server and discover its tools.
  *
  * MCP-03 (D-06): the entire body is serialized per-connectionId by
@@ -255,8 +430,12 @@ export async function connectMCPServer(connectionId: string): Promise<{ tools: D
       return { tools: [] };
     }
 
-    // D-12 read-side: validate headers before forwarding to external MCP server.
-    const hdr = parseAndValidateHeaders(connection.headers, connectionId, connection.name);
+    // Phase 195 (D-11/D-15a): header resolution switches on authType through
+    // resolveConnectionHeaders — none/static keep the existing
+    // parseAndValidateHeaders path byte-identical; oauth decrypts the blob
+    // and injects the server-built Bearer. Transport fallback logic
+    // (buildTransport, StreamableHTTP → 4xx → SSE) untouched.
+    const hdr = resolveConnectionHeaders(connection);
     if (!hdr.ok) {
       // Error already surfaced to connectionErrors + activeConnections.delete; not swallowed.
       return { tools: [] };
@@ -310,6 +489,68 @@ export async function connectMCPServer(connectionId: string): Promise<{ tools: D
                 data: content,
               };
             } catch (err: unknown) {
+              // Phase 195 (MCPO-01 D-13 / Pitfall 12): reactive-401 arm — ONE
+              // synchronous refresh + reconnect + ONE retry, never a loop.
+              // Detection is dual (RESEARCH Open Question 1): numeric status
+              // via the is4xx duck-typing shape (err.code ?? err.status) OR
+              // message match /401|unauthorized/i — misdetection degrades to
+              // today's error return, never a loop. Guarded by per-call
+              // attempt flag so the retry path cannot re-enter the arm.
+              const attempt401 = is401(err);
+              if (attempt401 && connection.authType === "oauth") {
+                logger.warn("[mcp-client] Tool call 401 on oauth connection — attempting one refresh + retry", {
+                  connectionId: connection.id,
+                  tool: tool.name,
+                });
+                try {
+                  // CR-02 fix: the reactive refresh contends on the SAME
+                  // withConnectionLock mutex as the proactive cron (mcpOAuth-
+                  // RefreshJob.ts) — serializing both paths prevents a
+                  // double-refresh race that can store an already-invalidated
+                  // refresh token (Microsoft rotates refresh tokens; the stale
+                  // write would invalidate the fresh one).
+                  const refreshed = await withConnectionLock(connection.id, () =>
+                    refreshConnectionToken(connection),
+                  );
+                  if (refreshed) {
+                    // Reconnect once with the fresh token (the old client's
+                    // transport still carries the stale Bearer).
+                    await disconnectMCPServer(connection.id);
+                    await connectMCPServer(connection.id);
+                    // CR-01 fix: retry on the FRESH client — the disconnect
+                    // above closed the client object this tool's execute
+                    // closure captured (delete-first, D-07); calling the
+                    // closed client always throws "Not connected" and the
+                    // refreshed token never delivers its result.
+                    const fresh = getActiveConnectionState(connection.id);
+                    if (!fresh?.connected) {
+                      // Reconnect produced no connected client — surface the
+                      // ORIGINAL 401 (the trigger of this arm) rather than
+                      // throwing an uncaused error inside the try (the
+                      // preserve-caught-error rule + cleaner logging).
+                      return { success: false, error: `MCP tool error: ${err instanceof Error ? err.message : String(err)}` };
+                    }
+                    const retryResult = await fresh.client.callTool({
+                      name: tool.name,
+                      arguments: {
+                        query: params.query,
+                        workspaceId: params.workspaceId,
+                        ...params.metadata,
+                      },
+                    });
+                    const retryContent = (retryResult.content as Array<{ type: string; text?: string }>)?.map((c) => c.text || c.type || "").join("\n") || "No result";
+                    return { success: true, data: retryContent };
+                  }
+                  // Refresh failed — the row already carries oauthStatus=error.
+                } catch (retryErr: unknown) {
+                  logger.warn("[mcp-client] OAuth reactive retry failed", {
+                    connectionId: connection.id,
+                    error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+                  });
+                }
+                // Max 1 retry — any second failure falls through to the
+                // standard error return. Never loop (Pitfall 12).
+              }
               return { success: false, error: `MCP tool error: ${err instanceof Error ? err.message : String(err)}` };
             }
           },

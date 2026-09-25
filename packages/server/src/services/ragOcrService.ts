@@ -28,10 +28,11 @@ import fs from "fs/promises";
 import crypto from "crypto";
 import { logger } from "../utils/logger";
 import { getPdfStandardFontDataUrl } from "../utils/pdfjsFonts";
-import { renderPageToPng } from "../ocr/pdfRenderer";
+import { renderPageToPng, PAGE_RENDER_SCALE } from "../ocr/pdfRenderer";
 import { ocrPage } from "../ocr/ollamaVisionClient";
 import { resolveModelConfig } from "../ocr/modelRegistry";
 import { stripGroundingTags } from "../ocr/groundingCleanup";
+import { getSetting } from "./systemConfigService";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -84,13 +85,24 @@ export async function extractTextFromPdf(
     totalPages,
   });
 
+  // Phase 205 D-11 (OCR-04): resolve OCR_PROMPT once before the page loop —
+  // same fetch-with-fallback shape as ocrStages' setup stage. Empty string
+  // (unset/empty/whitespace) ⇒ ocrPage's byte-identical legacy path.
+  let ocrPrompt = "";
+  try {
+    const ocrPromptSetting = await getSetting("OCR_PROMPT");
+    ocrPrompt = (ocrPromptSetting.value || "").trim();
+  } catch {
+    ocrPrompt = "";
+  }
+
   const pageTexts: string[] = [];
   let totalTokens = 0;
   let totalDurationMs = 0;
 
   for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
     try {
-      const pngBuffer = await renderPageToPng(pdfPath, pageNum, 2.0);
+      const pngBuffer = await renderPageToPng(pdfPath, pageNum, PAGE_RENDER_SCALE);
       const ocrResult = await ocrPage(
         pngBuffer,
         pageNum,
@@ -99,6 +111,10 @@ export async function extractTextFromPdf(
         modelConfig,
         undefined,
         false,
+        undefined, // ocrMode — ragOcrService never sets a mode override
+        undefined, // customInstructions — ragOcrService has none
+        // Phase 205 D-11 (OCR-04): threaded resolved OCR_PROMPT ("" = legacy)
+        ocrPrompt || undefined,
       );
 
       // Strip grounding tags for DeepSeek OCR models

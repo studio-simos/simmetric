@@ -52,10 +52,19 @@ export function useMe(enabled = true) {
   });
 }
 
+// Phase 206 (VIS-01, D-15): the endpoint widens to server-resolved
+// { menuSections, settingsSections } — per-role DB overrides win, absent
+// rows fall back to the permission-OR defaults. Consumers rewire in the
+// SAME plan (atomic shape change; App.tsx + SettingsPage.tsx).
+export interface MenuSectionsResponse {
+  menuSections: string[];
+  settingsSections: string[];
+}
+
 export function useMenuSections(enabled = true) {
-  return useQuery<string[], ApiError>({
+  return useQuery<MenuSectionsResponse, ApiError>({
     queryKey: queryKeys.auth.menuSections,
-    queryFn: () => apiGet<string[]>("/roles/me/menu-sections"),
+    queryFn: () => apiGet<MenuSectionsResponse>("/roles/me/menu-sections"),
     enabled: enabled && !!localStorage.getItem("token"),
     staleTime: 5 * 60 * 1000,
   });

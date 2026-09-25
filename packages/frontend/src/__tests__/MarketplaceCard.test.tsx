@@ -381,3 +381,144 @@ describe("MarketplaceCard — existing structure", () => {
     expect(screen.getByText("marketplace.install.button")).toBeInTheDocument();
   });
 });
+
+// Phase 197 gap closure (G-197-3, D-08/UI-SPEC §6): the uninstall confirm
+// body must be keyed on entry.authType — OAuth entries surface the
+// revoke+wipe arm (marketplace.uninstallConfirmOAuth), non-OAuth entries
+// keep the generic copy byte-identically. Mirrors the detail-page arm.
+describe("MarketplaceCard — uninstall confirm body keyed on authType (G-197-3, D-08/UI-SPEC §6)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("oauth entry shows uninstallConfirmOAuth and NOT the generic body", () => {
+    renderCard({ isInstalled: true, authType: "oauth", oauthProvider: "google" });
+
+    fireEvent.click(screen.getByRole("button", { name: "marketplace.install.uninstall" }));
+    expect(screen.getByTestId("alert-dialog")).toBeInTheDocument();
+
+    expect(screen.getByText("marketplace.uninstallConfirmOAuth")).toBeInTheDocument();
+    expect(screen.queryByText("mcp.uninstallConfirm")).not.toBeInTheDocument();
+  });
+
+  it("absent-authType entry shows the generic body (byte-identical copy preserved)", () => {
+    renderCard({ isInstalled: true });
+
+    fireEvent.click(screen.getByRole("button", { name: "marketplace.install.uninstall" }));
+    expect(screen.getByTestId("alert-dialog")).toBeInTheDocument();
+
+    expect(screen.getByText("mcp.uninstallConfirm")).toBeInTheDocument();
+    expect(screen.queryByText("marketplace.uninstallConfirmOAuth")).not.toBeInTheDocument();
+  });
+
+  it("authType=none entry shows the generic body (explicit none)", () => {
+    renderCard({ isInstalled: true, authType: "none" });
+
+    fireEvent.click(screen.getByRole("button", { name: "marketplace.install.uninstall" }));
+    expect(screen.getByTestId("alert-dialog")).toBeInTheDocument();
+
+    expect(screen.getByText("mcp.uninstallConfirm")).toBeInTheDocument();
+    expect(screen.queryByText("marketplace.uninstallConfirmOAuth")).not.toBeInTheDocument();
+  });
+});
+
+// Phase 197 (MCPO-03 D-06/UI-SPEC §3): OAuth indicator badge — outline
+// neutral, KeyRound icon, rendered ONLY for authType=oauth entries;
+// absent/none authType keeps old payloads badge-free (absent-means-none).
+describe("MarketplaceCard — OAuth badge (Phase 197 MCPO-03)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("oauth entry renders the outline badge with interpolated provider name", () => {
+    renderCard({ authType: "oauth", oauthProvider: "google" });
+
+    const badge = screen.getByText("marketplace.card.oauthBadge");
+    expect(badge).toBeInTheDocument();
+    // The t() mock passes the key through — the badge element's own text
+    // content carries the raw key; the interpolation opts are asserted via
+    // the tooltip copy call below (same provider arg wiring).
+    const tooltip = screen.getByText("marketplace.card.oauthBadgeTooltip");
+    expect(tooltip).toBeInTheDocument();
+  });
+
+  it("oauth entry passes the provider to the badge + tooltip interpolation", () => {
+    renderCard({ authType: "oauth", oauthProvider: "microsoft" });
+
+    expect(t).toHaveBeenCalledWith("marketplace.card.oauthBadge", { provider: "microsoft" });
+    expect(t).toHaveBeenCalledWith("marketplace.card.oauthBadgeTooltip", { provider: "microsoft" });
+  });
+
+  it("non-oauth entry renders NO badge (absent authType — adjacency edge)", () => {
+    renderCard({});
+
+    expect(screen.queryByText("marketplace.card.oauthBadge")).not.toBeInTheDocument();
+    expect(screen.queryByText("marketplace.card.oauthBadgeTooltip")).not.toBeInTheDocument();
+  });
+
+  it("authType=none entry renders NO badge (explicit none)", () => {
+    renderCard({ authType: "none" });
+
+    expect(screen.queryByText("marketplace.card.oauthBadge")).not.toBeInTheDocument();
+  });
+
+  it("oauth badge interpolates an empty provider when oauthProvider is absent (defensive)", () => {
+    renderCard({ authType: "oauth" });
+
+    expect(t).toHaveBeenCalledWith("marketplace.card.oauthBadge", { provider: "" });
+  });
+});
+
+// Phase 197 (D-03b UI half — evidence note): the restricted-scope warning for
+// gmail.readonly connections is ALREADY covered by the shipped Phase 196
+// mechanism — `SettingsMcpConnections.test.tsx` "authorized + scopes → trigger
+// renders with count" pins that a connection granted
+// https://www.googleapis.com/auth/gmail.readonly renders
+// `restrictedScopeWarning` exactly once (RESTRICTED_SCOPES at
+// SettingsMcpConnections.tsx:75 contains the gmail.readonly scope; the google
+// provider def carries it in defaultScopes). This phase ships the docs half
+// (plan 01, docs/CONNECTORS.md §8) — the UI mechanism is verified-only here
+// (D-09/plan disposition: SettingsMcpConnections.tsx diff MUST stay empty).
+
+// Phase 197 (UI-SPEC long-text backstop row): the OAuth badge + OAuth install
+// toast render with the longest provider display name ("Microsoft") staying
+// length-bounded — badge ≤ ~20ch rendered, toast copy single-line (the same
+// bound discipline as 196's formatExpiryTime backstop). Swept across ALL 8
+// locales so de/fr/es/zh/pt cannot lag.
+describe("MarketplaceCard — long-text backstop (Phase 197 UI-SPEC)", () => {
+  const locales = ["en", "it", "ru", "de", "es", "fr", "zh", "pt"] as const;
+  const LONGEST_PROVIDER = "Microsoft";
+
+  it("oauthBadge + installSuccessOAuth stay length-bounded with 'Microsoft' across all 8 locales", () => {
+    for (const loc of locales) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const sub = require(`../i18n/${loc}/translation.json`).marketplace;
+
+      // Badge: "OAuth · {{provider}}" with the longest provider display name.
+      const badge = sub.card.oauthBadge.replace("{{provider}}", LONGEST_PROVIDER);
+      expect(badge.length).toBeLessThanOrEqual(20);
+      // Tooltip carries the same interpolation and stays single-line-bounded.
+      const tooltip = sub.card.oauthBadgeTooltip.replace("{{provider}}", LONGEST_PROVIDER);
+      expect(tooltip.length).toBeLessThanOrEqual(120);
+      expect(tooltip.includes("\n")).toBe(false);
+
+      // Toast: installSuccessOAuth with name + longest provider — single
+      // line (no newline), bounded length (sonner renders it one-line; an
+      // unbounded string would wrap the toast body).
+      const toast = sub.toast.installSuccessOAuth
+        .replace("{{name}}", "A Very Long Marketplace Server Name")
+        .replace("{{provider}}", LONGEST_PROVIDER);
+      expect(toast.includes("\n")).toBe(false);
+      expect(toast.length).toBeLessThanOrEqual(160);
+    }
+  });
+
+  it("renders the badge with the longest provider name in the card (DOM-level)", () => {
+    renderCard({ authType: "oauth", oauthProvider: "microsoft" });
+    // The badge element is present with the Microsoft-length interpolation
+    // wired through t() (the mock passes the key through; the DOM-level
+    // length bound is enforced by the locale sweep above).
+    expect(screen.getByText("marketplace.card.oauthBadge")).toBeInTheDocument();
+    expect(t).toHaveBeenCalledWith("marketplace.card.oauthBadge", { provider: "microsoft" });
+  });
+});

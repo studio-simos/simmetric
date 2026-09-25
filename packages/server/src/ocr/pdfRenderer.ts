@@ -22,15 +22,20 @@ import os from "os";
 import path from "path";
 import { logger } from "../utils/logger";
 
-/** Default render scale factor (2x for readable OCR input) */
-const PAGE_RENDER_SCALE = 2.0;
+/**
+ * Default render scale factor (Phase 205 D-03: 3.0 ≈ 216 DPI on A4 —
+ * ≈300 DPI-class source for small-text fidelity; pdftoppm -r is parametric
+ * at :62, dpi = 72 * scale). The CPU cost delta is measured by the 205-04
+ * regression suite (small-text fixture quantifies the uplift).
+ */
+export const PAGE_RENDER_SCALE = 3.0;
 
 /**
  * Render a single PDF page to a PNG Buffer.
  *
  * @param pdfPath — Absolute path to the PDF file
  * @param pageNumber — 1-based page number to render
- * @param scale — Render scale factor (default 2.0 for OCR-quality output)
+ * @param scale — Render scale factor (default PAGE_RENDER_SCALE 3.0 — D-03)
  * @returns PNG-encoded Buffer of the rendered page
  * @throws If the page number is out of range or rendering fails
  */

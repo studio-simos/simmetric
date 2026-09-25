@@ -65,6 +65,10 @@ export const updateUserSchema = z.object({
   lastName: z.string().max(100, "Last name must be at most 100 characters").optional(),
   customInstructions: z.string().max(4000, "Custom instructions must be at most 4000 characters").optional(),
   textSize: z.enum(["sm", "md", "lg"]).optional(),
+  // Phase 206 (AGENCY-04, D-11): sub-user creation ceiling — ADMIN-ONLY edit
+  // arm in the users route (non-admin attempt → 403 there). NULL = unset =
+  // fail-closed 0. Consumed by agencyUserService.createSubUser's ceiling check.
+  maxSponsoredUsers: z.number().int().min(0).nullable().optional(),
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;

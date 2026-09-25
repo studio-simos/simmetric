@@ -84,15 +84,30 @@ export function ChatMessageList({
   className,
 }: ChatMessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll on new messages or streaming content (Feature: preserved
   // behavior from the original ChatPanel, now co-located with the list).
+  // rendering perf (Vercel React best practices): gated to "user is near
+  // the bottom" + fires only on BATCHED streaming flushes (useChatStreaming
+  // coalesces token state to ~60ms) — a per-token smooth scrollIntoView
+  // used to force layout/paint per token AND scroll-jack the user when
+  // they scroll up to read mid-stream.
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    const container = scrollContainerRef.current;
+    const end = endRef.current;
+    if (!end) return;
+    const nearBottom =
+      !container ||
+      container.scrollHeight - container.scrollTop - container.clientHeight < 160;
+    if (nearBottom) {
+      end.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages, streamingContent]);
 
   return (
     <div
+      ref={scrollContainerRef}
       className={cn("flex-1 overflow-y-auto p-4 space-y-4", className)}
       role="log"
       aria-live="polite"

@@ -1,6 +1,6 @@
 ## Migration Audit Report
 
-**Total:** 17 migrations · **Additive:** 17 · **Destructive:** 0
+**Total:** 24 migrations · **Additive:** 24 · **Destructive:** 0
 
 | Migration | Date | Type | Operations |
 |-----------|------|------|------------|
@@ -21,3 +21,10 @@
 | 20260920000000_dlp_document_pipeline_entities | 2026-09-20 | additive | none |
 | 20260920120000_ldap_sso_config_group_map | 2026-09-20 | additive | none |
 | 20260921110000_memory_embedding_nullable | 2026-09-21 | additive | none |
+| 20260922000000_chat_connector_schema_v2 | 2026-09-22 | additive | none |
+| 20260922085410_20260922000000_mcp_connection_oauth_columns | 2026-09-22 | additive | none |
+| 20260923025134_add_mcp_catalog_entry_oauth_columns | 2026-09-23 | additive | none |
+| 20260924121400_add_plugin_installs | 2026-09-24 | additive | none |
+| 20260924151243_add_model_cost_columns | 2026-09-24 | additive | none |
+| 20260925095429_phase206_rbac_foundation | 2026-09-25 | additive | none |
+| 20260925174500_quota_engine_additive | 2026-09-25 | additive | none |

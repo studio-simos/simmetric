@@ -124,7 +124,7 @@ describe("GET /api/documents/:documentId/text — document text endpoint (DOC-01
       .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(404);
-    expect(res.body.error).toBe("Document not found");
+    expect(res.body.error.message).toBe("Document not found");
   });
 
   it("returns 403 for user without workspace/project access (IDOR)", async () => {
@@ -134,7 +134,8 @@ describe("GET /api/documents/:documentId/text — document text endpoint (DOC-01
       .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toMatch(/access denied/i);
+    expect(res.body.error.message).toMatch(/access denied/i);
+    expect(res.body.error.code).toBe("access_denied");
   });
 
   it("returns 200 for project owner (createdBy === userId)", async () => {

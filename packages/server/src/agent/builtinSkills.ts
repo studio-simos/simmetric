@@ -15,6 +15,11 @@
 import axios from "axios";
 import { Prisma } from "@prisma/client";
 import { registerSkill, type SkillParams, type SkillResult, type SourceCitation } from "./skills";
+// Phase 196 (MCPO-04 D-04): first-party connector skills (gdrive_* / graph_*)
+// register via the same registerSkill seam — imported for its side effects
+// (this file is the single boot registration point: index.ts, routes/chat.ts,
+// routes/skills.ts, seedService). NOT coupled to ChatMCPPin (D-04).
+import "./connectors/skills";
 import prisma from "../utils/prisma";
 import { getEnv } from "../config/env";
 import { logger } from "../utils/logger";

@@ -4,6 +4,8 @@
 // See LICENSE and NOTICE at the repository root for full terms.
 
 import { Router, type Request, type Response } from "express";
+// Phase 203 (MCC-01/03): pricing sub-routes — provider:write/read gated.
+import { invalidatePricingCache } from "../services/modelPricingService";
 import { execFile } from "node:child_process";
 import { authMiddleware } from "../middleware/auth";
 import { tenantContextMiddleware } from "../middleware/tenantContext";
@@ -13,6 +15,9 @@ import { maskApiKey } from "../services/encryptionService";
 import * as providerService from "../services/providerService";
 import { getEnv } from "../config/env";
 import { logger } from "../utils/logger";
+import prisma from "../utils/prisma";
+import { logEvent } from "../services/eventLogService";
+import { updateModelPricingSchema } from "@simmetric-chat/shared";
 import type { ProgressResponse } from "ollama";
 
 const router = Router();
@@ -435,6 +440,87 @@ router.get("/:id/ollama-login/status", requireAdmin, async (req: Request, res: R
       return;
     }
     logger.error("[providers] Error checking Ollama Cloud login status", { error: message });
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ── Phase 203 (MCC-01/03) — pricing sub-routes ──────────────────────────
+
+// PUT /:id/models/:modelId/pricing — set per-token rates + currency.
+router.put("/:id/models/:modelId/pricing", requirePermission("provider:write"), async (req: Request, res: Response) => {
+  try {
+    const parsed = updateModelPricingSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid request body", details: parsed.error.flatten().fieldErrors });
+      return;
+    }
+    const model = await prisma.providerModel.findUnique({ where: { id: String(req.params.modelId) } });
+    if (!model || model.providerId !== String(req.params.id)) {
+      res.status(404).json({ error: "Model not found" });
+      return;
+    }
+    const updated = await prisma.providerModel.update({
+      where: { id: String(req.params.modelId) },
+      data: {
+        inputCostPerToken: parsed.data.inputCostPerToken ?? null,
+        outputCostPerToken: parsed.data.outputCostPerToken ?? null,
+        currency: parsed.data.currency ?? null,
+        lastCostUpdated: new Date(),
+        lastCostUpdatedBy: req.userId ?? null,
+      },
+    });
+    invalidatePricingCache(String(req.params.id), model.name);
+    await logEvent("provider", String(req.params.id), "model.cost.updated", req.userId ?? null, {
+      modelId: String(req.params.modelId),
+      inputCostPerToken: parsed.data.inputCostPerToken ?? null,
+      outputCostPerToken: parsed.data.outputCostPerToken ?? null,
+      currency: parsed.data.currency ?? null,
+    });
+    res.json({
+      inputCostPerToken: updated.inputCostPerToken ? Number(updated.inputCostPerToken) : null,
+      outputCostPerToken: updated.outputCostPerToken ? Number(updated.outputCostPerToken) : null,
+      currency: updated.currency,
+      lastCostUpdated: updated.lastCostUpdated,
+      lastCostUpdatedBy: updated.lastCostUpdatedBy,
+    });
+  } catch (err: unknown) {
+    logger.error("[providers] Error updating pricing", { error: err instanceof Error ? err.message : String(err) });
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /:id/models/:modelId/pricing
+router.get("/:id/models/:modelId/pricing", requirePermission("provider:read"), async (req: Request, res: Response) => {
+  try {
+    const model = await prisma.providerModel.findUnique({ where: { id: String(req.params.modelId) } });
+    if (!model || model.providerId !== String(req.params.id)) { res.status(404).json({ error: "Model not found" }); return; }
+    res.json({
+      inputCostPerToken: model.inputCostPerToken ? Number(model.inputCostPerToken) : null,
+      outputCostPerToken: model.outputCostPerToken ? Number(model.outputCostPerToken) : null,
+      currency: model.currency,
+      lastCostUpdated: model.lastCostUpdated,
+      lastCostUpdatedBy: model.lastCostUpdatedBy,
+    });
+  } catch (err: unknown) {
+    logger.error("[providers] Error reading pricing", { error: err instanceof Error ? err.message : String(err) });
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /:id/models/:modelId/pricing/reset — nullify rates (idempotent, E3).
+router.post("/:id/models/:modelId/pricing/reset", requirePermission("provider:write"), async (req: Request, res: Response) => {
+  try {
+    const model = await prisma.providerModel.findUnique({ where: { id: String(req.params.modelId) } });
+    if (!model || model.providerId !== String(req.params.id)) { res.status(404).json({ error: "Model not found" }); return; }
+    await prisma.providerModel.update({
+      where: { id: String(req.params.modelId) },
+      data: { inputCostPerToken: null, outputCostPerToken: null, currency: null, lastCostUpdated: new Date(), lastCostUpdatedBy: req.userId ?? null },
+    });
+    invalidatePricingCache(String(req.params.id), model.name);
+    await logEvent("provider", String(req.params.id), "model.cost.reset", req.userId ?? null, { modelId: String(req.params.modelId) });
+    res.json({ success: true });
+  } catch (err: unknown) {
+    logger.error("[providers] Error resetting pricing", { error: err instanceof Error ? err.message : String(err) });
     res.status(500).json({ error: "Internal server error" });
   }
 });

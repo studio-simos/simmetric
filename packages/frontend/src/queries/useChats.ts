@@ -30,6 +30,11 @@ export interface ChatSummary {
   archiveId?: string | null;
   /** Phase 191 (KNOW-02 D-05): chat-attached archive ids (additive — Prisma returns all scalars). Empty = no attachments. */
   attachedArchiveIds?: string[] | null;
+  /** Phase 199 (199-04, ECCO-05 §7.9-1, D-10): additive optional platform
+   * badge field — chatList maps it from the first connectorSession's
+   * connector platform (nullable). Absent/undefined/null all render nothing
+   * (non-connector chats are pixel-identical to today). */
+  connectorPlatform?: string | null;
 }
 
 export interface ChatFolder {

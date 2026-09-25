@@ -44,12 +44,22 @@ jest.mock("../utils/prisma", () => ({
     organizationMember: {
       findFirst: jest.fn().mockResolvedValue({ organizationId: "org-default" }),
     },
+    // Phase 207 (CLOUD-04/D-15): quota gate seams — the storage gate resolves
+    // the owner's quota from the User row (unlimited by default).
+    user: {
+      findUnique: jest.fn(),
+    },
     uploadDraft: {
       create: jest.fn(),
       findUnique: jest.fn(),
       findMany: jest.fn(),
       update: jest.fn(),
+      // Phase 207 (D-13): storage accounting aggregates.
+      aggregate: jest.fn(),
     },
+    // Phase 207 quota gate seams (unlimited by default → gates pass).
+    quotaReset: { findFirst: jest.fn(), create: jest.fn() },
+    workspaceTokenUsage: { aggregate: jest.fn() },
     workspace: {
       findFirst: jest.fn(),
       findUnique: jest.fn(),
@@ -64,6 +74,8 @@ jest.mock("../utils/prisma", () => ({
       create: jest.fn(),
       findUnique: jest.fn(),
       update: jest.fn(),
+      // Phase 207 (D-13): storage accounting aggregate.
+      aggregate: jest.fn(),
     },
     archive: {
       findUnique: jest.fn(),
@@ -84,9 +96,12 @@ jest.mock("../utils/prisma", () => ({
     },
   },
   withSoftDelete: (where: unknown) => where,
+  // Phase 207 (D-15): the file-branch draft persist runs inside $transaction —
+  // passthrough to the same mock instance (the in-tx storage re-check reads it).
+  $transaction: undefined as unknown,
 }));
 const mockPrisma = require("../utils/prisma").default;
-
+(mockPrisma as any).$transaction = async (fn: (tx: any) => Promise<unknown>) => fn(mockPrisma);
 // --- env mock (B1 fix: NO STORAGE_PATH key) --------------------------------
 jest.mock("../config/env", () => ({
   getEnv: jest.fn(() => ({
@@ -286,6 +301,15 @@ beforeEach(() => {
   (mockPrisma.workspace.findUnique as jest.Mock).mockResolvedValue({ id: WS_ID, name: "Test Workspace" });
   (mockPrisma.workspaceAccess.findFirst as jest.Mock).mockResolvedValue(null);
   (mockPrisma.projectAccess.findFirst as jest.Mock).mockResolvedValue(null);
+  // Phase 207 (CLOUD-04): storage gate default — unlimited owner + empty
+  // ledger sums so the pre-check and in-tx re-check pass by default.
+  (mockPrisma.user.findUnique as jest.Mock).mockResolvedValue({
+    tokenQuotaLimit: null, tokenQuotaUnlimited: true,
+    storageQuotaGb: null, storageQuotaUnlimited: true,
+  });
+  (mockPrisma.uploadDraft.aggregate as jest.Mock).mockResolvedValue({ _sum: { fileSize: 0 } });
+  (mockPrisma.uploadDraft.findMany as jest.Mock).mockResolvedValue([]);
+  (mockPrisma.document.aggregate as jest.Mock).mockResolvedValue({ _sum: { fileSize: 0 } });
   // Phase 70 D-06: default archive owned by user-a so existing assign tests
   // that send kb=true + archiveId pass the new archive-ownership gate.
   (mockPrisma.archive.findUnique as jest.Mock).mockResolvedValue({

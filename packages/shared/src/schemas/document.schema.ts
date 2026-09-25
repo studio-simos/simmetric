@@ -40,6 +40,32 @@ export const bulkDeleteDocumentsSchema = z.object({
 });
 type BulkDeleteDocumentsInput = z.infer<typeof bulkDeleteDocumentsSchema>;
 
+// Phase 204 (DEBT-SW-05, FEAT-01) — document text edit request contract.
+// Body-only edit (archivePages body precedent): the request carries ONLY the
+// edited full text — never a storageKey/filePath/type (T-204-07: stored-file
+// keys compose server-side, no client input crosses into the storage layer).
+// min(1): empty string and null/missing body are 400s (the DEBT-SW-05 empty
+// probe) — a zero-length edit would zero the document text.
+export const updateDocumentTextSchema = z.object({
+  body: z.string().min(1),
+});
+type UpdateDocumentTextInput = z.infer<typeof updateDocumentTextSchema>;
+
+// api-design sweep (2026-09-24) — opt-in keyset pagination for GET /documents.
+// Cursor mode activates when `cursor` OR `limit` is present (absent query
+// = legacy bare-array response, byte-identical). Cursor is opaque
+// (base64url of `v1|<createdAt ISO>|<id>` — utils/httpError.ts encodeCursor);
+// limit is hard-capped at 100 (skill: never an unbounded default).
+export const documentListQuerySchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID").optional(),
+  cursor: z.string().min(1).optional(),
+  // NOTE: no .default() — a default would make `limit` always-present after
+  // parsing, activating cursor mode for paramless requests (legacy array
+  // response must stay byte-identical). The route falls back to 50 itself.
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+export type DocumentListQuery = z.infer<typeof documentListQuerySchema>;
+
 type DocumentType = z.infer<typeof documentTypeSchema>;
 type UploadDocumentInput = z.infer<typeof uploadDocumentSchema>;
 type ProcessDocumentInput = z.infer<typeof processDocumentSchema>;

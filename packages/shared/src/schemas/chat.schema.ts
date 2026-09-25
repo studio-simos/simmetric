@@ -162,3 +162,15 @@ type EditMessageInput = z.infer<typeof editMessageSchema>;
 
 type ChatExportQueryInput = z.infer<typeof chatExportQuerySchema>;
 type ChatImportPreviewInput = z.infer<typeof chatImportPreviewSchema>;
+// api-design sweep (2026-09-24) — opt-in keyset pagination for
+// GET /api/workspaces/:workspaceId/chats. Cursor mode activates when
+// `cursor` OR `limit` is present (absent query = legacy bare-array response,
+// byte-identical). Cursor is opaque (base64url of `v1|<updatedAt ISO>|<id>`
+// — utils/httpError.ts encodeCursor); limit hard-capped at 100.
+export const chatListQuerySchema = z.object({
+  cursor: z.string().min(1).optional(),
+  // NOTE: no .default() — see documentListQuerySchema (legacy array response
+  // must stay byte-identical for paramless requests).
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+export type ChatListQuery = z.infer<typeof chatListQuerySchema>;

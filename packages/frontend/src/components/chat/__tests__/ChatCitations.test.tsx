@@ -37,8 +37,10 @@ describe("ChatCitations", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(toggle).toHaveTextContent("Sources (2)");
     // 4.7.2: the list stays mounted but is collapsed (no `is-open` class);
-    // expand/collapse is CSS-driven (max-height + opacity transition).
-    const list = screen.getByRole("region").querySelector("ul");
+    // expand/collapse is CSS-driven (grid-template-rows + opacity transition).
+    // div+role="list" instead of <ul>: the collapse animation requires a
+    // single wrapper child, which <ul> cannot legally host.
+    const list = screen.getByRole("region").querySelector('[role="list"]');
     expect(list).not.toHaveClass("is-open");
   });
 

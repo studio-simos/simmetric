@@ -35,7 +35,10 @@ import {
   FileText,
   FileWarning,
   Loader2,
+  Pencil,
+  Save,
   ShieldAlert,
+  X,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import {
@@ -46,7 +49,8 @@ import {
 } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Skeleton } from "./ui/skeleton";
-import { hasDlpPlaceholders, useDocumentText } from "../queries/useDocuments";
+import { Textarea } from "./ui/textarea";
+import { hasDlpPlaceholders, useDocumentText, useUpdateDocumentText } from "../queries/useDocuments";
 import { useMe } from "../queries/useAuth";
 import { renderMarkdown } from "../utils/markdown";
 import { showSuccess, showError } from "../lib/toast";
@@ -127,6 +131,69 @@ export default function DocumentViewerPage() {
   const unmaskFailed = unmasked && unmaskQuery.isError && maskedQuery.data != null;
   const activeQuery = unmasked && unmaskQuery.data != null ? unmaskQuery : maskedQuery;
   const { data, isLoading, error } = activeQuery;
+
+  // Phase 204 (DEBT-SW-05): the edit affordance (ArchivePageFullView analog)
+  // — pencil → textarea prefill → save (mutation + toast + invalidation) /
+  // cancel. The mutation's onSuccess invalidates the document-text +
+  // doc-list keys; the 202 "reindexing" state renders through the existing
+  // statusBadge + doc-list polling surface (no new polling code).
+  //
+  // CR-01 (204-REVIEW): the prefill must NEVER be the masked text. Saving a
+  // masked skeleton used to persist `[PERSON_N]` placeholders as the new
+  // document source and the route's DLP arm deleted the entity map — the
+  // only copy of the originals (one-way door; the completion re-scan skips
+  // placeholder-bearing chunks as "already masked" so nothing is restored).
+  // The server now rejects placeholder-bearing edits on scanned rows
+  // (fail-closed 400) as defense-in-depth; the UI guard here makes the
+  // correct path the only reachable one:
+  //  - Entity-carrying documents need dlp:unmask: the pencil is ABSENT from
+  //    the DOM without it (DOM-absence, not disabled — the same UI-SPEC rule
+  //    2 posture as the unmask toggle), and startEdit refuses to open the
+  //    editor until the UNMASKED variant has actually loaded (the per-view
+  //    Show fetch). A user who clicks Edit without clicking Show first gets
+  //    a toast, not a masked-prefill editor.
+  //  - The prefill rides the UNMASKED variant when available; the
+  //    placeholder-shape fallback probe (never the masked served text)
+  //    catches a stale/unloaded unmask fetch before it becomes a save.
+  const updateTextMutation = useUpdateDocumentText();
+  const [isEditing, setIsEditing] = useState(false);
+  const [draftBody, setDraftBody] = useState("");
+
+  function startEdit() {
+    const hasEntities = hasDlpPlaceholders(maskedQuery.data?.text);
+    if (hasEntities) {
+      if (!(meData?.permissions?.includes("dlp:unmask") ?? false)) {
+        // dlp:unmask missing — the pencil is DOM-absent (render gate below);
+        // this arm is unreachable through the UI and exists as a behavior
+        // backstop for non-gated callers.
+        return;
+      }
+      // Unmask right held but the UNMASKED variant is not loaded yet (Show
+      // not clicked, or the unmask fetch still pending/failed) — refuse
+      // rather than prefill the masked skeleton (CR-01 one-way door).
+      if (unmaskQuery.data?.text == null || hasDlpPlaceholders(unmaskQuery.data.text)) {
+        showError(t("documents.edit.maskedBlocked"));
+        return;
+      }
+      setDraftBody(unmaskQuery.data.text);
+    } else {
+      setDraftBody(data?.text ?? "");
+    }
+    setIsEditing(true);
+  }
+
+  async function handleEditSave() {
+    if (!id) return;
+    try {
+      await updateTextMutation.mutateAsync({ documentId: id, body: draftBody });
+      showSuccess(t("documents.edit.reindexing"));
+      setIsEditing(false);
+    } catch {
+      // Edit stays open — the user can retry or cancel (ArchivePageFullView
+      // 400-arm convention).
+      showError(t("documents.edit.failed"));
+    }
+  }
 
   const back = () => {
     if (window.history.length > 1) {
@@ -285,6 +352,25 @@ export default function DocumentViewerPage() {
             {unmasked ? t("documents.dlp.hide") : t("documents.dlp.show")}
           </Button>
         )}
+        {/* Phase 204 (DEBT-SW-05): the edit affordance — pencil icon button
+            (ArchivePageFullView analog), toggling the textarea editor.
+            CR-01: DOM-ABSENT on entity-carrying documents for users without
+            dlp:unmask — a masked-text prefill would be saved as the new
+            source and destroy the entity map (the server rejects it
+            fail-closed; the UI never even offers the affordance). Clean
+            documents keep the unconditional pencil. */}
+        {(!hasEntities || canUnmask) && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0"
+            onClick={startEdit}
+            aria-label={t("documents.edit.button")}
+            data-testid="document-viewer-edit-btn"
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"
@@ -301,6 +387,48 @@ export default function DocumentViewerPage() {
           scrollbarColor: "var(--scrollbar-thumb) var(--scrollbar-track)",
         }}
       >
+        {isEditing ? (
+          // Phase 204 (DEBT-SW-05): edit mode — Save/Cancel row + textarea
+          // prefilled via startEdit (CR-01: the UNMASKED variant on
+          // entity-carrying documents, never the masked skeleton).
+          // Save rides useUpdateDocumentText; on success the
+          // mutation invalidates the text + list keys and the 202
+          // "reindexing" status renders via the existing badge/polling
+          // surface; on error the toast fires and edit mode stays open.
+          <div className="flex flex-col gap-3 h-full">
+            <div className="flex items-center gap-2">
+              <div className="flex-1" />
+              <Button
+                variant="default"
+                size="sm"
+                className="min-h-[44px] md:min-h-0"
+                onClick={handleEditSave}
+                disabled={updateTextMutation.isPending}
+                data-testid="document-viewer-save-btn"
+              >
+                <Save className="h-4 w-4" />
+                {t("documents.edit.save")}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="min-h-[44px] md:min-h-0"
+                onClick={() => setIsEditing(false)}
+                data-testid="document-viewer-cancel-btn"
+              >
+                <X className="h-4 w-4" />
+                {t("documents.edit.cancel")}
+              </Button>
+            </div>
+            <Textarea
+              value={draftBody}
+              onChange={(e) => setDraftBody(e.target.value)}
+              className="flex-1 min-h-[40vh] font-mono text-sm leading-6 resize-none"
+              data-testid="document-viewer-edit-textarea"
+            />
+          </div>
+        ) : (
+          <>
         {hasEntities && (
           <div
             className="mb-3 flex items-start gap-2 rounded-lg border border-[var(--border)] bg-amber-50/10 dark:bg-amber-950/20 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300"
@@ -356,6 +484,8 @@ export default function DocumentViewerPage() {
             className="prose prose-sm dark:prose-invert max-w-none"
             dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }}
           />
+        )}
+          </>
         )}
       </CardContent>
     </Card>

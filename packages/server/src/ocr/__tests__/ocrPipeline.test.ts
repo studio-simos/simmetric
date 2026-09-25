@@ -808,6 +808,9 @@ describe("ocrPipeline — processOcrJob", () => {
       undefined,
       false,
       undefined,
+      undefined,
+      // Phase 205 D-11 (OCR-04): resolved OCR_PROMPT — unset here ⇒ "" ⇒
+      // threaded as undefined (legacy byte-identical path)
       undefined
     );
     // startOcrJob with totalPages=1 (single image)

@@ -136,7 +136,7 @@ describe("GET /api/documents/:documentId — IDOR prevention (D-04)", () => {
       .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toMatch(/access denied/i);
+    expect(res.body.error.message).toMatch(/access denied/i);
   });
 
   it("allows access user (with workspaceAccess) with 200", async () => {
@@ -179,7 +179,7 @@ describe("GET /api/documents/:documentId — IDOR prevention (D-04)", () => {
       .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toMatch(/access denied/i);
+    expect(res.body.error.message).toMatch(/access denied/i);
   });
 });
 
@@ -239,6 +239,6 @@ describe("POST /api/documents/upload — D-04 preservation pin (admin with/witho
       .field("workspaceId", UPLOAD_WS_ID);
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toMatch(/access denied/i);
+    expect(res.body.error.message).toMatch(/access denied/i);
   });
 });

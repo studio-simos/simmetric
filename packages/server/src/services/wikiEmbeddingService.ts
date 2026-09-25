@@ -31,23 +31,33 @@ export async function indexWikiPage(archiveId: string, pageId: string, slug: str
   const embeddingModelSetting = await getSetting("EMBEDDING_MODEL");
   const embeddingModel = embeddingModelSetting.value || undefined;
 
+  // 2026-09-21 incident: the old hardcoded 60s aborted large wiki pages
+  // mid-embedding (local CPU Xenova), surfacing as hourly
+  // "[consistency] Reindex failed ... timeout of 60000ms exceeded" log
+  // spam with 0 pages healed. WIKI_EMBED_TIMEOUT_MS (default 30 min;
+  // 0 = no cap) mirrors COLLECTOR_INGEST_TIMEOUT_MS's operator posture.
+  const wikiTimeoutMs = getEnv().WIKI_EMBED_TIMEOUT_MS;
+
   await axios.post(`${env.COLLECTOR_URL}/api/ingest/wiki-pages`, {
     archiveId, pageId, slug, title, bodyText, contentHash, embeddingModel,
   }, {
-    timeout: 60000,
+    ...(wikiTimeoutMs > 0 ? { timeout: wikiTimeoutMs } : {}),
     headers: { "X-Collector-Secret": env.COLLECTOR_SECRET },
   });
 
   // Maintain the tsvector FTS column (quick 260811-lxh) — best-effort,
   // non-blocking: the vector index is the primary path; FTS lag is
-  // preferable to failing the index call.
+  // preferable to failing the index call. NUL-byte sanitize first: Postgres
+  // rejects 0x00 in text columns (SQLSTATE 22021) and wiki page bodies come
+  // from markdown imports that may carry embedded NULs.
+  const safeBodyText = bodyText.replaceAll("\u0000", "");
   try {
     await prisma.$executeRaw`
       UPDATE "archive_pages" ap
-      SET "searchVector" = to_tsvector('english', ${bodyText}),
+      SET "searchVector" = to_tsvector('english', ${safeBodyText}),
           "searchVectorMulti" = (
             SELECT ${Prisma.raw(MULTI_CONFIG_TSVECTOR)}
-            FROM (SELECT ${bodyText}::text AS t) AS t
+            FROM (SELECT ${safeBodyText}::text AS t) AS t
           )
       WHERE ap."id" = ${pageId}
     `;

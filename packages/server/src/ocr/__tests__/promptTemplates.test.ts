@@ -55,6 +55,22 @@ describe("promptTemplates", () => {
       expect(prompt.userPrompt).toContain("Extract all tables as Markdown pipe tables");
       expect(prompt.userPrompt).toContain("Preserve borders");
     });
+
+    // Phase 205 D-11 hard constraint — the deepseek-ocr builder ignores
+    // ocrPrompt (byte-identical regression pin).
+    it("ignores ocrPrompt entirely (byte-identical output with ocrPrompt set)", () => {
+      const withOverride = buildDeepseekOcrPrompt({
+        ...baseParams,
+        ocrPrompt: "Text recognition:",
+      });
+      const without = buildDeepseekOcrPrompt(baseParams);
+      expect(withOverride.systemPrompt).toBe(without.systemPrompt);
+      expect(withOverride.userPrompt).toBe(without.userPrompt);
+      expect(withOverride.images).toBeUndefined();
+      expect(withOverride.userPrompt).toBe(
+        "<|grounding|>Convert the document to markdown. [Page 3/10]",
+      );
+    });
   });
 
   describe("buildGlmOcrPrompt", () => {
@@ -103,6 +119,104 @@ describe("promptTemplates", () => {
       });
       expect(prompt.userPrompt).toContain("Preserve borders");
     });
+
+    // Phase 205 D-11 (OCR-04) — ocrPrompt override + byte-identical fallback.
+    describe("ocrPrompt override (Phase 205 OCR-04)", () => {
+      const GLM_LEGACY_PROMPTS = {
+        text: "You are a text recognition engine. Transcribe all visible text into clean Markdown.",
+        table: "You are a table recognition engine. Extract all tables as Markdown pipe tables.",
+        figure: "You are a figure recognition engine. Describe all diagrams and images.",
+        generic: [
+          "You are a document OCR engine. Your sole task is to transcribe the content of document images into clean, well-structured Markdown.",
+          "",
+          "Rules:",
+          "1. Output ONLY the Markdown content of the document. No greetings, no explanations, no \"Here is the transcription:\" preambles.",
+          "2. Preserve the document's structure: headings (# ## ###), bullet lists, numbered lists, tables (Markdown pipe tables), and paragraph breaks.",
+          "3. For images or diagrams, insert: [Image: brief description]",
+          "4. If text is unclear, ambiguous, or potentially misread, insert: [UNVERIFIED: reason] immediately after the uncertain text.",
+          "5. Do not correct grammar, spelling, or formatting of the source document. Transcribe what you see, not what you think it should be.",
+          "6. For handwritten text, do your best and mark it: [HANDWRITING: transcribed text]",
+          "7. Preserve the reading order: left-to-right, top-to-bottom.",
+        ].join("\n"),
+      };
+
+      const GLM_LEGACY_USER_PROMPT = "Transcribe page 3 of 10 to Markdown.";
+
+      it("uses ocrPrompt as systemPrompt for ALL modes when non-empty", () => {
+        for (const ocrMode of ["text", "table", "figure", "generic", undefined] as const) {
+          const prompt = buildGlmOcrPrompt({
+            ...baseParams,
+            ocrMode,
+            ocrPrompt: "Text recognition:",
+          });
+          expect(prompt.systemPrompt).toBe("Text recognition:");
+          expect(prompt.userPrompt).toBe(GLM_LEGACY_USER_PROMPT);
+          expect(prompt.images).toEqual(["BASE64STUB"]);
+        }
+      });
+
+      it("sends the raw (untrimmed) ocrPrompt verbatim as systemPrompt", () => {
+        // Raw value sent verbatim; trim is only the emptiness check
+        const prompt = buildGlmOcrPrompt({
+          ...baseParams,
+          ocrPrompt: "  Text recognition:  ",
+        });
+        expect(prompt.systemPrompt).toBe("  Text recognition:  ");
+      });
+
+      it("falls back byte-identically to per-mode strings when ocrPrompt is empty", () => {
+        for (const [ocrMode, expected] of Object.entries(GLM_LEGACY_PROMPTS)) {
+          const prompt = buildGlmOcrPrompt({
+            ...baseParams,
+            ocrMode: ocrMode as "text" | "table" | "figure" | "generic",
+            ocrPrompt: "",
+          });
+          expect(prompt.systemPrompt).toBe(expected);
+          expect(prompt.userPrompt).toBe(GLM_LEGACY_USER_PROMPT);
+        }
+      });
+
+      it("falls back byte-identically when ocrPrompt is undefined", () => {
+        for (const [ocrMode, expected] of Object.entries(GLM_LEGACY_PROMPTS)) {
+          const prompt = buildGlmOcrPrompt({
+            ...baseParams,
+            ocrMode: ocrMode as "text" | "table" | "figure" | "generic",
+            ocrPrompt: undefined,
+          });
+          expect(prompt.systemPrompt).toBe(expected);
+        }
+      });
+
+      it("treats whitespace-only ocrPrompt as empty (legacy fallback)", () => {
+        for (const [ocrMode, expected] of Object.entries(GLM_LEGACY_PROMPTS)) {
+          const prompt = buildGlmOcrPrompt({
+            ...baseParams,
+            ocrMode: ocrMode as "text" | "table" | "figure" | "generic",
+            ocrPrompt: "   \t\n  ",
+          });
+          expect(prompt.systemPrompt).toBe(expected);
+        }
+      });
+
+      it("customInstructions still appends identically in the ocrPrompt-set path", () => {
+        const prompt = buildGlmOcrPrompt({
+          ...baseParams,
+          ocrMode: "text",
+          ocrPrompt: "Text recognition:",
+          customInstructions: "Preserve borders",
+        });
+        expect(prompt.userPrompt).toBe(`${GLM_LEGACY_USER_PROMPT}\nPreserve borders`);
+      });
+
+      it("customInstructions still appends identically in the ocrPrompt-unset path", () => {
+        const prompt = buildGlmOcrPrompt({
+          ...baseParams,
+          ocrMode: "text",
+          customInstructions: "Preserve borders",
+        });
+        expect(prompt.userPrompt).toBe(`${GLM_LEGACY_USER_PROMPT}\nPreserve borders`);
+      });
+    });
   });
 
   describe("buildGenericOcrPrompt", () => {
@@ -123,6 +237,22 @@ describe("promptTemplates", () => {
         customInstructions: "Focus on headers",
       });
       expect(prompt.userPrompt).toContain("Focus on headers");
+    });
+
+    // Phase 205 D-11 hard constraint — the generic builder ignores ocrPrompt
+    // (byte-identical regression pin).
+    it("ignores ocrPrompt entirely (byte-identical output with ocrPrompt set)", () => {
+      const withOverride = buildGenericOcrPrompt({
+        ...baseParams,
+        ocrPrompt: "Text recognition:",
+      });
+      const without = buildGenericOcrPrompt(baseParams);
+      expect(without.systemPrompt).toContain("You are a document OCR engine");
+      expect(without.systemPrompt).toContain("1. Output ONLY the Markdown");
+      expect(without.systemPrompt).toBe("You are a document OCR engine. Your sole task is to transcribe the content of document images into clean, well-structured Markdown.\n\nRules:\n1. Output ONLY the Markdown content of the document. No greetings, no explanations, no \"Here is the transcription:\" preambles.\n2. Preserve the document's structure: headings (# ## ###), bullet lists, numbered lists, tables (Markdown pipe tables), and paragraph breaks.\n3. For images or diagrams, insert: [Image: brief description]\n4. If text is unclear, ambiguous, or potentially misread, insert: [UNVERIFIED: reason] immediately after the uncertain text.\n5. Do not correct grammar, spelling, or formatting of the source document. Transcribe what you see, not what you think it should be.\n6. For handwritten text, do your best and mark it: [HANDWRITING: transcribed text]\n7. Preserve the reading order: left-to-right, top-to-bottom.");
+      expect(withOverride.systemPrompt).toBe(without.systemPrompt);
+      expect(withOverride.userPrompt).toBe(without.userPrompt);
+      expect(withOverride.images).toEqual(without.images);
     });
   });
 });

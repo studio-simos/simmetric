@@ -106,6 +106,14 @@ beforeEach(() => {
 });
 
 describe("useChat — SSE chat flow integration", () => {
+  // The hook coalesces token state to a ~60ms flush (rendering perf — the
+  // parent-owned ref stays authoritative for terminal content). Wait past
+  // the flush window inside act() before asserting the live preview.
+  const flushStreamingState = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    });
+
   it("streams tokens and finalizes an assistant message on done", async () => {
     const { result } = renderHook(() => useChat("ws-1"));
 
@@ -125,6 +133,7 @@ describe("useChat — SSE chat flow integration", () => {
       sse.emit("token", JSON.stringify("-Augmented"));
       sse.emit("token", JSON.stringify(" Generation"));
     });
+    await flushStreamingState();
     expect(result.current.streamingContent).toBe("Retrieval-Augmented Generation");
 
     // Citations then done finalize the assistant message.
@@ -174,6 +183,7 @@ describe("useChat — SSE chat flow integration", () => {
 
     await act(async () => { await result.current.sendMessage("hi"); });
     act(() => { sse.emit("token", JSON.stringify("partial")); });
+    await flushStreamingState();
     expect(result.current.streamingContent).toBe("partial");
 
     await act(async () => {

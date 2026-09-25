@@ -28,8 +28,8 @@ pnpm --filter server start             # check:build-freshness guard, then node 
 
 ## Architecture
 
-- `src/routes/` — one file per domain (48 files; `chat.ts` split into `chatCrud`/`chatList`/`chatAgentConfig`/`chatExport`/`chatImport`/`chatRetention`/`chatTokens` behind byte-identical facades — keep the split, don't re-merge).
-- `src/services/` — business logic (76 files). `src/agent/` — ReAct orchestrator, LLM streaming, MCP client/server, skills. `src/middleware/` — auth, rbac, rateLimit, license, widgetCors, archiveAccess, uploadGate.
+- `src/routes/` — one file per domain (`chat.ts` split into `chatCrud`/`chatList`/`chatAgentConfig`/`chatExport`/`chatImport`/`chatRetention`/`chatTokens` behind byte-identical facades — keep the split, don't re-merge).
+- `src/services/` — business logic (~98 files). `src/agent/` — ReAct orchestrator, LLM streaming, MCP client/server, skills. `src/middleware/` — auth, rbac, rateLimit, license, widgetCors, archiveAccess, uploadGate.
 - Server↔collector is HTTP-only (`COLLECTOR_SECRET` on `X-Collector-Secret`); never import collector code. Server imports only `@simmetric-chat/shared`.
 - Optional Redis scale layer (`REDIS_URL`): rate-limit stores, JWT `jti` revocation, auth/config caches, SSE pub/sub fan-out, redlock. All degrade to single-instance when absent — don't make Redis required.
 - SSE chat events: `token`, `status`, `citations`, `done` (with `modelUsed`/`providerUsed`), `error` — the widget proxies the same format.

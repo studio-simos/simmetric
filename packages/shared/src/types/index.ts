@@ -241,7 +241,13 @@ export interface SettingsEntry {
 
 // ===== Event Log Types =====
 
-export type EntityType = "chat" | "project" | "workspace" | "document" | "user" | "mcp_connection" | "mcp_catalog_entry" | "dlp" | "archive" | "archive_page" | "archive_import" | "ocr_job" | "synthesis_run" | "wiki_edit" | "backup_destination" | "backup_job" | "provider" | "memory" | "skill" | "upload_draft";
+// OQ-2 (adopted — additive union, passthrough consumers): "chat_connector"
+// is the audit-instrument semantic label for connector rows (Phase 198, D-21:
+// the ConnectorMessage @@unique dedup + the audit log are the same
+// instrument). Underscore convention matches "mcp_connection".
+// Phase 206 (VIS-01 D-16): "role" joins the event-log entity vocabulary
+// (visibility.updated audit entries).
+export type EntityType = "chat" | "project" | "workspace" | "document" | "user" | "role" | "mcp_connection" | "mcp_catalog_entry" | "dlp" | "archive" | "archive_page" | "archive_import" | "ocr_job" | "synthesis_run" | "wiki_edit" | "backup_destination" | "backup_job" | "provider" | "memory" | "skill" | "upload_draft" | "chat_connector" | "quota";
 
 interface EventLog {
   id: string;

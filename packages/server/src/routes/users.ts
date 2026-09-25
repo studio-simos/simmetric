@@ -320,7 +320,14 @@ async function updateUserHandler(req: Request, res: Response) {
     return;
   }
 
-  const { username, email, password, firstName, lastName, customInstructions, textSize } = parsed.data;
+  const { username, email, password, firstName, lastName, customInstructions, textSize, maxSponsoredUsers } = parsed.data;
+
+  // Phase 206 (D-11): the sub-user ceiling is admin-only — a non-admin must
+  // never set its own (or anyone's) ceiling through the profile update path.
+  if (maxSponsoredUsers !== undefined && !admin) {
+    res.status(403).json({ error: "Ceiling is admin-only" });
+    return;
+  }
 
   // Non-admins cannot change their own password via this endpoint
   // (they should use a dedicated change-password endpoint with current password verification)
@@ -362,6 +369,12 @@ async function updateUserHandler(req: Request, res: Response) {
       data.salt = salt;
     }
 
+    // Phase 206 (D-11): admin ceiling edit (nullable — null clears the ceiling
+    // back to the fail-closed default of 0).
+    if (maxSponsoredUsers !== undefined) {
+      data.maxSponsoredUsers = maxSponsoredUsers;
+    }
+
     const user = await prisma.user.update({
       where: { id: targetId },
       data,
@@ -385,6 +398,12 @@ async function updateUserHandler(req: Request, res: Response) {
 
     // T-104-01: invalidate auth cache on password/role change
     if (password) {
+      invalidateAuthCache(targetId).catch(() => {});
+    }
+
+    // Phase 206 (D-11/Pitfall 3): the ceiling feeds create-time enforcement —
+    // invalidate so a stale cached payload cannot bypass a lowered ceiling.
+    if (maxSponsoredUsers !== undefined) {
       invalidateAuthCache(targetId).catch(() => {});
     }
 

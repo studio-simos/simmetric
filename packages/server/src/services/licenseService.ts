@@ -235,6 +235,22 @@ export function initLicense(): LicenseInfo {
   return cachedLicense;
 }
 
+/**
+ * Phase 202 (PLGM-03, D-07 / Pitfall 1): additive setter for the module-private
+ * `cachedLicense`. Consumed by the 202-02 boot step between `initLicense()`
+ * and `loadEnterprisePlugin(app)`: `resolveInstanceLicenseFromDB()` overrides
+ * the env-derived cached license with a verified enterprise DB license.
+ *
+ * Deliberately the ONLY change to the sync license path: `initLicense()` stays
+ * synchronous and byte-identical (making it async would break the lazy sync
+ * call sites `getLicenseInfo()` / `getFeatureLimit()` — Pitfall 1), and this
+ * setter does NOT touch `limitOverrides` (the D-02 clear/re-inject contract
+ * remains `initLicense()`'s + the enterprise plugin's `register(ctx)`).
+ */
+export function setCachedLicense(info: LicenseInfo): void {
+  cachedLicense = info;
+}
+
 function buildCommunityLicense(): LicenseInfo {
   return {
     tier: "community",

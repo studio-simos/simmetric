@@ -170,6 +170,24 @@ function seedPrismaForStream() {
   (prisma.chat.create as jest.Mock).mockResolvedValue({ id: CHAT_ID, workspaceId: WORKSPACE_ID, providerId: null, model: null });
   (prisma.chatMessage.create as jest.Mock).mockResolvedValue({ id: "assistant-msg-1" });
   (prisma.chatMessage.findMany as jest.Mock).mockResolvedValue([]);
+  // Phase 207 (D-05/P2): widget-path quota principal = org admin; owner quota
+  // unlimited by default so the gate passes (the widget 401/400 arms are
+  // unaffected — the gate runs after auth/validation).
+  (prisma.workspace.findUnique as jest.Mock).mockResolvedValue({
+    organizationId: "org-widget",
+  });
+  (prisma.organizationMember.findFirst as jest.Mock).mockResolvedValue({
+    organizationId: "org-widget",
+    userId: "widget-org-owner",
+  });
+  (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    tokenQuotaLimit: null, tokenQuotaUnlimited: true,
+    storageQuotaGb: null, storageQuotaUnlimited: true,
+  });
+  (prisma.quotaReset.findFirst as jest.Mock).mockResolvedValue(null);
+  (prisma.workspaceTokenUsage.aggregate as jest.Mock).mockResolvedValue({
+    _sum: { totalTokens: 0 },
+  });
   // Phase 185 (185-01 tracer): workspaceRoutes mounts tenantContextMiddleware
   // for the whole /api/workspaces prefix — seed a live membership so the
   // JWT arm resolves and the chain proceeds.

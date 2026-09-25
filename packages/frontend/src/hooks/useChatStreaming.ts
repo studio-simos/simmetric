@@ -24,6 +24,7 @@
  */
 
 import { fetchEventSource } from "@microsoft/fetch-event-source";
+import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { showError } from "../lib/toast";
 import { addWikiEdit } from "../utils/archiveQueue";
@@ -96,6 +97,40 @@ export interface UseChatStreamingArgs {
 
 export function useChatStreaming(args: UseChatStreamingArgs) {
   const { t } = useTranslation();
+
+  // ── Batched streaming flush (rendering perf) ──────────────────────────
+  // SSE tokens can arrive every few ms; a React setState per token made the
+  // chat surface re-render per token AND re-ran the FULL markdown pipeline
+  // (markdown-it + file-ref preprocessing + hljs + DOMPurify) over the
+  // accumulated content per token (ChatStreamingIndicator), plus a smooth
+  // scrollIntoView (ChatMessageList) — O(n²) work over the stream.
+  // Coalesce the state flushes to one per STREAM_FLUSH_MS. The parent-owned
+  // ref mirrors (streamingContentRef / streamingThinkingRef) stay
+  // authoritative for terminal content — the "done" case composes the final
+  // assistant message from the REF, never from state — so batching only
+  // delays the live preview, never the final text. A late flush is always
+  // safe: it writes ref.current, which is the truth ("" after the
+  // post-stream reset), so no explicit timer cancellation is needed at the
+  // reset sites.
+  const STREAM_FLUSH_MS = 60;
+  const contentFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const thinkingFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleContentFlush = () => {
+    if (contentFlushTimerRef.current) return;
+    contentFlushTimerRef.current = setTimeout(() => {
+      contentFlushTimerRef.current = null;
+      args.setStreamingContent(args.streamingContentRef.current);
+    }, STREAM_FLUSH_MS);
+  };
+
+  const scheduleThinkingFlush = () => {
+    if (thinkingFlushTimerRef.current) return;
+    thinkingFlushTimerRef.current = setTimeout(() => {
+      thinkingFlushTimerRef.current = null;
+      args.setStreamingThinking(args.streamingThinkingRef.current);
+    }, STREAM_FLUSH_MS);
+  };
 
   const abortStream = () => {
     if (args.abortRef.current) {
@@ -191,10 +226,10 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
               try {
                 const token = JSON.parse(event.data);
                 args.streamingContentRef.current += token;
-                args.setStreamingContent((prev) => prev + token);
+                scheduleContentFlush();
               } catch {
                 args.streamingContentRef.current += event.data;
-                args.setStreamingContent((prev) => prev + event.data);
+                scheduleContentFlush();
               }
               break;
             }
@@ -244,6 +279,8 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
                     ...(data.mcpSources?.length > 0 && { mcpSources: data.mcpSources }),
                     ...(data.resolvedWikilinks && { resolvedWikilinks: data.resolvedWikilinks }),
                     ...(data.tokenUsage && { tokenUsage: data.tokenUsage }),
+                    ...(data.cost && { cost: data.cost }),
+                    ...(data.cost && { cost: data.cost }),
                     ...(args.currentPlanRef.current && { plan: args.currentPlanRef.current }),
                     ...(data.dlp_matches?.length > 0 && { dlpMatches: data.dlp_matches }),
                     ...(data.pipeline && { pipeline: data.pipeline }),
@@ -271,6 +308,19 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
               try {
                 const data = JSON.parse(event.data);
                 let errorText = data.error || "Streaming failed";
+                // Phase 207 (D-04/UI-SPEC E6): the structured quota family —
+                // render the documented breach copy with the reset date
+                // interpolated from the advisory resetAt field.
+                if (data.quota === "tokens" || data.quota === "storage" || data.quota === "users") {
+                  errorText =
+                    data.quota === "tokens"
+                      ? data.resetAt
+                        ? t("chat.quotaTokensReached", { date: new Date(data.resetAt).toLocaleString() })
+                        : t("chat.quotaTokensNoReset")
+                      : data.quota === "storage"
+                        ? t("chat.quotaStorageReached")
+                        : t("chat.quotaUsersReached");
+                }
                 if (typeof errorText === "string" && errorText.includes("[CLOUD_MODEL_OFFLINE]")) {
                   errorText = t("chat.cloudModelOffline", "This model requires a connection to ollama.com. Select a local model or connect your computer to the internet.");
                 }
@@ -329,7 +379,7 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
                 const data = JSON.parse(event.data);
                 if (data.content) {
                   args.streamingThinkingRef.current += data.content;
-                  args.setStreamingThinking((prev) => prev + data.content);
+                  scheduleThinkingFlush();
                 }
               } catch {
                 // Ignore parse errors (per RESEARCH §Frontend useChat pattern)
@@ -493,11 +543,11 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
               try {
                 const token = JSON.parse(event.data);
                 args.streamingContentRef.current += token;
-                args.setStreamingContent((prev) => prev + token);
+                scheduleContentFlush();
               } catch {
                 // Treat raw data as token
                 args.streamingContentRef.current += event.data;
-                args.setStreamingContent((prev) => prev + event.data);
+                scheduleContentFlush();
               }
               break;
             }
@@ -548,6 +598,8 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
                     ...(data.mcpSources?.length > 0 && { mcpSources: data.mcpSources }),
                     ...(data.resolvedWikilinks && { resolvedWikilinks: data.resolvedWikilinks }),
                     ...(data.tokenUsage && { tokenUsage: data.tokenUsage }),
+                    ...(data.cost && { cost: data.cost }),
+                    ...(data.cost && { cost: data.cost }),
                     ...(args.currentPlanRef.current && { plan: args.currentPlanRef.current }),
                     ...(data.dlp_matches?.length > 0 && { dlpMatches: data.dlp_matches }),
                   },
@@ -598,6 +650,19 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
               try {
                 const data = JSON.parse(event.data);
                 let errorText = data.error || "Streaming failed";
+                // Phase 207 (D-04/UI-SPEC E6): the structured quota family —
+                // render the documented breach copy with the reset date
+                // interpolated from the advisory resetAt field.
+                if (data.quota === "tokens" || data.quota === "storage" || data.quota === "users") {
+                  errorText =
+                    data.quota === "tokens"
+                      ? data.resetAt
+                        ? t("chat.quotaTokensReached", { date: new Date(data.resetAt).toLocaleString() })
+                        : t("chat.quotaTokensNoReset")
+                      : data.quota === "storage"
+                        ? t("chat.quotaStorageReached")
+                        : t("chat.quotaUsersReached");
+                }
                 if (typeof errorText === "string" && errorText.includes("[CLOUD_MODEL_OFFLINE]")) {
                   errorText = t("chat.cloudModelOffline", "This model requires a connection to ollama.com. Select a local model or connect your computer to the internet.");
                 }
@@ -656,7 +721,7 @@ export function useChatStreaming(args: UseChatStreamingArgs) {
                 const data = JSON.parse(event.data);
                 if (data.content) {
                   args.streamingThinkingRef.current += data.content;
-                  args.setStreamingThinking((prev) => prev + data.content);
+                  scheduleThinkingFlush();
                 }
               } catch {
                 // Ignore parse errors (per RESEARCH §Frontend useChat pattern)

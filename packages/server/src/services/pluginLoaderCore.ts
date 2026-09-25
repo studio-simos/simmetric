@@ -156,6 +156,46 @@ export interface PluginLoaderOptions {
   label?: string;
   /** Build the PluginContext handed to `plugin.register(ctx)`. */
   buildContext: (app: Express, registries: PluginRegistries) => PluginContext;
+  /**
+   * Phase 202 (D-04): optional managed-registry fallback resolver —
+   * mirrors the two-step PluginResolver shape (resolve(specifier) →
+   * load(modulePath)). ABSENT (native enterprise/SaaS loaders) ⇒
+   * byte-identical Phase-186 behavior (P2: never downgraded to fail-soft).
+   */
+  managedResolver?: PluginResolver;
+  /**
+   * Phase 202 (D-03 fail-soft): "fail-loud" (default) keeps every
+   * process.exit(1) arm byte-identically (native callers that omit this
+   * option are unaffected); "fail-soft" (managed rows) records the failure
+   * + continues boot — the row carries the lastError, never the process.
+   */
+  failureMode?: "fail-loud" | "fail-soft";
+  /**
+   * Phase 202 (PLGM-03, D4/D6): per-loader license gate — invoked AFTER
+   * probe/apiVersion acceptance and BEFORE register. The gate is CALLER-OWNED
+   * (P3): the managed loader passes it ONLY for licenseMode=platform rows;
+   * none/self rows never get a gate, so resolvePluginLicense is never
+   * consulted for them. A refusal throws LicenseGateError so the caller
+   * distinguishes "not licensed" (row stays INSTALLED — never loaded, never
+   * failed, D4) from a hard load failure. Native loaders never pass a gate →
+   * byte-identical behavior (P2).
+   */
+  licenseGate?: () => Promise<{ ok: boolean; reason: string }>;
+}
+
+/**
+ * Phase 202 (PLGM-03, D4): thrown by the loadPlugin license-gate hook when
+ * the caller-owned gate refuses the row. NEVER reaches the fail-loud/fail-soft
+ * exit/record arms — the managed loader catches this class FIRST and keeps
+ * the row installed (a not-licensed plugin is not a failure, D4/D6).
+ */
+export class LicenseGateError extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(`license gate refused (${reason})`);
+    this.name = "LicenseGateError";
+    this.reason = reason;
+  }
 }
 
 /** A loader created by `createPluginLoader` — load at boot, shutdown reverse. */
@@ -403,9 +443,15 @@ export function createPluginLoader(options: PluginLoaderOptions): PluginLoader {
   const Label = label.charAt(0).toUpperCase() + label.slice(1);
 
   async function loadPlugin(app: Express): Promise<void> {
+    // Phase 202 (D-04/D-03): the managed path swaps the resolver for the
+    // managed chain (rides the SAME two-step PluginResolver seam shape —
+    // NEVER collapsed; pluginLoaderCore.ts:104-107). Native callers
+    // (managedResolver absent) get byte-identical Phase-186 behavior (P2).
+    const resolver = options.managedResolver ?? __pluginResolver;
+    const failSoft = options.failureMode === "fail-soft";
     let modulePath: string;
     try {
-      modulePath = __pluginResolver.resolve(options.specifier);
+      modulePath = resolver.resolve(options.specifier);
     } catch (resolveErr: unknown) {
       const code = (resolveErr as { code?: string })?.code;
       if (code === "MODULE_NOT_FOUND") {
@@ -416,23 +462,31 @@ export function createPluginLoader(options: PluginLoaderOptions): PluginLoader {
         );
         return;
       }
-      // Any other resolve error is fail-loud — never fail-open.
+      // Any other resolve error is fail-loud — never fail-open. Managed rows
+      // (fail-soft) record the failure and let boot continue (D-03).
       logger.error(`[${name}] Failed to resolve ${label} package`, {
         error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
         code,
       });
+      if (failSoft) {
+        throw new Error(`[${name}] resolve failed: ${resolveErr instanceof Error ? resolveErr.message : String(resolveErr)}`, { cause: resolveErr });
+      }
       process.exit(1);
       return; // unreachable, keeps TS happy
     }
 
     let pluginModule: unknown;
     try {
-      pluginModule = __pluginResolver.load(modulePath);
+      pluginModule = resolver.load(modulePath);
     } catch (loadErr: unknown) {
       // D-07: broken install (ERR_REQUIRE_ESM, SyntaxError, etc.) — fail-loud.
+      // Managed rows (fail-soft) record + continue (D-03).
       logger.error(`[${name}] ${Label} package found but failed to load`, {
         error: loadErr instanceof Error ? loadErr.message : String(loadErr),
       });
+      if (failSoft) {
+        throw new Error(`[${name}] load failed: ${loadErr instanceof Error ? loadErr.message : String(loadErr)}`, { cause: loadErr });
+      }
       process.exit(1);
       return;
     }
@@ -448,6 +502,9 @@ export function createPluginLoader(options: PluginLoaderOptions): PluginLoader {
 
     if (!plugin || typeof plugin.register !== "function") {
       logger.error(`[${name}] ${Label} package did not export a valid plugin (missing register)`, {});
+      if (failSoft) {
+        throw new Error(`[${name}] missing register`);
+      }
       process.exit(1);
       return;
     }
@@ -462,11 +519,32 @@ export function createPluginLoader(options: PluginLoaderOptions): PluginLoader {
         expected: options.acceptedApiVersions.join("|"),
         got: plugin.apiVersion,
       });
+      if (failSoft) {
+        throw new Error(`[${name}] apiVersion mismatch (expected ${options.acceptedApiVersions.join("|")}, got ${String(declaredVersion)})`);
+      }
       process.exit(1);
       return;
     }
 
     const ctx: PluginContext = options.buildContext(app, registries);
+
+    // Phase 202 (PLGM-03, D4/D6): the per-loader license gate — AFTER
+    // probe/apiVersion acceptance, BEFORE register. Caller-owned (P3): only
+    // the managed loader passes it, and only for licenseMode=platform rows.
+    // A refusal throws LicenseGateError (NOT the fail-loud/fail-soft arms —
+    // the gate sits before the register try/catch and propagates untouched):
+    // the managed loader catches it and keeps the row installed (D4), so a
+    // not-licensed plugin is never recorded as failed, never loaded, and
+    // never registers.
+    if (options.licenseGate) {
+      const verdict = await options.licenseGate();
+      if (!verdict.ok) {
+        logger.warn(`[${name}] license gate — skipping register`, {
+          reason: verdict.reason,
+        });
+        throw new LicenseGateError(verdict.reason);
+      }
+    }
 
     try {
       await plugin.register(ctx);
@@ -474,9 +552,14 @@ export function createPluginLoader(options: PluginLoaderOptions): PluginLoader {
     } catch (registerErr: unknown) {
       // D-07: fail-loud. NEVER catch-and-continue to community — that
       // would silently strip a paying customer's enterprise features.
+      // Managed rows (fail-soft) record + continue (D-03): the row carries
+      // the lastError, the boot continues, the process never exits.
       logger.error(`[${name}] Plugin registration failed`, {
         error: registerErr instanceof Error ? registerErr.message : String(registerErr),
       });
+      if (failSoft) {
+        throw new Error(`[${name}] register failed: ${registerErr instanceof Error ? registerErr.message : String(registerErr)}`, { cause: registerErr });
+      }
       process.exit(1);
     }
   }

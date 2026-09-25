@@ -16,8 +16,7 @@
  * contain data from the upstream MCP server.
  */
 import { prisma } from "../src/utils/prisma";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { Client, SSEClientTransport } from "@modelcontextprotocol/client";
 
 async function main() {
   const connectionIdArg = process.argv[2];
